@@ -83,50 +83,6 @@
         "鲲榜"
       ],
       "addedAt": "2026-10-23"
-    },
-    {
-      "id": "kun-py",
-      "name": "养鲲（Python 版）",
-      "version": "1.0.0",
-      "description": "同一个养鲲玩法，用 Python 实现，演示外部插件如何用 dataDir 存档",
-      "author": "tdcq9594",
-      "path": "plugins/kun-py",
-      "runtime": "python",
-      "tags": [
-        "游戏",
-        "示例",
-        "Python"
-      ],
-      "commands": [
-        "pykun",
-        "pysign",
-        "pyhatch",
-        "pybuy",
-        "pyfeed",
-        "pyrank"
-      ],
-      "addedAt": "2026-10-23"
-    },
-    {
-      "id": "kun-go",
-      "name": "养鲲（Go 版）",
-      "version": "1.0.0",
-      "description": "用 Go 写的养鲲：抽鲲、掷骰、排行。演示 Go 插件如何走 NDJSON 协议",
-      "author": "tdcq9594",
-      "path": "plugins/kun-go",
-      "runtime": "go",
-      "tags": [
-        "游戏",
-        "示例",
-        "Go"
-      ],
-      "commands": [
-        "gokun",
-        "godraw",
-        "goroll",
-        "gorank"
-      ],
-      "addedAt": "2026-10-23"
     }
   ]
 }
