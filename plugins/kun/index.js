@@ -55,7 +55,7 @@ function faceOf(species, rarity) {
 const ATTRS = ['智', '力', '速', '韧'];
 const BAD_ATTR = '悲';
 
-const COST = { 蛋: 80, 喂食: 20, 磨炼: 30, 幻化丹: 200 };
+const COST = { 蛋: 80, 磨炼: 30, 幻化丹: 200 };
 const TRAIN_PER_DAY = 30;
 const MIN_WEIGHT = 0.5;
 
@@ -205,7 +205,7 @@ function line(key, vars = {}) {
 export default {
   id: 'kun',
   name: '养鲲',
-  version: '2.1.0',
+  version: '3.0.0',
   description: '开局一条鲲，进化全靠吞：养成、道具、拍卖行、BOSS、群主互动',
 
   setup(ctx) {
@@ -313,9 +313,9 @@ export default {
       // 按状态生成可用操作
       const acts = [];
       if (p.lastSign !== dayKey()) acts.push(`- ${ctx.md.cmdInput('/签到', '签到')} 今天还没签`);
-      acts.push(`- ${ctx.md.cmdInput('/喂食', '喂食')} ${COST.喂食} 节操增重`);
+      acts.push(`- ${ctx.md.cmdInput('/喂食', '喂食')} 喂蛋增重（现有 ${p.eggs} 颗蛋）`);
       if (p.eggs > 0) acts.push(`- ${ctx.md.cmdInput('/砸蛋', '砸蛋')} 开蛋出道具（现有 ${p.eggs} 颗）`);
-      else acts.push(`- ${ctx.md.cmdInput('/买蛋', '买蛋')} ${COST.蛋} 节操买蛋`);
+      else acts.push(`- ${ctx.md.cmdInput('/买蛋', '买蛋')} ${COST.蛋} 节操一颗`);
       if (p.soup > 0) acts.push(`- ${ctx.md.cmdInput('/喝鸡汤', '喝鸡汤')} 回节操（有 ${p.soup} 碗）`);
       if (p.trainLeft > 0) acts.push(`- ${ctx.md.cmdInput('/磨炼', '磨炼')} 今日还剩 ${p.trainLeft} 次`);
       if (p.attr !== BAD_ATTR) acts.push(`- ${ctx.md.cmdInput('/幻化', '幻化')} 随机换品种`);
@@ -323,7 +323,7 @@ export default {
       acts.push(`- ${ctx.md.cmdInput('/渡劫', '渡劫')} 体重翻倍或暴跌`);
       acts.push(`- ${ctx.md.cmdInput('/单挑群主', '单挑群主')} 赢了有重赏`);
       acts.push(`- ${ctx.md.cmdInput('/抽群主一个大嘴巴', '抽群主一个大嘴巴')} 白嫖节操`);
-      acts.push(`- ${ctx.md.cmdInput('/上架', '上架')} 把鲲挂到拍卖行`);
+      acts.push(`- ${ctx.md.cmdInput('/出售', '出售')} 把鲲挂到拍卖行`);
 
       const items = [];
       if (p.pills) items.push(`幻化丹 ${p.pills}`);
@@ -389,51 +389,77 @@ export default {
 
     /* ---------------- 蛋：买 / 砸 / 孵 ---------------- */
 
-    ctx.command('买蛋', { desc: `花 ${COST.蛋} 节操买一颗鲲蛋` }, async (msg) => {
+    ctx.command('买蛋 [数量]', { desc: `买蛋 [数量]，每颗 ${COST.蛋} 节操` }, async (msg) => {
+      const want = Math.max(1, Number(msg.args[0]) || 1);
       let ok = false;
+      let bought = 0;
+
       const p = await mutate(msg.userId, msg.userName, (x) => {
-        if (x.points < COST.蛋) return null;
+        const can = Math.min(want, Math.floor(x.points / COST.蛋));
+        if (can < 1) return null;
         ok = true;
-        x.points -= COST.蛋;
-        x.eggs += 1;
+        bought = can;
+        x.points -= can * COST.蛋;
+        x.eggs += can;
         return x;
       });
+
       if (!ok) return msg.reply(`节操不够，还差 ${COST.蛋 - p.points}。发 /签到 去赚。`);
-      await msg.reply(`买到一颗蛋，现在有 ${p.eggs} 颗。`);
+      await msg.reply(`买了 ${bought} 颗蛋（-${bought * COST.蛋} 节操），现在有 ${p.eggs} 颗，剩 ${p.points} 节操。`);
     });
 
-    ctx.command('砸蛋', { desc: '砸开一颗蛋，随机出道具（鸡汤 / 幻化丹 / 复活药 / 神器）' }, async (msg) => {
+    // 原版：砸蛋【数量】，最多 100 颗；出道具的概率 = 今日运势
+    ctx.command('砸蛋 [数量]', { desc: '砸蛋 [数量]，最多 100 颗。出道具的概率取决于今日运势' }, async (msg) => {
+      const want = Math.max(1, Math.min(100, Number(msg.args[0]) || 1));
+      const f = fortuneOf(msg.userId, dayKey());
+      // 运势越好越容易出东西：大吉 1.5 倍，大凶 0.5 倍
+      const luck = f.mul;
       let ok = false;
-      let got = '';
+      let used = 0;
+      const bag = { 鸡汤: 0, 幻化丹: 0, 复活药: 0, 上古神器: 0, 节操: 0 };
 
       const p = await mutate(msg.userId, msg.userName, (x) => {
         if (x.eggs < 1) return null;
         ok = true;
-        x.eggs -= 1;
-        const r = Math.random();
-        if (r < 0.34) {
-          x.soup += 1;
-          got = '鸡汤';
-        } else if (r < 0.62) {
-          x.pills += 1;
-          got = '幻化丹';
-        } else if (r < 0.85) {
-          x.revive += 1;
-          got = '复活药';
-        } else if (r < 0.98) {
-          x.artifact += 1;
-          got = '上古神器';
-        } else {
-          x.points += 200;
-          got = '200 节操';
+        used = Math.min(want, x.eggs);
+        x.eggs -= used;
+
+        for (let i = 0; i < used; i++) {
+          // 基础命中率随运势浮动：运势 1.0 时约 55% 出货
+          if (Math.random() > 0.55 * luck) continue;
+          const r = Math.random();
+          if (r < 0.42) {
+            x.soup += 1;
+            bag.鸡汤++;
+          } else if (r < 0.72) {
+            x.pills += 1;
+            bag.幻化丹++;
+          } else if (r < 0.94) {
+            x.revive += 1;
+            bag.复活药++;
+          } else {
+            x.artifact += 1;
+            bag.上古神器++;
+          }
         }
         return x;
       });
 
-      if (!ok) return msg.reply('你没有蛋。发 /买蛋 买一颗，或者等签到捡。');
-      const flavor =
-        got === '上古神器' ? line('砸蛋出神器') : got === '200 节操' ? line('砸蛋空') : line('砸蛋普通', { item: got });
-      await msg.reply(`${flavor}\n获得 **${got}**，现在有蛋 ${p.eggs} 颗。`);
+      if (!ok) return msg.reply('你没有蛋。发 /买蛋 买，或者等签到捡。');
+
+      const parts = Object.entries(bag)
+        .filter(([, v]) => v > 0)
+        .map(([k, v]) => `${k} ×${v}`);
+      const got = parts.length ? parts.join(' · ') : '什么都没有';
+      const flavor = bag.上古神器
+        ? line('砸蛋出神器')
+        : parts.length
+          ? line('砸蛋普通', { item: got })
+          : line('砸蛋空');
+
+      await msg.reply(
+        `砸了 ${used} 颗蛋（今日运势 ${f.name}）\n${flavor}\n获得：**${got}**，剩 ${p.eggs} 颗蛋。`,
+      );
     });
 
     ctx.command('孵化', { desc: '孵一颗蛋，随机得到一只鲲' }, async (msg) => {
@@ -481,10 +507,13 @@ export default {
 
     /* ---------------- 喂食 / 鸡汤 / 磨炼 ---------------- */
 
-    ctx.command('喂食', { desc: `花 ${COST.喂食} 节操把鲲喂胖` }, async (msg) => {
+    // 原版：喂食【数量】，消耗的是**蛋**，一次最多 100 颗
+    ctx.command('喂食 [数量]', { desc: '喂食 [数量]，消耗蛋把鲲喂胖，一次最多 100 颗' }, async (msg) => {
+      const want = Math.max(1, Math.min(100, Number(msg.args[0]) || 1));
       const f = fortuneOf(msg.userId, dayKey());
-      const base = 2 + Math.random() * 4;
       let reason = '';
+      let used = 0;
+      let add = 0;
 
       const p = await mutate(msg.userId, msg.userName, (x) => {
         daily(x);
@@ -497,27 +526,32 @@ export default {
           reason = b;
           return null;
         }
-        if (x.points < COST.喂食) {
-          reason = 'poor';
+        if (x.eggs < 1) {
+          reason = 'noegg';
           return null;
         }
-        x.points -= COST.喂食;
-        x.weight += base * growOf(x.rarity) * f.mul;
+        used = Math.min(want, x.eggs);
+        x.eggs -= used;
+        // 每颗蛋 +2~6 千克，稀有度与运势加成
+        for (let i = 0; i < used; i++) add += (2 + Math.random() * 4) * growOf(x.rarity) * f.mul;
+        x.weight += add;
         return x;
       });
 
       if (reason === 'nokun') return msg.reply('还没有鲲。先发 /孵化 开局。');
-      if (reason === 'poor') return msg.reply(`节操不够，还差 ${COST.喂食 - p.points}。`);
+      if (reason === 'noegg') return msg.reply('你没有蛋。发 /买蛋 买，或者等签到捡。');
       if (reason) return msg.reply(reason);
 
-      const add = base * growOf(p.rarity) * f.mul;
       await msg.reply(
-        `${line('喂食', { name: p.species })}\n体重 +${add.toFixed(1)} → ${p.weight.toFixed(1)} 千克，剩 ${p.points} 节操。`,
+        `${line('喂食', { name: p.species })}\n` +
+          `喂了 ${used} 颗蛋，体重 +${add.toFixed(1)} → ${p.weight.toFixed(1)} 千克，剩 ${p.eggs} 颗蛋。`,
       );
     });
 
-    ctx.command('喝鸡汤', { desc: '喝一碗鸡汤回节操（砸蛋获得）' }, async (msg) => {
+    ctx.command('喝鸡汤 [数量]', { desc: '喝鸡汤 [数量]，每碗回节操（砸蛋获得）' }, async (msg) => {
+      const want = Math.max(1, Number(msg.args[0]) || 1);
       let reason = '';
+      let used = 0;
       let gain = 0;
 
       const p = await mutate(msg.userId, msg.userName, (x) => {
@@ -525,14 +559,15 @@ export default {
           reason = 'nosoup';
           return null;
         }
-        x.soup -= 1;
-        gain = 80 + Math.floor(Math.random() * 120);
+        used = Math.min(want, x.soup);
+        x.soup -= used;
+        for (let i = 0; i < used; i++) gain += 80 + Math.floor(Math.random() * 120);
         x.points += gain;
         return x;
       });
 
       if (reason === 'nosoup') return msg.reply('你没有鸡汤了。砸蛋有几率出。');
-      await msg.reply(`喝了一碗鸡汤，节操 +${gain}\n剩鸡汤 ${p.soup} 碗，当前节操 ${p.points}。`);
+      await msg.reply(`喝了 ${used} 碗鸡汤，节操 +${gain}\n剩 ${p.soup} 碗，当前节操 ${p.points}。`);
     });
 
     ctx.command('磨炼', { desc: `花 ${COST.磨炼} 节操磨炼，70% 概率不消耗，每天 ${TRAIN_PER_DAY} 次` }, async (msg) => {
@@ -642,27 +677,51 @@ export default {
       if (blocked(other)) return msg.reply('对方当前状态无法被吞噬。');
 
       const f = fortuneOf(msg.userId, dayKey());
+
+      // 原版的三个隐藏概率：
+      //   25% 致命一击（直接赢）
+      //   30% 顺手获得一颗蛋
+      //   25% 恢复大量体重
+      const crit = Math.random() < 0.25;
+      const gotEgg = Math.random() < 0.3;
+      const heal = Math.random() < 0.25;
+
       const myPower = me.weight * growOf(me.rarity) * f.mul * (1 + (me.artifact ?? 0) * 0.1);
       const otherPower = other.weight * growOf(other.rarity) * (1 + (other.artifact ?? 0) * 0.1);
-      const win = Math.random() < myPower / (myPower + otherPower);
+      const win = crit || Math.random() < myPower / (myPower + otherPower);
 
       if (win) {
         const steal = other.weight * 0.15;
+        // 原版：被对方吞噬后，有 75% 的几率直接狗带
+        const die = Math.random() < 0.75;
+
         const mine = await mutate(msg.userId, msg.userName, (x) => {
           x.weight += steal;
           x.kills += 1;
+          if (gotEgg) x.eggs += 1;
+          if (heal) x.weight += x.weight * 0.2;
           return x;
         });
         const theirs = await mutate(target, other.name, (x) => {
           x.weight = Math.max(MIN_WEIGHT, x.weight - steal);
           x.deaths += 1;
-          if (x.weight <= MIN_WEIGHT) x.alive = false;
+          if (die) x.alive = false;
           return x;
         });
+
+        const extra = [
+          crit ? '发动了致命一击！' : '',
+          gotEgg ? '顺手捡到一颗蛋。' : '',
+          heal ? '吞噬过程中恢复了大量体重。' : '',
+        ]
+          .filter(Boolean)
+          .join(' ');
+
         return msg.reply(
           `${line('吞噬胜', { me: mine.species, other: theirs.species })}\n` +
             `体重 +${steal.toFixed(1)} → ${mine.weight.toFixed(1)} 千克\n` +
-            `对方剩 ${theirs.weight.toFixed(1)} 千克${theirs.alive ? '' : '，已阵亡'}。`,
+            `对方剩 ${theirs.weight.toFixed(1)} 千克${theirs.alive ? '' : '，直接狗带'}。` +
+            `${extra ? `\n${extra}` : ''}`,
         );
       }
 
@@ -758,7 +817,7 @@ export default {
       );
     });
 
-    ctx.command('放生', { desc: '放弃当前这只鲲，换一笔节操' }, async (msg) => {
+    ctx.command('放生', { desc: '放生当前这只鲲，随机获得 2~10 颗蛋' }, async (msg) => {
       let reason = '';
       let gain = 0;
       let oldName = '';
@@ -772,9 +831,10 @@ export default {
           reason = 'auction';
           return null;
         }
-        gain = Math.round(x.weight * 8);
+        // 原版：放生随机获得 2 至 10 颗蛋
+        gain = 2 + Math.floor(Math.random() * 9);
         oldName = x.species;
-        x.points += gain;
+        x.eggs += gain;
         x.species = '未孵化';
         x.rarity = '—';
         x.attr = '';
@@ -788,13 +848,13 @@ export default {
       if (reason === 'nokun') return msg.reply('还没有鲲。');
       if (reason === 'auction') return msg.reply('正在拍卖，无法放生！');
       await msg.reply(
-        `${line('放生', { name: oldName })}\n节操 +${gain}，当前 ${p.points}。发 /孵化 可以养一只新的。`,
+        `${line('放生', { name: oldName })}\n获得 ${gain} 颗蛋（现在 ${p.eggs} 颗）。发 /孵化 可以养一只新的。`,
       );
     });
 
     /* ---------------- 拍卖行 ---------------- */
 
-    ctx.command('上架', { desc: '上架 <起拍价>，把自己的鲲挂到拍卖行' }, async (msg) => {
+    ctx.command('出售 [起拍价]', { desc: '出售 [起拍价]，把自己的鲲挂到拍卖行' }, async (msg) => {
       const price = Number(msg.args[0]);
       if (!Number.isFinite(price) || price <= 0) return msg.reply('用法：/上架 <起拍价>');
 
@@ -836,7 +896,7 @@ export default {
       );
     });
 
-    ctx.command('竞价', { desc: '竞价 <价格>，参与拍卖' }, async (msg) => {
+    ctx.command('出价 [竞拍价]', { desc: '出价 [竞拍价]，参与竞拍' }, async (msg) => {
       const price = Number(msg.args[0]);
       if (!Number.isFinite(price) || price <= 0) return msg.reply('用法：/竞价 <价格>');
 
@@ -1128,8 +1188,8 @@ export default {
     ]);
 
     ctx.menu('交易与活动', [
-      { text: '上架 <起拍价>', desc: '把鲲挂到拍卖行' },
-      { text: '竞价 <价格>', desc: '参与拍卖' },
+      { text: '出售 <起拍价>', desc: '把鲲挂到拍卖行' },
+      { text: '出价 <竞拍价>', desc: '参与竞拍' },
       { text: '成交', desc: '卖家确认，把鲲交给最高出价者' },
       { text: '查询BOSS', desc: '看今日 BOSS 血量与阵亡名单' },
       { text: '攻击BOSS', desc: '按体重造成伤害，击杀有重赏' },
