@@ -5,6 +5,42 @@
   "updated": "2026-10-23",
   "plugins": [
     {
+      "id": "dice",
+      "name": "掷骰子",
+      "version": "1.1.0",
+      "description": "演示参数解析、玩家数据持久化与关键词被动触发",
+      "author": "tdcq9594",
+      "path": "plugins/dice",
+      "runtime": "node",
+      "tags": ["示例", "入门"],
+      "commands": ["roll", "rank", "reset"],
+      "addedAt": "2026-10-23"
+    },
+    {
+      "id": "echo",
+      "name": "回声",
+      "version": "1.0.1",
+      "description": "复读机，演示命令与消息监听",
+      "author": "tdcq9594",
+      "path": "plugins/echo",
+      "runtime": "node",
+      "tags": ["示例", "入门"],
+      "commands": ["echo"],
+      "addedAt": "2026-10-23"
+    },
+    {
+      "id": "hello-py",
+      "name": "Python 示例",
+      "version": "1.0.0",
+      "description": "演示用 Python 写插件：命令、参数、权限等级、被动关键词",
+      "author": "tdcq9594",
+      "path": "plugins/hello-py",
+      "runtime": "python",
+      "tags": ["示例", "Python"],
+      "commands": ["hi", "pyinfo", "pyadmin"],
+      "addedAt": "2026-10-23"
+    },
+    {
       "id": "kun",
       "name": "养鲲",
       "version": "1.0.0",
