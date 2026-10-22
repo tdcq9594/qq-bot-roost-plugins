@@ -222,7 +222,7 @@ function line(key, vars = {}) {
 export default {
   id: 'kun',
   name: '养鲲',
-  version: '3.0.0',
+  version: '3.1.0',
   description: '开局一条鲲，进化全靠吞：养成、道具、拍卖行、BOSS、群主互动',
 
   setup(ctx) {
@@ -402,6 +402,23 @@ export default {
         `签到成功，节操 +${gain}（${f.name}）${gotEgg ? '\n还捡到一颗蛋。' : ''}` +
           `${ev ? `\n${ev}` : ''}\n当前节操 ${p.points}`,
       );
+    });
+
+    /* ---------------- 扔蛋 ---------------- */
+
+    ctx.command('扔蛋 [数量]', { desc: '扔掉 [数量] 颗蛋' }, async (msg) => {
+      const want = Math.max(1, Number(msg.args[0]) || 1);
+      let dropped = 0;
+
+      const p = await mutate(msg.userId, msg.userName, (x) => {
+        if (x.eggs < 1) return null;
+        dropped = Math.min(want, x.eggs);
+        x.eggs -= dropped;
+        return x;
+      });
+
+      if (!dropped) return msg.reply('你并没有蛋。');
+      await msg.reply(`扔掉了 ${dropped} 颗蛋，剩 ${p.eggs} 颗。`);
     });
 
     /* ---------------- 蛋：买 / 砸 / 孵 ---------------- */
@@ -630,6 +647,30 @@ export default {
       );
     });
 
+    /* ---------------- 今日运势 ---------------- */
+
+    ctx.command('今日运势', { desc: '查看今日运势（影响体重收益和砸蛋出道具概率）' }, async (msg) => {
+      const p = await mutate(msg.userId, msg.userName, (x) => {
+        daily(x);
+        return x;
+      });
+      const f = fortuneOf(msg.userId, dayKey());
+      await say(
+        msg,
+        [
+          `# 今日运势 · ${f.name}`,
+          '',
+          `**${ctx.md.esc(p.name)}**`,
+          '',
+          `体重收益 ×${f.mul} · 砸蛋出道具概率 ×${f.mul}`,
+          '',
+          f.tip,
+          '',
+          '运势每天 0 点刷新。',
+        ].join('\n'),
+      );
+    });
+
     /* ---------------- 幻化 ---------------- */
 
     ctx.command('幻化', { desc: `花 ${COST.幻化丹} 节操炼幻化丹，随机换品种，体重不变` }, async (msg) => {
@@ -692,6 +733,11 @@ export default {
       const other = await read(target);
       if (!other || !hasKun(other)) return msg.reply('对方还没有鲲，无从下口。');
       if (blocked(other)) return msg.reply('对方当前状态无法被吞噬。');
+      // 原版规则：比其体重大的鲲无法对其发起吞噬或攻击
+      if (other.weight > me.weight) {
+        return msg.reply(`比其体重大的鲲无法对其发起吞噬或攻击。
+对方 ${other.weight.toFixed(1)} 千克 > 你 ${me.weight.toFixed(1)} 千克。`);
+      }
 
       const f = fortuneOf(msg.userId, dayKey());
 
@@ -703,8 +749,10 @@ export default {
       const gotEgg = Math.random() < 0.3;
       const heal = Math.random() < 0.25;
 
-      const myPower = me.weight * growOf(me.rarity) * f.mul * (1 + (me.artifact ?? 0) * 0.1);
-      const otherPower = other.weight * growOf(other.rarity) * (1 + (other.artifact ?? 0) * 0.1);
+      // 原版：较强的攻击力，容易吞噬对方 —— 力属性给 20% 战力加成
+      const attrBonus = (p) => (p.attr === '力' ? 1.2 : 1);
+      const myPower = me.weight * growOf(me.rarity) * f.mul * attrBonus(me) * (1 + (me.artifact ?? 0) * 0.1);
+      const otherPower = other.weight * growOf(other.rarity) * attrBonus(other) * (1 + (other.artifact ?? 0) * 0.1);
       const win = crit || Math.random() < myPower / (myPower + otherPower);
 
       if (win) {
@@ -757,6 +805,60 @@ export default {
       await msg.reply(
         `${line('吞噬负', { me: mine.species, other: theirs.species })}\n` +
           `体重 -${lose.toFixed(1)} → ${mine.weight.toFixed(1)} 千克${mine.alive ? '' : '，已阵亡'}。`,
+      );
+    });
+
+    /* ---------------- 强袭 ---------------- */
+
+    // 原版：强袭成功/失败都扣 2 节操，对方有「免疫强袭」的可能
+    const RAID_COST = 2;
+    const RAID_IMMUNE = 0.25; // 免疫概率，原版未写死，按致命一击对称取 25%
+
+    ctx.command('强袭 [@某人]', { desc: `强袭 @某人，花 ${RAID_COST} 节操偷袭，对方可能免疫` }, async (msg) => {
+      const target = msg.mentions?.[0]?.id;
+      if (!target) return msg.reply('要强袭谁？发 /强袭 @某人');
+      if (target === msg.userId) return msg.reply('不能强袭自己。');
+
+      const me = await read(msg.userId);
+      if (!me || !hasKun(me)) return msg.reply('你还没有鲲。先发 /孵化 开局。');
+      const b0 = blocked(me);
+      if (b0) return msg.reply(b0);
+      if (me.points < RAID_COST) return msg.reply(`无法发动强袭：节操不足（需要 ${RAID_COST}）。`);
+
+      const other = await read(target);
+      if (!other || !hasKun(other)) return msg.reply('对方还没有鲲。');
+      if (blocked(other)) return msg.reply('对方当前状态无法强袭。');
+      if (other.weight > me.weight) {
+        return msg.reply('比其体重大的鲲无法对其发起吞噬或攻击。');
+      }
+
+      // 免疫判定
+      if (Math.random() < RAID_IMMUNE) {
+        await mutate(msg.userId, msg.userName, (x) => {
+          x.points -= RAID_COST;
+          return x;
+        });
+        return msg.reply(`强袭失败！对方免疫了这次偷袭。节操-${RAID_COST}`);
+      }
+
+      // 偷袭成功：抢一点体重，不致死
+      const steal = Math.min(other.weight * 0.08, me.weight * 0.5);
+      const mine = await mutate(msg.userId, msg.userName, (x) => {
+        x.points -= RAID_COST;
+        x.weight += steal;
+        x.kills += 1;
+        return x;
+      });
+      const theirs = await mutate(target, other.name, (x) => {
+        x.weight = Math.max(MIN_WEIGHT, x.weight - steal);
+        x.deaths += 1;
+        return x;
+      });
+
+      await msg.reply(
+        `强袭成功！节操-${RAID_COST}\n` +
+          `你从【${theirs.species}】身上抢走 ${steal.toFixed(1)} 千克 → ${mine.weight.toFixed(1)} 千克\n` +
+          `对方剩 ${theirs.weight.toFixed(1)} 千克。`,
       );
     });
 
@@ -882,7 +984,8 @@ export default {
 
       const board = await ctx.storage.update(AUCTION, (cur) => {
         const a = cur ?? { list: [] };
-        if (a.list.some((x) => x.seller === msg.userId)) return null;
+        // 原版：无法出售！拍卖行已经有鲲在售了！
+        if (a.list.length > 0) return null;
         a.list.push({
           seller: msg.userId,
           sellerName: me.name,
@@ -899,7 +1002,7 @@ export default {
       });
 
       if (!board || !board.list.some((x) => x.seller === msg.userId)) {
-        return msg.reply('上架失败，可能你已经有鲲在拍卖了。');
+        return msg.reply('无法出售！拍卖行已经有鲲在售了！');
       }
 
       await mutate(msg.userId, msg.userName, (x) => {
@@ -1018,6 +1121,24 @@ export default {
         `成交！【${deal.species}】${faceOf(deal.species, deal.rarity)} 以 ${deal.bid} 节操卖给了 ${deal.bidderName}。\n` +
           `你当前节操 ${seller.points}。`,
       );
+    });
+
+    ctx.command('拍卖行', { desc: '看看拍卖行当前挂售的鲲' }, async (msg) => {
+      const board = (await ctx.storage.get(AUCTION)) ?? { list: [] };
+      if (!board.list?.length) return msg.reply('目前没有鲲上架！');
+
+      const it = board.list[0];
+      const lines = [
+        `# 拍卖行`,
+        '',
+        `**${it.species}** ${faceOf(it.species, it.rarity)} · ${it.rarity} · ${it.weight.toFixed(1)} 千克`,
+        `卖家 ${it.sellerName} · 起拍价 **${it.price}**`,
+        it.bid ? `当前竞价 **${it.bid}**（${it.bidderName}）` : '还没人出价',
+        '',
+        `- ${ctx.md.cmdInput('/出价', '出价')} 参与竞拍（必须高于当前价）`,
+        `- ${ctx.md.cmdInput('/成交', '成交')} 卖家确认交易`,
+      ];
+      await say(msg, lines.join('\n'));
     });
 
     ctx.command('下架', { desc: '把拍卖中的鲲撤下来' }, async (msg) => {
@@ -1168,9 +1289,25 @@ export default {
       await msg.reply(`啪！你抽了群主一个大嘴巴，节操 +${gain}\n当前节操 ${p.points}。`);
     });
 
+    /* ---------------- 阵亡名单 ---------------- */
+
+    ctx.command('阵亡名单', { desc: '看看哪些鲲已经阵亡' }, async (msg) => {
+      const all = await ctx.storage.all();
+      const dead = Object.entries(all)
+        .filter(([k]) => k.startsWith('user:'))
+        .map(([, v]) => v)
+        .filter((r) => hasKun(r) && !r.alive && !r.released);
+
+      if (!dead.length) return msg.reply('阵亡名单：空空如也，大家都活得好好的。');
+      const lines = dead
+        .slice(0, 10)
+        .map((r) => `- ${r.name} · ${r.species} ${faceOf(r.species, r.rarity)} · ${r.weight.toFixed(1)} 千克`);
+      await say(msg, [`# 阵亡名单（${dead.length}）`, '', ...lines].join('\n'));
+    });
+
     /* ---------------- 排行 ---------------- */
 
-    ctx.command('鲲榜', { desc: '体重排行前 5' }, async (msg) => {
+    ctx.command('排行', { desc: '体重排行前 5' }, async (msg) => {
       const all = await ctx.storage.all();
       const rows = Object.entries(all)
         .filter(([k]) => k.startsWith('user:'))
@@ -1184,7 +1321,7 @@ export default {
         (r, i) =>
           `${i + 1}. ${r.name || r.uid.slice(0, 8)} · ${r.species} ${faceOf(r.species, r.rarity)} · ${r.weight.toFixed(1)} 千克`,
       );
-      await msg.reply(['鲲榜', ...lines].join('\n'));
+      await msg.reply(['排行', ...lines].join('\n'));
     });
 
     /* ---------------- 菜单 ---------------- */
