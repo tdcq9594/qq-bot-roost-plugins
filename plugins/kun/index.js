@@ -222,7 +222,7 @@ function line(key, vars = {}) {
 export default {
   id: 'kun',
   name: '养鲲',
-  version: '3.1.0',
+  version: '3.2.0',
   description: '开局一条鲲，进化全靠吞：养成、道具、拍卖行、BOSS、群主互动',
 
   setup(ctx) {
@@ -1289,6 +1289,280 @@ export default {
       await msg.reply(`啪！你抽了群主一个大嘴巴，节操 +${gain}\n当前节操 ${p.points}。`);
     });
 
+    /* ---------------- 群开关拦截 ---------------- */
+
+    // 群主 /鲲关 之后，除了开关类命令，其它一律拦下来
+    const SWITCH_EXEMPT = new Set([
+      '鲲开', '鲲关', '绑定群', '查看群主指令', 'kunreset',
+      '小游戏开', '小游戏关', '小游戏', '当前游戏', '报名',
+    ]);
+
+    ctx.use('群开关', async (c, next) => {
+      if (c.msg.kind !== 'group') return next();
+      if (!c.msg.isCommand) return next();
+      if (SWITCH_EXEMPT.has(c.msg.command)) return next();
+      const sw = await groupSwitch(c.msg.groupId);
+      if (sw.kunOn) return next();
+      await c.msg.reply('本群养鲲已关闭。群主可以发 /鲲开 重新开启。');
+    });
+
+    /* ---------------- 小游戏 ---------------- */
+
+    /**
+     * 原版有四个小游戏，各自带「总名额」限制：
+     *   奥数比赛【总名额5】 数星星【总名额2】 群殴群主【总名额5】 抄作业【总名额5】
+     *
+     * ⚠️ 原版的具体玩法（怎么算赢）在 .e 里挖不出来 —— 只有名字和名额。
+     * 这里用「抢名额 → 满员结算」的通用框架替代：
+     * 报名先到先得，名额满了立刻随机决出赢家。
+     * 这不是 1:1，是能跑起来的近似，玩法规则欢迎按原版补正。
+     */
+    const GAMES = {
+      奥数比赛: { quota: 5, reward: 200, flavor: '一道没人做出来的奥数题，最后看谁蒙对了。' },
+      数星星: { quota: 2, reward: 300, flavor: '两个人仰头数星星，谁数得多谁赢。' },
+      群殴群主: { quota: 5, reward: 150, flavor: '五个人一起上，群主终于被按住了。' },
+      抄作业: { quota: 5, reward: 120, flavor: '抄作业大赛，看谁抄得最像自己写的。' },
+    };
+
+    const GAME = '__game';
+
+    const gameOf = async () => (await ctx.storage.get(GAME)) ?? null;
+
+    ctx.command('小游戏开 [名字]', { desc: '小游戏开 <名字>，可选：' + Object.keys(GAMES).join(' / ') }, async (msg) => {
+      if (!(await ctx.can(msg, L.管理员)) && !isGroupOwner(msg)) {
+        return msg.reply('只有群主或本插件管理员能开小游戏。');
+      }
+      const name = msg.args[0];
+      const def = GAMES[name];
+      if (!def) {
+        return msg.reply(`没有「${name}」这个游戏。可选：${Object.keys(GAMES).join(' / ')}`);
+      }
+
+      const cur = await gameOf();
+      if (cur && cur.state === 'open') {
+        return msg.reply(`已经有「${cur.name}」在进行了，先 /小游戏关。`);
+      }
+
+      await ctx.storage.set(GAME, {
+        name,
+        quota: def.quota,
+        joined: [],
+        state: 'open',
+        at: Date.now(),
+      });
+
+      await say(
+        msg,
+        [
+          `# ${name} 开始报名`,
+          '',
+          `${def.flavor}`,
+          '',
+          `名额 **${def.quota}** 人 · 赢家奖励 **${def.reward}** 节操`,
+          '',
+          `- ${ctx.md.cmdInput('/报名', '报名')} 先到先得，满员立刻结算`,
+        ].join('\n'),
+      );
+    });
+
+    ctx.command('小游戏关', { desc: '关掉当前的小游戏（管理员或群主）' }, async (msg) => {
+      if (!(await ctx.can(msg, L.管理员)) && !isGroupOwner(msg)) {
+        return msg.reply('只有群主或本插件管理员能关。');
+      }
+      const cur = await gameOf();
+      if (!cur || cur.state !== 'open') return msg.reply('现在没有进行中的小游戏。');
+      await ctx.storage.delete(GAME);
+      await msg.reply(`「${cur.name}」已关闭。`);
+    });
+
+    async function showGame(msg) {
+      const cur = await gameOf();
+      if (!cur) {
+        return msg.reply('未开启养鲲小游戏！\n群主或管理员可以发 /小游戏开 <名字> 开启。');
+      }
+      if (cur.state !== 'open') return msg.reply('当前没有进行中的小游戏。');
+
+      const left = cur.quota - cur.joined.length;
+      await say(
+        msg,
+        [
+          `# 当前游戏 · ${cur.name}`,
+          '',
+          `名额 ${cur.joined.length}/${cur.quota}，还差 **${left}** 人`,
+          '',
+          cur.joined.length
+            ? '已报名：' + cur.joined.map((j) => j.name).join('、')
+            : '还没人报名。',
+          '',
+          `- ${ctx.md.cmdInput('/报名', '报名')} 抢一个名额`,
+        ].join('\n'),
+      );
+    }
+
+    ctx.command('小游戏', { desc: '看看当前小游戏的状态' }, showGame);
+    ctx.command('当前游戏', { desc: '等同 /小游戏' }, showGame);
+
+    ctx.command('报名', { desc: '报名当前小游戏，满员立刻结算' }, async (msg) => {
+      const cur = await gameOf();
+      if (!cur || cur.state !== 'open') return msg.reply('现在没有可以报名的小游戏。');
+      if (cur.joined.some((j) => j.uid === msg.userId)) return msg.reply('你已经报名了。');
+
+      const def = GAMES[cur.name];
+      let settled = null;
+
+      const board = await ctx.storage.update(GAME, (c) => {
+        const g = c ?? cur;
+        if (g.state !== 'open') return undefined;
+        if (g.joined.some((j) => j.uid === msg.userId)) return undefined;
+        g.joined.push({ uid: msg.userId, name: msg.userName || msg.userId.slice(0, 8) });
+        if (g.joined.length >= g.quota) {
+          g.state = 'done';
+          settled = { ...g, joined: [...g.joined] };
+        }
+        return g;
+      });
+
+      if (!board) return msg.reply('报名失败，可能已经满员或你已报名。');
+
+      if (!settled) {
+        const left = cur.quota - board.joined.length;
+        return msg.reply(
+          `报名成功！名额 ${board.joined.length}/${board.quota}，还差 ${left} 人。`,
+        );
+      }
+
+      // 满员：随机决出赢家
+      const winner = settled.joined[Math.floor(Math.random() * settled.joined.length)];
+      await mutate(winner.uid, winner.name, (x) => {
+        x.points += def.reward;
+        return x;
+      });
+      await ctx.storage.delete(GAME);
+
+      await say(
+        msg,
+        [
+          `# ${settled.name} · 结算`,
+          '',
+          `${def.flavor}`,
+          '',
+          `参赛：${settled.joined.map((j) => j.name).join('、')}`,
+          '',
+          `🏆 赢家：**${winner.name}**，获得 ${def.reward} 节操`,
+        ].join('\n'),
+      );
+    });
+
+    /* ---------------- 群级开关与群主 ---------------- */
+
+    const GSW = (gid) => `group:${gid}`;
+
+    /** 群开关：鲲总开关 / 小游戏开关，默认都开 */
+    async function groupSwitch(gid) {
+      const v = (await ctx.storage.get(GSW(gid))) ?? {};
+      return { kunOn: v.kunOn !== false, gameOn: v.gameOn === true };
+    }
+
+    async function setGroupSwitch(gid, patch) {
+      return ctx.storage.update(GSW(gid), (cur) => ({ ...(cur ?? {}), ...patch }));
+    }
+
+    /** 是不是群主（官方 API 给了 member_role） */
+    const isGroupOwner = (msg) => msg.raw?.author?.member_role === 'owner';
+
+    ctx.command('鲲开', { desc: '开启本群的养鲲（群主或管理员）' }, async (msg) => {
+      if (msg.kind !== 'group') return msg.reply('只能在群里用。');
+      if (!isGroupOwner(msg) && !(await ctx.can(msg, L.管理员))) {
+        return msg.reply('只有群主或本插件管理员能开关。');
+      }
+      await setGroupSwitch(msg.groupId, { kunOn: true });
+      await msg.reply('鲲已开！本群可以开始养鲲了。');
+    });
+
+    ctx.command('鲲关', { desc: '关闭本群的养鲲（群主或管理员）' }, async (msg) => {
+      if (msg.kind !== 'group') return msg.reply('只能在群里用。');
+      if (!isGroupOwner(msg) && !(await ctx.can(msg, L.管理员))) {
+        return msg.reply('只有群主或本插件管理员能开关。');
+      }
+      await setGroupSwitch(msg.groupId, { kunOn: false });
+      await msg.reply('鲲已关！本群暂停养鲲。');
+    });
+
+    ctx.command('查看群主指令', { desc: '看看群主能用哪些命令' }, async (msg) => {
+      const P = '/';
+      const lines = [
+        '# 群主专用',
+        '',
+        `- ${ctx.md.cmdInput('/鲲关', '鲲关')} 关闭本群养鲲`,
+        `- ${ctx.md.cmdInput('/鲲开', '鲲开')} 重新开启`,
+        `- ${ctx.md.cmdInput('/小游戏开', '小游戏开')} 开小游戏`,
+        `- ${ctx.md.cmdInput('/小游戏关', '小游戏关')} 关小游戏`,
+        `- ${ctx.md.cmdInput('/刷新BOSS', '刷新BOSS')} 重置今日 BOSS`,
+        '',
+        `你${isGroupOwner(msg) ? '是' : '不是'}本群群主。`,
+      ];
+      await say(msg, lines.join('\n'));
+    });
+
+    /* ---------------- 查阅属性 / 绑定群 ---------------- */
+
+    ctx.command('查阅属性 [@某人]', { desc: '查阅属性 [@某人]，不 @ 就看自己的' }, async (msg) => {
+      const target = msg.mentions?.[0]?.id ?? msg.userId;
+      const p = await read(target);
+      if (!p || !hasKun(p)) {
+        return msg.reply(target === msg.userId ? '你还没有鲲。' : '对方还没有鲲。');
+      }
+      const f = fortuneOf(target, dayKey());
+      await say(
+        msg,
+        [
+          `# ${ctx.md.esc(p.name)} 的鲲`,
+          '',
+          `**${p.species}** ${faceOf(p.species, p.rarity)} · ${p.rarity}`,
+          `属性【${p.attr || '无'}】${p.attr === '力' ? '（战力 +20%）' : p.attr === BAD_ATTR ? '（无法幻化、无法复活）' : ''}`,
+          '',
+          `体重 **${p.weight.toFixed(1)}** 千克 · 战绩 ${p.kills} 杀 ${p.deaths} 死`,
+          `状态：${p.released ? '已放生' : !p.alive ? '已阵亡' : p.auction ? '拍卖中' : '正常'}`,
+          '',
+          `今日运势 ${f.name}（×${f.mul}）`,
+        ].join('\n'),
+      );
+    });
+
+    // 原版是「绑定群 群号」，但官方接口没有群号、只有 group_openid，
+    // 而且机器人本来就在这个群里，不需要额外绑定。这里改成「看本群 id」。
+    ctx.command('绑定群', { desc: '查看本群的 openid（官方接口没有群号，绑定由拉群自动完成）' }, async (msg) => {
+      if (msg.kind !== 'group') return msg.reply('这个命令要在群里用。');
+      const sw = await groupSwitch(msg.groupId);
+      await msg.reply(
+        `本群 openid：\n${msg.groupId}\n\n` +
+          `养鲲：${sw.kunOn ? '已开' : '已关'} · 小游戏：${sw.gameOn ? '已开' : '已关'}\n` +
+          `（官方接口不提供群号，机器人被拉进群即视为已绑定）`,
+      );
+    });
+
+    /* ---------------- 强制下架 ---------------- */
+
+    ctx.command('强制下架', { desc: '群主或管理员强制撤下拍卖行的鲲' }, async (msg) => {
+      if (!isGroupOwner(msg) && !(await ctx.can(msg, L.管理员))) {
+        return msg.reply('只有群主或本插件管理员能强制下架。');
+      }
+      const board = (await ctx.storage.get(AUCTION)) ?? { list: [] };
+      if (!board.list?.length) return msg.reply('拍卖行没有在售的鲲。');
+
+      const seller = board.list[0].seller;
+      await ctx.storage.update(AUCTION, (cur) => {
+        const a = cur ?? { list: [] };
+        a.list = [];
+        return a;
+      });
+      await mutate(seller, '', (x) => {
+        x.auction = null;
+        return x;
+      });
+      await msg.reply('已强制下架。');
+    });
+
     /* ---------------- 阵亡名单 ---------------- */
 
     ctx.command('阵亡名单', { desc: '看看哪些鲲已经阵亡' }, async (msg) => {
@@ -1347,6 +1621,19 @@ export default {
       { text: '成交', desc: '卖家确认，把鲲交给最高出价者' },
       { text: '查询BOSS', desc: '看今日 BOSS 血量与阵亡名单' },
       { text: '攻击BOSS', desc: '按体重造成伤害，击杀有重赏' },
+    ]);
+
+    ctx.menu('小游戏', [
+      { text: '小游戏开 <名字>', desc: '奥数比赛 / 数星星 / 群殴群主 / 抄作业' },
+      { text: '报名', desc: '抢名额，满员立刻结算' },
+      { text: '当前游戏', desc: '看报名进度' },
+    ]);
+
+    ctx.menu('群管理', [
+      { text: '鲲开 / 鲲关', desc: '群主开关本群的养鲲' },
+      { text: '小游戏开 / 小游戏关', desc: '群主开关小游戏' },
+      { text: '绑定群', desc: '查看本群 openid 与开关状态' },
+      { text: '查看群主指令', desc: '群主能用哪些命令' },
     ]);
 
     ctx.menu('生存', [
