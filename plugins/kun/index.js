@@ -95,13 +95,117 @@ function rollLuckEvent() {
   if (r < 0.2) return '你却不小心摔在了一坨狗屎上！运势-5';
   if (r < 0.35) return '你中蛋了！运势-2';
   if (r < 0.45) return '你捡到一枚闪闪发亮的小石子，运势+5';
+  if (r < 0.5) return '你在路边摊吃了碗五块钱的牛肉面，意外地很香。运势+3';
   return null;
+}
+
+/* ------------------------------------------------------------------ */
+/* 文案池                                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 同一个动作多准备几句，随机挑一句。
+ * 不是为了信息量，是为了让老玩家第 100 次喂食时还愿意看一眼。
+ */
+const LINES = {
+  // 孵化：按稀有度分语气，普通平平无奇，传说得有点排面
+  孵化普通: [
+    '蛋壳裂开，{name}探出个脑袋，看起来普普通通。',
+    '{name}破壳而出，打了个哈欠。就这？',
+    '一只{name}滚了出来，在地上弹了两下。',
+    '蛋壳碎了一地，{name}蹲在中间，眼神空洞。',
+  ],
+  孵化稀有: [
+    '{name}破壳的瞬间，壳上泛起了淡淡的光。',
+    '蛋壳裂开，{name}抖了抖身上的碎壳，挺精神。',
+    '这只{name}一出来就四处张望，不像凡物。',
+  ],
+  孵化史诗: [
+    '蛋壳炸开！{name}带着一股气势登场。',
+    '整个房间震了一下，{name}从碎壳里站起来。',
+    '{name}破壳的动静有点大，隔壁的鲲都探头了。',
+  ],
+  传说: [
+    '天边压过一片阴影——{name}降世了。',
+    '蛋壳还没落地就被气浪掀飞，{name}缓缓睁眼。',
+    '你听见远处有钟声。{name}出现了。',
+    '这只{name}一出壳，方圆十里的鲲都安静了。',
+  ],
+
+  吞噬胜: [
+    '你的【{me}】张开嘴，对方的【{other}】连喊停的机会都没有。',
+    '一口下去，干净利落。对方的【{other}】只剩个影子。',
+    '【{me}】打了个饱嗝。{other} 那边已经没人说话了。',
+    '这不是吞噬，这是单方面的物理消灭。',
+  ],
+  吞噬负: [
+    '你的【{me}】被对方的【{other}】反杀了，场面一度十分尴尬。',
+    '【{me}】冲上去，然后被弹了回来。',
+    '有仇不报非君子啊。',
+    '你听见自己的鲲发出了不体面的声音。',
+  ],
+
+  渡劫成: [
+    '雷光散去，{name}不但没死，还胖了一圈。',
+    '渡劫成功！{name}在电闪雷鸣中完成了蜕变。',
+    '天雷劈下来，{name}张嘴接了。',
+  ],
+  渡劫败: [
+    '雷劈偏了，正中{name}。体重暴跌。',
+    '渡劫失败。{name}现在只剩一口气和一身焦味。',
+    '你听见一声脆响——那是{name}的自尊心。',
+  ],
+
+  放生: [
+    '你把{name}放回了水里。它头也不回地游走了。',
+    '{name}被放生。走之前回头看了你一眼，眼神复杂。',
+    '放生完成。水面上浮起一串泡泡，算是告别。',
+  ],
+  复活: [
+    '{name}睁开眼睛，第一句话是「饿」。',
+    '一粒复活药下去，{name}诈尸般地坐了起来。',
+    '{name}活过来了，虽然看起来还有点懵。',
+  ],
+
+  喂食: [
+    '你端来一盆饲料，{name}吃得很投入。',
+    '{name}埋头猛吃，尾巴摇得像个风扇。',
+    '这顿吃得不错，{name}满意地打了个嗝。',
+    '你喂了一勺，{name}吞了三口。',
+  ],
+  磨炼: [
+    '{name}绕着场地跑了十圈，气喘吁吁但精神了不少。',
+    '你陪着{name}练了一会儿，它好像胖了点。',
+    '{name}对着石头撞了半天，居然真变强了。',
+  ],
+
+  砸蛋出神器: ['恭喜你砸出了上古神器！这运气，建议去买彩票。', '金光一闪——上古神器！'],
+  砸蛋普通: ['蛋壳里滚出一样东西：{item}。', '砸开了，是{item}，聊胜于无。'],
+  砸蛋空: ['蛋壳里什么都没有，只有一股说不清的味道。'],
+
+  群主胜: [
+    '你战胜了群主！群主当场表示要去闭关。',
+    '群主被你打得满地找牙，群名片都改了。',
+    '你赢了。群里安静了三秒，然后开始刷屏。',
+  ],
+  群主负: [
+    '你被群主按在地上摩擦……',
+    '群主甚至没有站起来。',
+    '你输了。群主说：「年轻人，多养养。」',
+  ],
+};
+
+/** 取一条文案并填变量 */
+function line(key, vars = {}) {
+  const pool = LINES[key];
+  if (!pool?.length) return '';
+  return pick(pool).replace(/\{(\w+)\}/g, (_, k) => (k in vars ? vars[k] : `{${k}}`));
 }
 
 export default {
   id: 'kun',
   name: '养鲲',
-  version: '2.0.0',
+  version: '2.1.0',
   description: '开局一条鲲，进化全靠吞：养成、道具、拍卖行、BOSS、群主互动',
 
   setup(ctx) {
@@ -327,9 +431,9 @@ export default {
       });
 
       if (!ok) return msg.reply('你没有蛋。发 /买蛋 买一颗，或者等签到捡。');
-      await msg.reply(
-        `砸开一颗蛋——${got === '上古神器' ? '恭喜你砸出了上古神器！' : '获得'} **${got}**\n现在有蛋 ${p.eggs} 颗。`,
-      );
+      const flavor =
+        got === '上古神器' ? line('砸蛋出神器') : got === '200 节操' ? line('砸蛋空') : line('砸蛋普通', { item: got });
+      await msg.reply(`${flavor}\n获得 **${got}**，现在有蛋 ${p.eggs} 颗。`);
     });
 
     ctx.command('孵化', { desc: '孵一颗蛋，随机得到一只鲲' }, async (msg) => {
@@ -366,8 +470,10 @@ export default {
         return msg.reply('你没有蛋。发 /买蛋 买一颗，或者等签到捡。');
       }
 
+      const flavorKey = sp.rarity === '传说' ? '传说' : `孵化${sp.rarity}`;
       await msg.reply(
-        `蛋裂开了——是【${sp.name}】${faceOf(sp.name, sp.rarity)}！稀有度：${sp.rarity}\n` +
+        `【${sp.name}】${faceOf(sp.name, sp.rarity)} · ${sp.rarity}\n` +
+          `${line(flavorKey, { name: sp.name })}\n` +
           `属性【${attr}】${attr === BAD_ATTR ? '（悲属性：无法幻化、无法复活）' : ''}\n` +
           `起步 ${p.weight.toFixed(1)} 千克，磨炼次数已回满。`,
       );
@@ -405,7 +511,9 @@ export default {
       if (reason) return msg.reply(reason);
 
       const add = base * growOf(p.rarity) * f.mul;
-      await msg.reply(`喂了一顿，体重 +${add.toFixed(1)}\n现在 ${p.weight.toFixed(1)} 千克，剩 ${p.points} 节操。`);
+      await msg.reply(
+        `${line('喂食', { name: p.species })}\n体重 +${add.toFixed(1)} → ${p.weight.toFixed(1)} 千克，剩 ${p.points} 节操。`,
+      );
     });
 
     ctx.command('喝鸡汤', { desc: '喝一碗鸡汤回节操（砸蛋获得）' }, async (msg) => {
@@ -465,8 +573,8 @@ export default {
       if (reason) return msg.reply(reason);
 
       await msg.reply(
-        `磨炼完成，体重 +${gain.toFixed(1)}${free ? '（这次没消耗节操）' : ''}\n` +
-          `现在 ${p.weight.toFixed(1)} 千克，剩 ${p.trainLeft} 次 / ${p.points} 节操。`,
+        `${line('磨炼', { name: p.species })}\n体重 +${gain.toFixed(1)}${free ? '（这次没消耗节操）' : ''}` +
+          ` → ${p.weight.toFixed(1)} 千克，剩 ${p.trainLeft} 次 / ${p.points} 节操。`,
       );
     });
 
@@ -552,7 +660,7 @@ export default {
           return x;
         });
         return msg.reply(
-          `你的【${mine.species}】吞了对方的【${theirs.species}】！\n` +
+          `${line('吞噬胜', { me: mine.species, other: theirs.species })}\n` +
             `体重 +${steal.toFixed(1)} → ${mine.weight.toFixed(1)} 千克\n` +
             `对方剩 ${theirs.weight.toFixed(1)} 千克${theirs.alive ? '' : '，已阵亡'}。`,
         );
@@ -571,9 +679,8 @@ export default {
         return x;
       });
       await msg.reply(
-        `你的【${mine.species}】被对方的【${theirs.species}】反杀了。\n` +
-          `体重 -${lose.toFixed(1)} → ${mine.weight.toFixed(1)} 千克${mine.alive ? '' : '，已阵亡'}。\n` +
-          `有仇不报非君子啊。`,
+        `${line('吞噬负', { me: mine.species, other: theirs.species })}\n` +
+          `体重 -${lose.toFixed(1)} → ${mine.weight.toFixed(1)} 千克${mine.alive ? '' : '，已阵亡'}。`,
       );
     });
 
@@ -604,9 +711,8 @@ export default {
       if (reason) return msg.reply(reason);
 
       await msg.reply(
-        win
-          ? `渡劫成功！体重 ${before.toFixed(1)} → ${p.weight.toFixed(1)} 千克，翻倍了。`
-          : `渡劫失败……体重 ${before.toFixed(1)} → ${p.weight.toFixed(1)} 千克。`,
+        `${line(win ? '渡劫成' : '渡劫败', { name: p.species })}\n` +
+          `体重 ${before.toFixed(1)} → ${p.weight.toFixed(1)} 千克。`,
       );
     });
 
@@ -647,12 +753,15 @@ export default {
       if (reason === 'released') return msg.reply('放生的鲲无法复活。');
       if (reason === 'bad') return msg.reply('可能原因：属性鲲、放生鲲、自己强袭致死鲲无法复活。');
       if (reason === 'noitem') return msg.reply('你没有复活药！砸蛋可以获取复活药。');
-      await msg.reply(`复活成功！【${p.species}】${faceOf(p.species, p.rarity)} 回来了，体重 ${p.weight.toFixed(1)} 千克。`);
+      await msg.reply(
+        `${line('复活', { name: p.species })}\n体重 ${p.weight.toFixed(1)} 千克，剩 ${p.revive} 粒复活药。`,
+      );
     });
 
     ctx.command('放生', { desc: '放弃当前这只鲲，换一笔节操' }, async (msg) => {
       let reason = '';
       let gain = 0;
+      let oldName = '';
 
       const p = await mutate(msg.userId, msg.userName, (x) => {
         if (!hasKun(x)) {
@@ -664,6 +773,7 @@ export default {
           return null;
         }
         gain = Math.round(x.weight * 8);
+        oldName = x.species;
         x.points += gain;
         x.species = '未孵化';
         x.rarity = '—';
@@ -677,7 +787,9 @@ export default {
 
       if (reason === 'nokun') return msg.reply('还没有鲲。');
       if (reason === 'auction') return msg.reply('正在拍卖，无法放生！');
-      await msg.reply(`已放生，节操 +${gain}\n当前节操 ${p.points}。发 /孵化 可以养一只新的。`);
+      await msg.reply(
+        `${line('放生', { name: oldName })}\n节操 +${gain}，当前 ${p.points}。发 /孵化 可以养一只新的。`,
+      );
     });
 
     /* ---------------- 拍卖行 ---------------- */
@@ -954,8 +1066,7 @@ export default {
           return x;
         });
         return msg.reply(
-          `你战胜了群主！\n节操 +${gain}，体重 +${(bossWeight * 0.2).toFixed(1)} → ${p.weight.toFixed(1)} 千克\n` +
-            `群主颜面扫地。`,
+          `${line('群主胜')}\n节操 +${gain}，体重 +${(bossWeight * 0.2).toFixed(1)} → ${p.weight.toFixed(1)} 千克。`,
         );
       }
 
@@ -966,7 +1077,7 @@ export default {
         return x;
       });
       await msg.reply(
-        `你被群主按在地上摩擦……\n体重 -${lose.toFixed(1)} → ${p.weight.toFixed(1)} 千克。\n下次带只更胖的来。`,
+        `${line('群主负')}\n体重 -${lose.toFixed(1)} → ${p.weight.toFixed(1)} 千克。下次带只更胖的来。`,
       );
     });
 

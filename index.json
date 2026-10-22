@@ -62,7 +62,7 @@
     {
       "id": "kun",
       "name": "养鲲",
-      "version": "2.0.0",
+      "version": "2.1.0",
       "description": "开局一条鲲，进化全靠吞：养成、道具、拍卖行、BOSS、群主互动（24 个命令）",
       "author": "tdcq9594",
       "path": "plugins/kun",
