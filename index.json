@@ -12,8 +12,15 @@
       "author": "tdcq9594",
       "path": "plugins/dice",
       "runtime": "node",
-      "tags": ["示例", "入门"],
-      "commands": ["roll", "rank", "reset"],
+      "tags": [
+        "示例",
+        "入门"
+      ],
+      "commands": [
+        "roll",
+        "rank",
+        "reset"
+      ],
       "addedAt": "2026-10-23"
     },
     {
@@ -24,8 +31,13 @@
       "author": "tdcq9594",
       "path": "plugins/echo",
       "runtime": "node",
-      "tags": ["示例", "入门"],
-      "commands": ["echo"],
+      "tags": [
+        "示例",
+        "入门"
+      ],
+      "commands": [
+        "echo"
+      ],
       "addedAt": "2026-10-23"
     },
     {
@@ -36,8 +48,15 @@
       "author": "tdcq9594",
       "path": "plugins/hello-py",
       "runtime": "python",
-      "tags": ["示例", "Python"],
-      "commands": ["hi", "pyinfo", "pyadmin"],
+      "tags": [
+        "示例",
+        "Python"
+      ],
+      "commands": [
+        "hi",
+        "pyinfo",
+        "pyadmin"
+      ],
       "addedAt": "2026-10-23"
     },
     {
@@ -48,8 +67,21 @@
       "author": "tdcq9594",
       "path": "plugins/kun",
       "runtime": "node",
-      "tags": ["游戏", "养成", "PvP"],
-      "commands": ["kun", "签到", "买蛋", "孵化", "喂食", "吞噬", "幻化", "鲲榜"],
+      "tags": [
+        "游戏",
+        "养成",
+        "PvP"
+      ],
+      "commands": [
+        "kun",
+        "签到",
+        "买蛋",
+        "孵化",
+        "喂食",
+        "吞噬",
+        "幻化",
+        "鲲榜"
+      ],
       "addedAt": "2026-10-23"
     },
     {
@@ -60,8 +92,40 @@
       "author": "tdcq9594",
       "path": "plugins/kun-py",
       "runtime": "python",
-      "tags": ["游戏", "示例", "Python"],
-      "commands": ["pykun", "pysign", "pyhatch", "pybuy", "pyfeed", "pyrank"],
+      "tags": [
+        "游戏",
+        "示例",
+        "Python"
+      ],
+      "commands": [
+        "pykun",
+        "pysign",
+        "pyhatch",
+        "pybuy",
+        "pyfeed",
+        "pyrank"
+      ],
+      "addedAt": "2026-10-23"
+    },
+    {
+      "id": "kun-go",
+      "name": "养鲲（Go 版）",
+      "version": "1.0.0",
+      "description": "用 Go 写的养鲲：抽鲲、掷骰、排行。演示 Go 插件如何走 NDJSON 协议",
+      "author": "tdcq9594",
+      "path": "plugins/kun-go",
+      "runtime": "go",
+      "tags": [
+        "游戏",
+        "示例",
+        "Go"
+      ],
+      "commands": [
+        "gokun",
+        "godraw",
+        "goroll",
+        "gorank"
+      ],
       "addedAt": "2026-10-23"
     }
   ]
