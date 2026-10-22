@@ -1,28 +1,18 @@
 /**
  * 养鲲
  * ======
- * 玩法来自「开局一条鲲，进化全靠吞」：
- *   签到赚节操 → 买蛋 → 孵化出鲲 → 喂食增重 → 吞噬别人抢体重 → 幻化换品种
+ * 「开局一条鲲，进化全靠吞」
  *
- * 数据按玩家单独存：user:<openid>
- * 存在 data/bots/<机器人id>/plugins/kun.json（由 ctx.storage 管理）
+ * 循环：签到赚节操 → 买蛋 → 孵化 → 喂食增重 → 吞噬抢体重 → 幻化换品种
  *
- * 所有写操作都走 ctx.storage.update —— 它对同一个 key 串行执行。
- * 直接用 get → 改 → set 的话，玩家连发两条命令会互相覆盖、丢更新。
+ * 数据按玩家存：user:<openid>，走 ctx.storage.update 保证并发安全。
+ * 输出用 markdown，指令做成可点击标签（点一下填进输入框）。
  */
 
 /** 品种池：稀有度决定孵化权重和成长系数 */
 const SPECIES = {
-  普通: {
-    weight: 60,
-    grow: 1.0,
-    list: ['尘鲲', '土鲲', '沙鲲', '石鲲', '岩鲲', '菜虚鲲', '胖头鲲'],
-  },
-  稀有: {
-    weight: 28,
-    grow: 1.15,
-    list: ['碧鲲', '蓝鲲', '橙鲲', '雪鲲', '虹鲲', '阳鲲', '靓鲲'],
-  },
+  普通: { weight: 60, grow: 1.0, list: ['尘鲲', '土鲲', '沙鲲', '石鲲', '岩鲲', '菜虚鲲', '胖头鲲'] },
+  稀有: { weight: 28, grow: 1.15, list: ['碧鲲', '蓝鲲', '橙鲲', '雪鲲', '虹鲲', '阳鲲', '靓鲲'] },
   史诗: {
     weight: 10,
     grow: 1.35,
@@ -38,13 +28,10 @@ const SPECIES = {
   },
 };
 
-const COST = {
-  蛋: 80, // 买一颗蛋
-  喂食: 20, // 每次喂食
-  幻化丹: 200,
-};
+const COST = { 蛋: 80, 喂食: 20, 幻化丹: 200 };
+/** 体重下限，别让鲲被吃成负数 */
+const MIN_WEIGHT = 0.5;
 
-/** 按稀有度权重抽一个品种 */
 function rollSpecies() {
   const pool = [];
   for (const [rarity, def] of Object.entries(SPECIES)) {
@@ -57,7 +44,7 @@ function rollSpecies() {
 
 const growOf = (rarity) => SPECIES[rarity]?.grow ?? 1;
 
-/** 用 openid + 日期算「今日运势」，同一天同一人结果固定 */
+/** 今日运势：同一天同一人结果固定 */
 function fortuneOf(userId, dateKey) {
   let h = 0;
   const s = `${userId}:${dateKey}`;
@@ -76,8 +63,8 @@ const dayKey = (t = Date.now()) => new Date(t).toISOString().slice(0, 10);
 export default {
   id: 'kun',
   name: '养鲲',
-  version: '1.0.0',
-  description: '开局一条鲲，进化全靠吞：签到、孵化、喂食、吞噬、幻化',
+  version: '1.1.0',
+  description: '开局一条鲲，进化全靠吞：签到、孵化、喂食、吞噬 PvP、幻化',
 
   setup(ctx) {
     const L = ctx.defineLevels({ 管理员: 0 });
@@ -88,49 +75,86 @@ export default {
       name: name || uid.slice(0, 8),
       species: '未孵化',
       rarity: '—',
-      weight: 1, // 千克
-      points: 100, // 节操
+      weight: 5,
+      points: 100,
       eggs: 1,
-      pills: 0, // 幻化丹
+      pills: 0,
       lastSign: '',
       kills: 0,
       deaths: 0,
       bornAt: Date.now(),
     });
 
-    /** 原子读改写：fn 里直接改传入对象，或返回新对象；返回 null 表示不写入 */
+    /** 原子读改写；fn 返回 null 表示这次不写入 */
     const mutate = (uid, name, fn) =>
-      ctx.storage.update(keyOf(uid), (p) => {
-        const cur = p ?? fresh(uid, name);
-        return fn(cur) ?? cur;
-      });
+      ctx.storage.update(keyOf(uid), (p) => fn(p ?? fresh(uid, name)));
 
     const read = async (uid) => (await ctx.storage.get(keyOf(uid))) ?? null;
 
-    const fmt = (p) =>
-      p.species === '未孵化'
-        ? `还没有鲲，有 ${p.eggs} 颗蛋。发 /孵化 开局。\n节操 ${p.points}`
-        : [
-            `【${p.species}】${p.rarity} · ${p.weight.toFixed(1)} 千克`,
-            `节操 ${p.points} · 蛋 ${p.eggs} 颗 · 幻化丹 ${p.pills}`,
-            `战绩 ${p.kills} 杀 ${p.deaths} 死`,
-          ].join('\n');
+    /* ---------------- 渲染 ---------------- */
+
+    function panel(p, uid) {
+      const f = fortuneOf(uid, dayKey());
+
+      if (p.species === '未孵化') {
+        return [
+          `# ${ctx.md.esc(p.name)} 的鲲`,
+          '',
+          `还没有鲲，手里有 **${p.eggs}** 颗蛋，节操 **${p.points}**。`,
+          '',
+          '## 开始',
+          `- ${ctx.md.cmdInput('/孵化', '孵化一颗蛋')} 随机得到一只鲲`,
+          `- ${ctx.md.cmdInput('/签到', '签到')} 赚节操和蛋`,
+        ].join('\n');
+      }
+
+      // 按当前状态决定显示哪些操作，别让玩家点了才发现用不了
+      const acts = [];
+      if (p.lastSign !== dayKey()) {
+        acts.push(`- ${ctx.md.cmdInput('/签到', '签到')} 今天还没签，赚节操和蛋`);
+      }
+      if (p.eggs > 0) {
+        acts.push(`- ${ctx.md.cmdInput('/孵化', '孵化')} 消耗一颗蛋换只新的`);
+      } else {
+        acts.push(`- ${ctx.md.cmdInput('/买蛋', '买蛋')} ${COST.蛋} 节操买一颗蛋（现在没蛋）`);
+      }
+      acts.push(`- ${ctx.md.cmdInput('/喂食', '喂食')} ${COST.喂食} 节操，把鲲喂胖`);
+      // 吞噬只插入命令名，@ 由玩家自己选人，别塞一个字面的「@某人」
+      acts.push(`- ${ctx.md.cmdInput('/吞噬', '吞噬 @某人')} 赢家抢对方 15% 体重`);
+      if (p.pills > 0 || p.points >= COST.幻化丹) {
+        acts.push(`- ${ctx.md.cmdInput('/幻化', '幻化')} 随机换品种，体重不变`);
+      }
+      acts.push(`- ${ctx.md.cmdInput('/鲲榜', '鲲榜')} 看体重排行`);
+
+      return [
+        `# ${ctx.md.esc(p.name)} 的鲲`,
+        '',
+        `**${p.species}** · ${p.rarity} · **${p.weight.toFixed(1)}** 千克`,
+        '',
+        `节操 **${p.points}** · 蛋 **${p.eggs}** · 幻化丹 **${p.pills}**`,
+        `战绩 ${p.kills} 杀 ${p.deaths} 死`,
+        '',
+        `今日运势：**${f.name}**（体重收益 ×${f.mul}）—— ${f.tip}`,
+        '',
+        '## 可以做',
+        ...acts,
+      ].join('\n');
+    }
+
+    const say = (msg, text) => msg.replyMarkdown({ content: text });
 
     /* ---------------- 查看 ---------------- */
 
     async function show(msg) {
       const p = await mutate(msg.userId, msg.userName, (x) => x);
-      const f = fortuneOf(msg.userId, dayKey());
-      await msg.reply(
-        `${p.name} 的鲲\n${fmt(p)}\n\n今日运势：${f.name}（体重收益 ×${f.mul}）\n${f.tip}`,
-      );
+      await say(msg, panel(p, msg.userId));
     }
 
     ctx.command('kun', { desc: '看看我的鲲' }, show);
 
     /* ---------------- 签到 ---------------- */
 
-    ctx.command('签到', { desc: '每日签到领节操，偶尔能捡到蛋' }, async (msg) => {
+    ctx.command('签到', { desc: '每日签到领节操，偶尔捡到蛋' }, async (msg) => {
       const today = dayKey();
       const f = fortuneOf(msg.userId, today);
       const gain = Math.round((40 + Math.random() * 40) * f.mul);
@@ -138,7 +162,7 @@ export default {
       let signed = false;
 
       const p = await mutate(msg.userId, msg.userName, (x) => {
-        if (x.lastSign === today) return null; // 已签过，不写
+        if (x.lastSign === today) return null;
         signed = true;
         x.points += gain;
         x.lastSign = today;
@@ -179,8 +203,8 @@ export default {
         x.eggs -= 1;
         x.species = sp.name;
         x.rarity = sp.rarity;
-        // 换新鲲不继承体重，但给个保底，免得越玩越小
-        x.weight = x.weight <= 1 ? 1 : Math.max(1, Math.round(x.weight * 0.5));
+        // 换新鲲不继承全部体重，但给个保底，免得越玩越小
+        x.weight = Math.max(2, x.weight * 0.5); // 换鲲体重减半，但不低于 2 千克
         return x;
       });
 
@@ -192,7 +216,7 @@ export default {
 
     /* ---------------- 喂食 ---------------- */
 
-    ctx.command('喂食', { desc: `花 ${COST.喂食} 节操把鲲喂胖一点` }, async (msg) => {
+    ctx.command('喂食', { desc: `花 ${COST.喂食} 节操把鲲喂胖` }, async (msg) => {
       const f = fortuneOf(msg.userId, dayKey());
       const base = 2 + Math.random() * 4;
       let reason = '';
@@ -213,21 +237,23 @@ export default {
 
       if (reason === 'nokun') return msg.reply('还没有鲲。先发 /孵化 开局。');
       if (reason === 'poor') return msg.reply(`节操不够，还差 ${COST.喂食 - p.points}。`);
+
+      const add = base * growOf(p.rarity) * f.mul;
       await msg.reply(
-        `喂了一顿，体重 +${(base * growOf(p.rarity) * f.mul).toFixed(1)} 千克\n` +
-          `现在 ${p.weight.toFixed(1)} 千克，剩 ${p.points} 节操。`,
+        `喂了一顿，体重 +${add.toFixed(1)} 千克\n现在 ${p.weight.toFixed(1)} 千克，剩 ${p.points} 节操。`,
       );
     });
 
     /* ---------------- 吞噬（PvP） ---------------- */
 
-    ctx.command('吞噬', { desc: '吞噬 @某人 的鲲，赢家抢走对方一部分体重' }, async (msg) => {
+    ctx.command('吞噬', { desc: '吞噬 @某人 的鲲，赢家抢对方 15% 体重' }, async (msg) => {
       const target = msg.mentions?.[0]?.id;
       if (!target) return msg.reply('要吞噬谁？发 /吞噬 @某人');
       if (target === msg.userId) return msg.reply('不能吞自己。');
 
       const me = await read(msg.userId);
       if (!me || me.species === '未孵化') return msg.reply('你还没有鲲。先发 /孵化 开局。');
+
       const other = await read(target);
       if (!other || other.species === '未孵化') return msg.reply('对方还没有鲲，无从下口。');
 
@@ -245,7 +271,7 @@ export default {
           return x;
         });
         const theirs = await mutate(target, other.name, (x) => {
-          x.weight = Math.max(0.5, x.weight - steal);
+          x.weight = Math.max(MIN_WEIGHT, x.weight - steal);
           x.deaths += 1;
           return x;
         });
@@ -258,7 +284,7 @@ export default {
 
       const lose = me.weight * 0.1;
       const mine = await mutate(msg.userId, msg.userName, (x) => {
-        x.weight = Math.max(0.5, x.weight - lose);
+        x.weight = Math.max(MIN_WEIGHT, x.weight - lose);
         x.deaths += 1;
         return x;
       });
@@ -286,6 +312,7 @@ export default {
           reason = 'nokun';
           return null;
         }
+        // 没有幻化丹就现场炼一颗（扣节操），再消耗掉
         if (x.pills < 1) {
           if (x.points < COST.幻化丹) {
             reason = 'poor';
@@ -318,6 +345,7 @@ export default {
         .filter((r) => r.species && r.species !== '未孵化')
         .sort((a, b) => b.weight - a.weight)
         .slice(0, 5);
+
       if (!rows.length) return msg.reply('还没有人养鲲。发 /kun 开局。');
       const lines = rows.map(
         (r, i) =>

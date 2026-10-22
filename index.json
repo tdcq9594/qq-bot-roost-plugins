@@ -62,7 +62,7 @@
     {
       "id": "kun",
       "name": "养鲲",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "开局一条鲲，进化全靠吞：签到、孵化、喂食、吞噬 PvP、幻化、排行榜",
       "author": "tdcq9594",
       "path": "plugins/kun",
