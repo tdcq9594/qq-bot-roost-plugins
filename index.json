@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "repo": "tdcq9594/qq-bot-roost-plugins",
+  "branch": "main",
+  "updated": "2026-10-23",
+  "plugins": [
+    {
+      "id": "kun",
+      "name": "养鲲",
+      "version": "1.0.0",
+      "description": "开局一条鲲，进化全靠吞：签到、孵化、喂食、吞噬 PvP、幻化、排行榜",
+      "author": "tdcq9594",
+      "path": "plugins/kun",
+      "runtime": "node",
+      "tags": ["游戏", "养成", "PvP"],
+      "commands": ["kun", "签到", "买蛋", "孵化", "喂食", "吞噬", "幻化", "鲲榜"],
+      "addedAt": "2026-10-23"
+    },
+    {
+      "id": "kun-py",
+      "name": "养鲲（Python 版）",
+      "version": "1.0.0",
+      "description": "同一个养鲲玩法，用 Python 实现，演示外部插件如何用 dataDir 存档",
+      "author": "tdcq9594",
+      "path": "plugins/kun-py",
+      "runtime": "python",
+      "tags": ["游戏", "示例", "Python"],
+      "commands": ["pykun", "pysign", "pyhatch", "pybuy", "pyfeed", "pyrank"],
+      "addedAt": "2026-10-23"
+    }
+  ]
+}
