@@ -32,6 +32,36 @@ const COST = { 蛋: 80, 喂食: 20, 幻化丹: 200 };
 /** 体重下限，别让鲲被吃成负数 */
 const MIN_WEIGHT = 0.5;
 
+/**
+ * 每个品种一个颜文字。按稀有度定风格：
+ * 普通呆萌、稀有精神、史诗凶、传说诡异。
+ * 面板、孵化提示、排行榜里都会带上，比纯文字好认。
+ */
+const FACE = {
+  // 普通
+  尘鲲: '(´･ω･`)', 土鲲: '(￣▽￣)', 沙鲲: '(・_・)', 石鲲: '(￣.￣)',
+  岩鲲: '(￣ー￣)', 菜虚鲲: '(；一_一)', 胖头鲲: '(´～`)',
+  // 稀有
+  碧鲲: '(◕‿◕)', 蓝鲲: '(＾▽＾)', 橙鲲: '(￣ω￣)', 雪鲲: '(*´∀`)',
+  虹鲲: '(✧∀✧)', 阳鲲: '(๑•̀ㅂ•́)', 靓鲲: '(≧▽≦)',
+  // 史诗
+  炎鲲: '(╬￣皿￣)', 冰鲲: '(￣ω￣;)', 雷鲲: '(｀Д´)', 铁头鲲: '(￣^￣)',
+  钢背鲲: '(╯°□°)╯', 剑鲲: '(￣ヘ￣)', 齿鲲: '(ᗒᗨᗕ)', 铠鲲: '(๑•̀ㅁ•́๑)',
+  烈鲲: '(｀∀´)', 阴鲲: '(￣ー￣;)',
+  // 传说
+  帝鲲: '(｀・ω・´)', 圣鲲: '(✿◠‿◠)', 灵鲲: '(・∀・)', 冥鲲: '(x_x)',
+  玄鲲: '(¯﹃¯)', 魔鲲: '(▼皿▼)', 鬼鲲: '(((ﾟДﾟ)))', 妖鲲: '(￣▽￣)~*',
+  幻鲲: '(๑¯ω¯๑)', 诡鲲: '(・_・;)', 尸鲲: '(✖╭╮✖)', 血鲲: '(╬☉д⊙)',
+  骨鲲: '(☠д☠)', 腐鲲: '(x_x;)', 毒鲲: '(๑•́ ₃ •̀๑)', 凶鲲: '(╬ Ò﹏Ó)',
+  恶鲲: '(▼_▼)', 黑鲲: '(￣ω￣)', 暗鲲: '(・-・)', 炫鲲: '(✧ω✧)',
+};
+
+/** 取颜文字，没登记的就按稀有度给个默认 */
+function faceOf(species, rarity) {
+  if (FACE[species]) return FACE[species];
+  return { 普通: '(・_・)', 稀有: '(◕‿◕)', 史诗: '(￣ヘ￣)', 传说: '(๑¯ω¯๑)' }[rarity] || '(・_・)';
+}
+
 function rollSpecies() {
   const pool = [];
   for (const [rarity, def] of Object.entries(SPECIES)) {
@@ -129,7 +159,7 @@ export default {
       return [
         `# ${ctx.md.esc(p.name)} 的鲲`,
         '',
-        `**${p.species}** · ${p.rarity} · **${p.weight.toFixed(1)}** 千克`,
+        `**${p.species}** ${faceOf(p.species, p.rarity)} · ${p.rarity} · **${p.weight.toFixed(1)}** 千克`,
         '',
         `节操 **${p.points}** · 蛋 **${p.eggs}** · 幻化丹 **${p.pills}**`,
         `战绩 ${p.kills} 杀 ${p.deaths} 死`,
@@ -210,7 +240,7 @@ export default {
 
       if (!ok) return msg.reply('你没有蛋。发 /买蛋 买一颗，或者等签到捡。');
       await msg.reply(
-        `蛋裂开了——是【${sp.name}】！稀有度：${sp.rarity}\n新鲲起步 ${p.weight.toFixed(1)} 千克。`,
+        `蛋裂开了——是【${sp.name}】${faceOf(sp.name, sp.rarity)}！稀有度：${sp.rarity}\n新鲲起步 ${p.weight.toFixed(1)} 千克。`,
       );
     });
 
@@ -332,7 +362,7 @@ export default {
       if (reason === 'poor') {
         return msg.reply(`炼一颗幻化丹要 ${COST.幻化丹} 节操，你还差 ${COST.幻化丹 - p.points}。`);
       }
-      await msg.reply(`幻化成功：${oldName} → 【${sp.name}】（${sp.rarity}）\n体重不变。`);
+      await msg.reply(`幻化成功：${oldName} → 【${sp.name}】${faceOf(sp.name, sp.rarity)}（${sp.rarity}）\n体重不变。`);
     });
 
     /* ---------------- 排行 ---------------- */
@@ -349,7 +379,7 @@ export default {
       if (!rows.length) return msg.reply('还没有人养鲲。发 /kun 开局。');
       const lines = rows.map(
         (r, i) =>
-          `${i + 1}. ${r.name || r.uid.slice(0, 8)} · ${r.species} · ${r.weight.toFixed(1)} 千克`,
+          `${i + 1}. ${r.name || r.uid.slice(0, 8)} · ${r.species} ${faceOf(r.species, r.rarity)} · ${r.weight.toFixed(1)} 千克`,
       );
       await msg.reply(['鲲榜', ...lines].join('\n'));
     });
