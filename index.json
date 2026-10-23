@@ -26,8 +26,8 @@
     {
       "id": "echo",
       "name": "回声",
-      "version": "1.0.1",
-      "description": "复读机，演示命令与消息监听",
+      "version": "1.1.0",
+      "description": "复读机，演示命令、消息监听与面板运行数据",
       "author": "tdcq9594",
       "path": "plugins/echo",
       "runtime": "node",
