@@ -100,38 +100,170 @@ function explainHttp(status, bodyText = '') {
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '1.0.0',
+  version: '1.1.0',
   description: '把大模型接进群聊和私聊，@机器人 就能对话，每会话独立上下文',
   frameworkVersion: '>=0.6.0',
 
+  /**
+   * 面板上的「快速填入」。
+   *
+   * 换服务商要同时改 baseUrl 和 model 两个字段，手输地址容易多写/漏写 `/v1`
+   * （然后拿到一个 404，看着像服务商挂了）。这里把常见组合列出来，点一下填好。
+   *
+   * 地址都是实测过的（不带 Key 请求返回 401，说明接口真实存在）。
+   * **模型名会变**：服务商上下架模型比改域名勤得多，所以 desc 里写清
+   * 「以官网为准」，用户填完最好核对一眼。
+   */
+  configPresets: [
+    {
+      name: 'DeepSeek',
+      desc: '国内直连、便宜，日常聊天够用',
+      values: { baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' },
+    },
+    {
+      name: 'DeepSeek 推理',
+      desc: '带思维链，数学和代码更强，但更慢更贵',
+      values: { baseUrl: 'https://api.deepseek.com', model: 'deepseek-reasoner' },
+    },
+    {
+      name: 'Kimi',
+      desc: '月之暗面，长文本强项',
+      values: { baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
+    },
+    {
+      name: '通义千问',
+      desc: '阿里云百炼，OpenAI 兼容模式',
+      values: {
+        baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        model: 'qwen-plus',
+      },
+    },
+    {
+      name: '智谱 GLM',
+      desc: '有免费额度，适合先试水',
+      values: { baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' },
+    },
+    {
+      name: '硅基流动',
+      desc: '一个 Key 调很多开源模型，如 Qwen / Llama',
+      values: { baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct' },
+    },
+    {
+      name: '火山方舟',
+      desc: '字节豆包。model 要填「接入点 ID」或模型名，看控制台',
+      values: { baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-pro-32k' },
+    },
+    {
+      name: '本地 Ollama',
+      desc: '跑在自己电脑上，不花钱不出网。先 ollama pull 一个模型',
+      values: { baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen2.5:7b' },
+    },
+  ],
+
   config: {
-    /** 服务商 API Key。留空时命令只提示怎么配 */
-    apiKey: '',
-    /** OpenAI 兼容的接口地址，DeepSeek 默认这个 */
-    baseUrl: 'https://api.deepseek.com',
-    model: 'deepseek-chat',
-    /** 全局人设，所有会话共用 */
-    systemPrompt: '',
-    /** 群聊额外追加的人设（叠加在 systemPrompt 后面） */
-    groupPrompt: '',
-    /** 私聊额外追加的人设 */
-    directPrompt: '',
-    /** 群聊是否必须 @机器人才回。关掉就是「每句都接」，很吵，慎用 */
-    requireMention: true,
-    /** 保留几轮对话。1 轮 = 一问一答 */
-    historyLimit: 10,
-    /** 闲置多久清空上下文（分钟） */
-    idleTimeoutMin: 30,
-    maxTokens: 1024,
-    temperature: 1,
-    /** 单次请求超时（秒） */
-    timeoutSec: DEFAULT_TIMEOUT_SEC,
-    /** 群聊/私聊访问模式：open 谁都能用，allowlist 只白名单 */
-    access: 'open',
-    /** 白名单，填 chatId（群 openid 或私聊用户 openid） */
-    allowList: [],
-    /** 打开后在日志里打印每轮请求的耗时和 token 数 */
-    debug: false,
+    apiKey: {
+      type: 'text',
+      default: '',
+      label: 'API 密钥',
+      desc: '必填。在服务商控制台创建，通常以 sk- 开头。留空时对话不可用',
+      placeholder: 'sk-...',
+    },
+    baseUrl: {
+      type: 'text',
+      default: 'https://api.deepseek.com',
+      label: '接口地址',
+      desc: 'OpenAI 兼容地址。不知道填什么就点上面的「快速填入」',
+      placeholder: 'https://api.deepseek.com',
+    },
+    model: {
+      type: 'text',
+      default: 'deepseek-chat',
+      label: '模型',
+      desc: '服务商提供的模型名，以官网文档为准。也可以在群里发 /模型 临时换',
+      placeholder: 'deepseek-chat',
+    },
+    systemPrompt: {
+      type: 'text',
+      default: '',
+      label: '人设',
+      desc: '所有会话共用的系统提示词。留空就是默认的助手风格',
+      placeholder: '你是一个乐于助人的助手，回答简洁',
+    },
+    groupPrompt: {
+      type: 'text',
+      default: '',
+      label: '群聊追加人设',
+      desc: '只在群里生效，叠加在「人设」后面。比如「群里说话简短些」',
+    },
+    directPrompt: {
+      type: 'text',
+      default: '',
+      label: '私聊追加人设',
+      desc: '只在私聊生效，叠加在「人设」后面',
+    },
+    historyLimit: {
+      type: 'number',
+      default: 10,
+      min: 1,
+      max: 50,
+      label: '记住几轮对话',
+      desc: '1 轮 = 一问一答。越大越费 token，也越容易撞上下文上限',
+    },
+    idleTimeoutMin: {
+      type: 'number',
+      default: 30,
+      min: 1,
+      max: 1440,
+      label: '闲置清空（分钟）',
+      desc: '这么久没人说话就忘掉之前的对话。上下文只存内存，重启也会清空',
+    },
+    maxTokens: {
+      type: 'number',
+      default: 1024,
+      min: 1,
+      max: 32000,
+      label: '单条回复上限（token）',
+      desc: '太小会说到一半断掉，太大容易又臭又长还费钱',
+    },
+    temperature: {
+      type: 'number',
+      default: 1,
+      min: 0,
+      max: 2,
+      label: '发散程度',
+      desc: '0 最保守、每次回答都差不多；2 最跳脱。日常用 1 就行',
+    },
+    timeoutSec: {
+      type: 'number',
+      default: DEFAULT_TIMEOUT_SEC,
+      min: 5,
+      max: 600,
+      label: '请求超时（秒）',
+      desc: '超过就放弃这次回答。推理模型慢，可以调大',
+    },
+    access: {
+      type: 'select',
+      default: 'open',
+      // 值是代码里判断的，label 是给人看的
+      options: [
+        { value: 'open', label: '谁都能用' },
+        { value: 'allowlist', label: '只白名单里的会话' },
+      ],
+      label: '谁能用',
+      desc: '选「只白名单」后，名单外的会话不响应、也不消耗 token',
+    },
+    allowList: {
+      type: 'json',
+      default: [],
+      label: '白名单',
+      desc: '填会话 id 的数组，如 ["群openid","用户openid"]。只有上面选了 allowlist 才生效',
+    },
+    debug: {
+      type: 'boolean',
+      default: false,
+      label: '调试日志',
+      desc: '在日志里打印每轮耗时和 token 消耗，排查慢/贵的时候用',
+    },
   },
 
   /** @param {RoostCtx} ctx */
@@ -156,7 +288,6 @@ export default {
       systemPrompt: String(ctx.config.systemPrompt ?? '').trim(),
       groupPrompt: String(ctx.config.groupPrompt ?? '').trim(),
       directPrompt: String(ctx.config.directPrompt ?? '').trim(),
-      requireMention: ctx.config.requireMention !== false,
       maxTokens: num(ctx.config.maxTokens, 1024, 1),
       temperature: Number.isFinite(Number(ctx.config.temperature))
         ? Number(ctx.config.temperature)
@@ -303,37 +434,46 @@ export default {
       }
     }
 
-    /* ---------------- 被动对话 ---------------- */
+    /* ---------------- 对话入口 ---------------- */
 
     /**
-     * 群聊 @ / 私聊直接说 → 对话。
+     * 固定格式：`@机器人 /ai 内容`。
      *
-     * 挂在 'message' 而不是具体事件上：群 @、私聊、以及开了全量消息后的
-     * GROUP_MESSAGE_CREATE 都要能进来，框架已经统一成 'message' 了。
+     * 为什么不做「@ 了随便说就接」：
+     *   · 群里 @ 一下往往只是提到机器人，不是要它回答——那样每句都得接，很吵
+     *   · 免 @ 窗口（sticky）更糟，@ 过一次之后整个群几分钟内说什么都被吃掉
+     *   · 有个明确的 `/ai`，用户知道自己什么时候在跟 AI 说话，不 @ 也不误触发
+     *
+     * **发给模型的是 `/ai` 后面的内容**，指令本身剔除。
+     * 用 `args` 而不是 `msg.content` 就是这个道理：content 里带着 `/ai`，
+     * 直接发过去模型会以为用户在让它执行命令，回答容易跑偏。
      */
-    ctx.on('message', async (msg) => {
-      // 命令交给下面注册的 handler，别当成聊天内容发给模型
-      if (msg.isCommand) return;
-      // 空消息（纯图片、纯表情）不处理
-      const text = String(msg.content ?? '').trim();
-      if (!text) return;
-      if (!allowed(msg.chatId)) return;
+    ctx.command('ai <内容...>', {
+      desc: '和 AI 对话，后面跟你的问题',
+      usage: `${P}ai 今天天气怎么样`,
+    }, async (msg, { args }) => {
+      // args 是 `/ai` 后面按空格切开的部分，拼回去就是用户想问的原文
+      const text = String((args ?? []).join(' ') ?? '').trim();
 
-      const c = conf();
-      if (!c.apiKey) {
-        // 私聊里说清楚怎么配；群里说会变成噪音，只在被 @ 时提醒
-        if (msg.kind === 'c2c' || msg.mentioned) await msg.reply(noKeyHint());
-        return;
+      if (!text) {
+        const lines = [
+          '要问什么？格式是：',
+          msg.kind === 'c2c' ? `  ${P}ai 你的问题` : `  @我 ${P}ai 你的问题`,
+          '',
+          `例：${P}ai 用一句话解释什么是递归`,
+          `换个话题：${P}新会话`,
+        ];
+        return msg.reply(lines.join('\n'));
       }
 
-      /**
-       * 群聊要不要 @。
-       *
-       * `msg.addressed` 已经把三件事或在一起了：@ 了机器人、是命令、
-       * 或者还在「免 @ 窗口」里（刚 @ 过，接下来几句不用再 @）。
-       * 直接用它，比自己判断 mentioned 更准——连续对话靠的就是 sticky。
-       */
-      if (msg.kind !== 'c2c' && c.requireMention && !msg.addressed) return;
+      if (!allowed(msg.chatId)) {
+        // 白名单外：不响应、不消耗 token。但明确说一句，
+        // 否则用户以为机器人坏了
+        return msg.reply('这个会话不在 AI 对话的白名单里。');
+      }
+
+      const c = conf();
+      if (!c.apiKey) return msg.reply(noKeyHint());
 
       await converse(msg, text);
     });
@@ -417,9 +557,11 @@ export default {
       const lines = [
         '## AI 对话',
         '',
-        msg.kind === 'c2c' ? '直接说话就行，我在听。' : `群里 ${P}后面带上你的问题，或者先 @我 再说。`,
+        '格式固定是「指令 + 你的问题」，指令本身不会发给 AI：',
+        msg.kind === 'c2c' ? `  ${P}ai 你的问题` : `  @我 ${P}ai 你的问题`,
+        `例：${P}ai 用一句话解释什么是递归`,
         '',
-        '## 指令',
+        '## 其它指令',
         `- ${P}新会话 —— 清空上下文重新开始`,
         `- ${P}模型 —— 看当前模型，${P}模型 deepseek-reasoner 换一个`,
         `- ${P}停止 —— 中止正在生成的回答`,
@@ -432,7 +574,7 @@ export default {
     });
 
     ctx.menu('AI 对话', [
-      { text: '直接说问题', desc: '群聊要 @机器人，私聊直接说' },
+      { text: `${P}ai 问题`, desc: '固定格式，指令会被剔除，AI 只看到你的问题' },
       { text: `${P}新会话`, desc: '聊偏了就用这个清掉上下文' },
       { text: `${P}模型`, desc: '换模型，比如 deepseek-reasoner 更擅长推理' },
       { text: `${P}停止`, desc: '回答太长等不及了，中止它' },
