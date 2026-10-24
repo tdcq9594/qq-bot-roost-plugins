@@ -117,13 +117,13 @@ export default {
   configPresets: [
     {
       name: 'DeepSeek',
-      desc: '国内直连、便宜，日常聊天够用',
-      values: { baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' },
+      desc: '国内直连、便宜，日常聊天够用（deepseek-flash）',
+      values: { baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash' },
     },
     {
-      name: 'DeepSeek 推理',
-      desc: '带思维链，数学和代码更强，但更慢更贵',
-      values: { baseUrl: 'https://api.deepseek.com', model: 'deepseek-reasoner' },
+      name: 'DeepSeek Pro',
+      desc: '能力更强、贵几倍，难一点的活用它（deepseek-v4-pro）',
+      values: { baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-pro' },
     },
     {
       name: 'Kimi',
@@ -177,26 +177,28 @@ export default {
     },
     model: {
       type: 'text',
-      default: 'deepseek-chat',
+      default: 'deepseek-flash',
       label: '模型',
       desc: '服务商提供的模型名，以官网文档为准。也可以在群里发 /模型 临时换',
-      placeholder: 'deepseek-chat',
+      placeholder: 'deepseek-flash',
     },
     systemPrompt: {
-      type: 'text',
-      default: '',
+      type: 'textarea',
+      default:
+        '你在一个 QQ 群里聊天。回答简短口语化，通常两三句话就够，别写长篇大论。' +
+        '可以用 Markdown 排版（标题、列表、加粗、代码块），但别为了排版而排版。' +
+        '不确定的事直说不确定，不要编。',
       label: '人设',
-      desc: '所有会话共用的系统提示词。留空就是默认的助手风格',
-      placeholder: '你是一个乐于助人的助手，回答简洁',
+      desc: '所有会话共用的系统提示词。默认已按 QQ 群聊调好（简短、允许 Markdown）。关掉下面的「Markdown 消息」后记得把这里的 Markdown 那句删掉',
     },
     groupPrompt: {
-      type: 'text',
+      type: 'textarea',
       default: '',
       label: '群聊追加人设',
       desc: '只在群里生效，叠加在「人设」后面。比如「群里说话简短些」',
     },
     directPrompt: {
-      type: 'text',
+      type: 'textarea',
       default: '',
       label: '私聊追加人设',
       desc: '只在私聊生效，叠加在「人设」后面',
@@ -231,7 +233,24 @@ export default {
       min: 0,
       max: 2,
       label: '发散程度',
-      desc: '0 最保守、每次回答都差不多；2 最跳脱。日常用 1 就行',
+      desc: '0 最保守、2 最跳脱。注意：开了「思考模式」这项不生效（服务商限制）',
+    },
+    thinking: {
+      type: 'boolean',
+      default: false,
+      label: '思考模式',
+      desc: '让模型先打草稿再回答，难题更准，但慢好几倍、还更费钱。QQ 聊天一般不用开',
+    },
+    reasoningEffort: {
+      type: 'select',
+      default: 'high',
+      options: [
+        { value: 'low', label: '低（快，省）' },
+        { value: 'high', label: '高（默认）' },
+        { value: 'max', label: '最高（最慢最贵）' },
+      ],
+      label: '思考强度',
+      desc: '只在「思考模式」开启时有意义。DeepSeek 官方默认是「高」',
     },
     timeoutSec: {
       type: 'number',
@@ -239,7 +258,7 @@ export default {
       min: 5,
       max: 600,
       label: '请求超时（秒）',
-      desc: '超过就放弃这次回答。推理模型慢，可以调大',
+      desc: '超过就放弃这次回答。开了思考模式要调大，不然容易超时',
     },
     access: {
       type: 'select',
@@ -257,6 +276,12 @@ export default {
       default: [],
       label: '白名单',
       desc: '填会话 id 的数组，如 ["群openid","用户openid"]。只有上面选了 allowlist 才生效',
+    },
+    markdown: {
+      type: 'boolean',
+      default: true,
+      label: 'Markdown 消息',
+      desc: '用 QQ 的 markdown 消息类型发回复，标题/列表/加粗能真的渲染。关掉则发纯文本、参与多插件合并；发不出去会自动退回纯文本',
     },
     debug: {
       type: 'boolean',
@@ -284,7 +309,7 @@ export default {
     const conf = () => ({
       apiKey: String(ctx.config.apiKey ?? '').trim(),
       baseUrl: String(ctx.config.baseUrl ?? 'https://api.deepseek.com').trim().replace(/\/+$/, ''),
-      model: String(ctx.config.model ?? 'deepseek-chat').trim(),
+      model: String(ctx.config.model ?? 'deepseek-flash').trim(),
       systemPrompt: String(ctx.config.systemPrompt ?? '').trim(),
       groupPrompt: String(ctx.config.groupPrompt ?? '').trim(),
       directPrompt: String(ctx.config.directPrompt ?? '').trim(),
@@ -292,6 +317,12 @@ export default {
       temperature: Number.isFinite(Number(ctx.config.temperature))
         ? Number(ctx.config.temperature)
         : 1,
+      thinking: Boolean(ctx.config.thinking),
+      reasoningEffort: ['low', 'high', 'max'].includes(ctx.config.reasoningEffort)
+        ? ctx.config.reasoningEffort
+        : 'high',
+      // 默认开：QQ 支持 markdown 消息类型，能渲染就别浪费
+      markdown: ctx.config.markdown !== false,
       timeoutSec: num(ctx.config.timeoutSec, DEFAULT_TIMEOUT_SEC, 5),
       access: ctx.config.access === 'allowlist' ? 'allowlist' : 'open',
       allowList: Array.isArray(ctx.config.allowList)
@@ -327,19 +358,40 @@ export default {
      */
     async function callModel(messages, { signal, model }) {
       const c = conf();
+
+      /**
+       * 请求体按服务商分别拼。
+       *
+       * `thinking` 是 DeepSeek 的参数，别家（Kimi / 通义 / Ollama）不认识，
+       * 塞过去可能直接 400。所以只在地址是 DeepSeek 时才带。
+       *
+       * 为什么要显式传 `disabled`：**DeepSeek 的思考模式默认是开的、
+       * 强度默认 high**。不显式关掉，群里问一句「在吗」它先想半天，
+       * 而且思考过程算输出 token（比普通 token 贵），又慢又费钱。
+       *
+       * 思考模式还**不支持 temperature**（传了不报错但不生效），
+       * 所以开着的时候干脆不传，免得用户以为调了发散程度有用。
+       */
+      const isDeepSeek = /deepseek/i.test(c.baseUrl);
+      const body = {
+        model: model || c.model,
+        messages,
+        max_tokens: c.maxTokens,
+        stream: false,
+      };
+      if (isDeepSeek) {
+        body.thinking = { type: c.thinking ? 'enabled' : 'disabled' };
+        if (c.thinking) body.reasoning_effort = c.reasoningEffort;
+      }
+      if (!c.thinking) body.temperature = c.temperature;
+
       const res = await fetch(`${c.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${c.apiKey}`,
         },
-        body: JSON.stringify({
-          model: model || c.model,
-          messages,
-          max_tokens: c.maxTokens,
-          temperature: c.temperature,
-          stream: false,
-        }),
+        body: JSON.stringify(body),
         signal,
       });
 
@@ -408,12 +460,23 @@ export default {
         }
 
         /**
-         * 用 reply 而不是 replyNow：让它参与框架的合并。
+         * 发送方式取决于 `markdown` 开关。
          *
-         * 群里可能同时有别的插件也想回这条消息（回声接关键词、骰子接指令），
-         * 合并成一条并各自带上【插件名】标题，比连发好几条清爽得多。
+         * 开：用 `replyMarkdown` 发 markdown 消息类型，标题、列表、加粗、
+         * 代码块在 QQ 里能真的渲染出来。**但它会先把攒着的文本 flush 掉
+         * 再单独发**，所以这时不参与多插件合并——能渲染比合并更值。
+         *
+         * 关：用 `reply`，纯文本，参与合并，带【插件名】标题。
+         *
+         * markdown 失败要降级：`replyMarkdown` 内部把错误吞了只记日志，
+         * 返回 null。不降级的话用户什么都收不到，还以为机器人挂了。
          */
-        await msg.reply(text);
+        if (c.markdown) {
+          const sent = await msg.replyMarkdown({ content: text });
+          if (!sent) await msg.reply(text);
+        } else {
+          await msg.reply(text);
+        }
       } catch (e) {
         // 用户主动 /停止 会走到这里，不算错误
         if (e?.name === 'AbortError') {
@@ -499,9 +562,20 @@ export default {
       await msg.reply('上下文已清空，重新开始吧。');
     });
 
+    /**
+     * 切模型要管理员。
+     *
+     * 模型直接决定花多少钱——`deepseek-v4-pro` 的输出价是 `deepseek-flash`
+     * 的三四倍，而钱是机器人在付。普通群友随口一句 `/模型 xxx`
+     * 就把整个会话的单价抬上去，这个权限不该开放。
+     *
+     * 只读的 `/模型`（不带参数看当前是哪个）也一起限了：
+     * 分开判太绕，而「看当前模型」对普通用户也没什么用。
+     */
     ctx.command('模型 [名字]', {
-      desc: '查看或切换当前会话用的模型',
-      usage: `${P}模型  ·  ${P}模型 deepseek-reasoner`,
+      desc: '查看或切换当前会话用的模型（需管理员）',
+      usage: `${P}模型  ·  ${P}模型 deepseek-v4-pro`,
+      admin: true,
     }, async (msg, { args }) => {
       const c = conf();
       const s = store.get(msg.chatId);
@@ -510,7 +584,7 @@ export default {
       if (!want) {
         const cur = s.model || c.model;
         const hint = cur === c.model ? '' : `（默认是 ${c.model}）`;
-        return msg.reply(`当前模型：${cur}${hint}\n换一个：${P}模型 deepseek-reasoner`);
+        return msg.reply(`当前模型：${cur}${hint}\n换一个：${P}模型 deepseek-v4-pro`);
       }
       /**
        * 校验模型名。
@@ -563,7 +637,7 @@ export default {
         '',
         '## 其它指令',
         `- ${P}新会话 —— 清空上下文重新开始`,
-        `- ${P}模型 —— 看当前模型，${P}模型 deepseek-reasoner 换一个`,
+        `- ${P}模型 —— 看当前模型，${P}模型 deepseek-v4-pro 换一个`,
         `- ${P}停止 —— 中止正在生成的回答`,
         `- ${P}对话状态 —— 看这个会话聊了几轮`,
         '',
@@ -576,7 +650,7 @@ export default {
     ctx.menu('AI 对话', [
       { text: `${P}ai 问题`, desc: '固定格式，指令会被剔除，AI 只看到你的问题' },
       { text: `${P}新会话`, desc: '聊偏了就用这个清掉上下文' },
-      { text: `${P}模型`, desc: '换模型，比如 deepseek-reasoner 更擅长推理' },
+      { text: `${P}模型`, desc: '换模型，比如 deepseek-v4-pro 能力更强' },
       { text: `${P}停止`, desc: '回答太长等不及了，中止它' },
     ]);
 
