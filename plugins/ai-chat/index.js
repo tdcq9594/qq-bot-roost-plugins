@@ -23,6 +23,29 @@
  */
 /** 一次请求最多等多久。超过就中断，别让用户干等 */
 const DEFAULT_TIMEOUT_SEC = 90;
+const DEFAULT_MODEL = 'deepseek-flash';
+
+/**
+ * 旧模型名自动映射。
+ *
+ * DeepSeek 换过名字：`deepseek-chat` / `deepseek-reasoner` 是老的，
+ * 现在只有 `deepseek-flash` / `deepseek-v4-pro`。
+ *
+ * 为什么要在代码里兜：**升级上来的用户，配置文件里存的还是旧名**。
+ * 配置项的值优先于默认值，所以光改默认值对老用户没用——他们会一直
+ * 拿一个官方文档里已经查不到的名字去调接口。
+ *
+ * 不直接改用户配置文件：那是用户的东西，悄悄改写不合适；
+ * 读的时候映射一下，用户在面板上看到、改过的仍然是自己的值。
+ */
+const MODEL_ALIAS = {
+  'deepseek-chat': 'deepseek-flash',
+  'deepseek-reasoner': 'deepseek-v4-pro',
+  // 更早的写法
+  'deepseek-coder': 'deepseek-flash',
+};
+
+const aliasModel = (m) => MODEL_ALIAS[m] ?? m;
 
 /**
  * 会话容器。
@@ -309,7 +332,7 @@ export default {
     const conf = () => ({
       apiKey: String(ctx.config.apiKey ?? '').trim(),
       baseUrl: String(ctx.config.baseUrl ?? 'https://api.deepseek.com').trim().replace(/\/+$/, ''),
-      model: String(ctx.config.model ?? 'deepseek-flash').trim(),
+      model: aliasModel(String(ctx.config.model ?? DEFAULT_MODEL).trim()),
       systemPrompt: String(ctx.config.systemPrompt ?? '').trim(),
       groupPrompt: String(ctx.config.groupPrompt ?? '').trim(),
       directPrompt: String(ctx.config.directPrompt ?? '').trim(),
@@ -661,6 +684,24 @@ export default {
       const n = store.evictIdle();
       if (n) ctx.logger.debug(`[ai-chat] 回收 ${n} 个闲置会话`);
     });
+
+    /**
+     * 把配置文件里的旧模型名迁移掉。
+     *
+     * `conf()` 读的时候已经映射了，调用不会出错；但面板上显示的仍是
+     * 文件里那个旧名（`deepseek-chat`），用户会以为改没生效、或者以为自己
+     * 用着老模型。所以启动时顺手把文件里的值改成新名，显示和实际一致。
+     *
+     * 只改这一种情况：值确实是已知的旧名。用户自己填的其它模型名一律不碰。
+     */
+    const rawModel = String(ctx.config.model ?? '').trim();
+    if (MODEL_ALIAS[rawModel]) {
+      const fixed = MODEL_ALIAS[rawModel];
+      ctx.logger.info(`配置里的模型名 ${rawModel} 已过时，自动改为 ${fixed}`);
+      ctx.setConfig?.({ model: fixed }).catch(() => {
+        // 写不进去也不影响运行：conf() 每次读都会映射
+      });
+    }
 
     if (!conf().apiKey) {
       ctx.logger.warn('[ai-chat] 还没配 API Key，对话功能不可用。去面板「插件 → AI 对话 → 设置」填上');
