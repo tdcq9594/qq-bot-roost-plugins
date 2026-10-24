@@ -17,8 +17,12 @@
  * 这些不是没做，是接口不存在——别在群里试了以为坏了。
  *
  * 目标怎么指定：**@ 对方**最省事（机器人开了「接收所有消息」后，
- * 官方会在事件里给 mentions），也可以写序号/昵称/楼上。
+ * 官方会在事件里给 mentions），或者让对方发 `/whoami` 把 id 贴过来。
  * 回复里一律用昵称，不显示 openid——群友看不懂那串十六进制。
+ *
+ * **只支持这两种。** 按昵称匹配、按「楼上/第几个」都做过又删了——
+ * 那些是从「最近说过话的人」里猜，群聊刷几句话就错位，
+ * 禁言错人比不能禁言更糟。
  */
 export default {
   id: 'group-admin',
@@ -106,33 +110,19 @@ export default {
     const nameOf = (t) => t?.name || '该成员';
 
     /**
-     * 本群最近说过话的人（新的在前）。
-     *
-     * 为什么需要这个：`GROUP_AT_MESSAGE_CREATE` 事件里**没有 mentions**
-     * （实测字段只有 author/content/group_id/group_openid/id/message_scene/message_type/timestamp）。
-     * 机器人开启「接收所有消息」后走 `GROUP_MESSAGE_CREATE`，那时才有 mentions
-     * 和正文里的 `<@openid>`。两种事件都要能应付，所以留这条兜底路径。
-     */
-    function recentInGroup(bot, msg, { includeSelf = false } = {}) {
-      const list = bot?.listRecentPeople?.(50) ?? [];
-      return list
-        .filter((p) => p.chatId === msg.groupId)
-        .filter((p) => includeSelf || p.openid !== msg.userId);
-    }
-
-    /**
      * 从消息里找出「要操作谁」。
      *
      * 依次认：
      *   1. `mentions`（@ 的人）——最准，官方在 mentions 里还给了 username
-     *   2. `楼上` / `他` / `她` / `ta` → 本群最近一个说话的人
-     *   3. 纯数字 n → 本群最近第 n 个说话的人（配合 `/最近发言` 看列表）
-     *   4. 其它文字 → 按昵称匹配本群最近说话的人
-     *   5. 十六进制长串 → 当 openid（保底，不对外宣传）
+     *   2. 参数里的 openid 长串（`/whoami` 能拿到）
+     *
+     * 就这两种。**不做昵称匹配、不做「楼上/第几个」**——那些都是从
+     * 「最近说过话的人」里猜的，群聊刷几句话就错位，禁言错人比不能禁言更糟。
+     * 想要谁就 @ 谁，或者让当事人发 `/whoami` 把 id 贴过来。
      *
      * @returns {Array<{openid:string, name:string}>}
      */
-    function resolveTargets(msg, args, bot) {
+    function resolveTargets(msg, args) {
       const out = [];
       const push = (openid, name = '') => {
         const id = String(openid ?? '').trim();
@@ -148,25 +138,6 @@ export default {
       for (const m of msg.mentions ?? []) push(m.id, m.name);
       for (const a of args ?? []) {
         if (looksLikeOpenid(a)) push(a);
-      }
-
-      const recent = recentInGroup(bot, msg);
-      const words = (args ?? []).filter((a) => !looksLikeOpenid(a));
-
-      for (const w of words) {
-        const s = String(w ?? '').trim();
-        if (!s) continue;
-        if (/^(楼上|他|她|ta)$/i.test(s)) {
-          if (recent[0]) push(recent[0].openid, recent[0].name);
-          continue;
-        }
-        if (/^\d+$/.test(s)) {
-          const hit = recent[Number(s) - 1];
-          if (hit) push(hit.openid, hit.name);
-          continue;
-        }
-        const hit = recent.find((p) => (p.name || '').includes(s));
-        if (hit) push(hit.openid, hit.name);
       }
       return out;
     }
@@ -192,12 +163,12 @@ export default {
       if (canUseMention(msg)) {
         lines.push(`· ${P}禁言 10m @某人 —— 直接 @ 对方`);
       } else {
-        lines.push('· 这个群没开「接收所有消息」，@ 谁都用不了，用下面几种');
+        lines.push('· 这个群没开「接收全部消息」，@ 谁都用不了');
       }
       lines.push(
-        `· ${P}禁言 10m 楼上 —— 最近说话的那个人`,
-        `· ${P}禁言 10m 2 —— 最近第 2 个说话的人（先发 ${P}最近发言 看列表）`,
-        `· ${P}禁言 10m 张三 —— 按昵称匹配最近说过话的人`,
+        `· 让对方发 ${P}whoami 拿自己的 id，再 ${P}禁言 10m <id>`,
+        '',
+        '只支持这两种指定方式——按昵称猜人容易禁错，不做。',
       );
       return lines.join('\n');
     }
@@ -241,7 +212,7 @@ export default {
     /* ---------------- 命令 ---------------- */
 
     ctx.command('禁言 [时长] [目标]', {
-      desc: '禁言，时长写 10m / 1h / 1d；目标可以 @、写楼上、序号或昵称',
+      desc: '禁言，时长写 10m / 1h / 1d；目标 @ 对方，或填 TA 的 id',
       admin: true,
     }, async (msg, { args, bot }) => {
       if (!(await ensureManageable(msg))) return;
@@ -254,7 +225,7 @@ export default {
         rest = args;
       }
 
-      const targets = resolveTargets(msg, rest, bot);
+      const targets = resolveTargets(msg, rest);
       if (!targets.length) return msg.reply(targetHint('禁言', msg));
 
       const expire = rfc3339(new Date(Date.now() + dur));
@@ -284,7 +255,7 @@ export default {
     }, async (msg, { args, bot }) => {
       if (!(await ensureManageable(msg))) return;
 
-      const targets = resolveTargets(msg, args, bot);
+      const targets = resolveTargets(msg, args);
       if (!targets.length) return msg.reply(targetHint('解禁', msg));
 
       const okList = [];
@@ -313,7 +284,7 @@ export default {
     }, async (msg, { args, bot }) => {
       if (!(await ensureManageable(msg))) return;
 
-      const targets = resolveTargets(msg, args, bot);
+      const targets = resolveTargets(msg, args);
       if (!targets.length) return msg.reply(targetHint('踢', msg));
       try {
         await api.removeMembers(
@@ -386,28 +357,6 @@ export default {
           lines.push('查不到角色多半是「群管内邀」没开：面板「配置 → 群管能力」。');
         }
       }
-      await msg.reply(lines.join('\n'));
-    });
-
-    /**
-     * 列出本群最近说话的人，带序号。
-     *
-     * 这是「没 @ 也能选人」的兜底：管理员先看一眼列表，再 `禁言 10m 2`。
-     * 只显示昵称和序号，**不显示 openid**。
-     */
-    ctx.command('最近发言', { desc: '本群最近说话的人（禁言/踢人时用来选目标）', admin: true }, async (msg, { bot }) => {
-      if (msg.kind !== 'group' || !msg.groupId) return msg.reply('这个命令只能在群里用。');
-      // 列表里保留自己并标注，否则「只有我一个人说过话」时用户看到的是空列表
-      const list = recentInGroup(bot, msg, { includeSelf: true }).slice(0, 10);
-      if (!list.length) {
-        return msg.reply('本群最近还没人说过话（我只记得我进群之后、并且说过话的人）。');
-      }
-      const lines = ['本群最近说话的人（新 → 旧）：'];
-      list.forEach((p, i) => {
-        const me = p.openid === msg.userId ? '（你）' : '';
-        lines.push(`${i + 1}. ${p.name || '该成员'}${me}`);
-      });
-      lines.push('', `禁言第 2 个：${P}禁言 10m 2`);
       await msg.reply(lines.join('\n'));
     });
   },
