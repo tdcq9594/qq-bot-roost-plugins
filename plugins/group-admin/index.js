@@ -171,15 +171,35 @@ export default {
       return out;
     }
 
+    /**
+     * 这个群能不能用 @ 指定目标。
+     *
+     * 取决于官方给不给 mentions：开了「接收所有消息」的群有
+     * （`GROUP_MESSAGE_CREATE`），只开「@机器人消息」的群没有
+     * （`GROUP_AT_MESSAGE_CREATE` 的 content 里 @ 被换成空格）。
+     *
+     * 拿不到就别在提示里教人 @——按做了却没用，用户只会更困惑。
+     */
+    function canUseMention(msg) {
+      if ((msg.mentions ?? []).length) return true;
+      // 正文里还留着 <@openid> 也算，mentionsFromContent 捞得到
+      return /<@!?[0-9A-Za-z]+>/.test(String(msg.raw?.content ?? ''));
+    }
+
     /** 「要操作谁」的统一提示——不出现 openid */
-    function targetHint(action) {
-      return (
-        `要${action}谁？\n` +
-        `· ${P}禁言 10m @某人 —— 直接 @ 对方\n` +
-        `· ${P}禁言 10m 楼上 —— 最近说话的那个人\n` +
-        `· ${P}禁言 10m 2 —— 最近第 2 个说话的人（先发 ${P}最近发言 看列表）\n` +
-        `· ${P}禁言 10m 张三 —— 按昵称匹配最近说过话的人`
+    function targetHint(action, msg) {
+      const lines = [`要${action}谁？`];
+      if (canUseMention(msg)) {
+        lines.push(`· ${P}禁言 10m @某人 —— 直接 @ 对方`);
+      } else {
+        lines.push('· 这个群没开「接收所有消息」，@ 谁都用不了，用下面几种');
+      }
+      lines.push(
+        `· ${P}禁言 10m 楼上 —— 最近说话的那个人`,
+        `· ${P}禁言 10m 2 —— 最近第 2 个说话的人（先发 ${P}最近发言 看列表）`,
+        `· ${P}禁言 10m 张三 —— 按昵称匹配最近说过话的人`,
       );
+      return lines.join('\n');
     }
 
     /** 把官方错误翻成人话 */
@@ -235,7 +255,7 @@ export default {
       }
 
       const targets = resolveTargets(msg, rest, bot);
-      if (!targets.length) return msg.reply(targetHint('禁言'));
+      if (!targets.length) return msg.reply(targetHint('禁言', msg));
 
       const expire = rfc3339(new Date(Date.now() + dur));
       const okList = [];
@@ -265,7 +285,7 @@ export default {
       if (!(await ensureManageable(msg))) return;
 
       const targets = resolveTargets(msg, args, bot);
-      if (!targets.length) return msg.reply(targetHint('解禁'));
+      if (!targets.length) return msg.reply(targetHint('解禁', msg));
 
       const okList = [];
       const badList = [];
@@ -294,7 +314,7 @@ export default {
       if (!(await ensureManageable(msg))) return;
 
       const targets = resolveTargets(msg, args, bot);
-      if (!targets.length) return msg.reply(targetHint('踢'));
+      if (!targets.length) return msg.reply(targetHint('踢', msg));
       try {
         await api.removeMembers(
           msg.groupId,

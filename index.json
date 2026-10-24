@@ -55,7 +55,7 @@
       "frameworkVersion": "",
       "runtime": "node",
       "path": "plugins/group-admin",
-      "sha256": "49edd49c8f5a34bfd2e6a5d2a89bb960878e14d922d3c50e7f4bb033ce137794",
+      "sha256": "b4268b9cd6142d65c3a78d0de4f3c4057f4d8709d0a4753ea274e3f0c7948686",
       "author": "tdcq9594",
       "commands": [
         "禁言",
