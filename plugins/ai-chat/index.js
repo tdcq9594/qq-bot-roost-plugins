@@ -100,9 +100,9 @@ function explainHttp(status, bodyText = '') {
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '1.2.0',
+  version: '1.2.1',
   description: '把大模型接进群聊和私聊，@机器人 就能对话，每会话独立上下文',
-  frameworkVersion: '>=0.6.0',
+  frameworkVersion: '>=0.6.10',
 
   /**
    * 面板上的「快速填入」。

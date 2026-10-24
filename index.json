@@ -7,17 +7,17 @@
     {
       "id": "ai-chat",
       "name": "AI 对话",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "description": "把大模型接进群聊和私聊，@机器人 就能对话，每会话独立上下文",
       "tags": [
         "AI",
         "对话",
         "LLM"
       ],
-      "frameworkVersion": ">=0.6.0",
+      "frameworkVersion": ">=0.6.10",
       "runtime": "node",
       "path": "plugins/ai-chat",
-      "sha256": "c27ced98638f7f717499fc7e9e703a065411df3f520ab6e1015a541dc0c57f24",
+      "sha256": "bedb0cb6210079bfd903fb54f9ead59629b6431cef5a7e964684039129cf13cb",
       "author": "tdcq9594",
       "commands": [
         "ai",
