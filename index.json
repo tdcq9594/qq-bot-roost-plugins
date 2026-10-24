@@ -5,6 +5,32 @@
   "updated": "2026-10-24",
   "plugins": [
     {
+      "id": "ai-chat",
+      "name": "AI 对话",
+      "version": "1.0.0",
+      "description": "把大模型接进群聊和私聊，@机器人 就能对话，每会话独立上下文",
+      "tags": [
+        "AI",
+        "对话",
+        "LLM"
+      ],
+      "frameworkVersion": ">=0.6.0",
+      "runtime": "node",
+      "path": "plugins/ai-chat",
+      "sha256": "4b558b40778a4bb9dbc88f0fc15f67890a25ac984c0ef1931a8d709d62851235",
+      "author": "tdcq9594",
+      "commands": [
+        "新会话",
+        "清空",
+        "重置",
+        "模型",
+        "停止",
+        "对话状态",
+        "AI帮助"
+      ],
+      "addedAt": "2026-10-24"
+    },
+    {
       "id": "demo-x",
       "name": "演示插件",
       "version": "0.1.0",
