@@ -11,6 +11,7 @@ export default {
   version: '1.1.0',
   description: '演示参数解析、玩家数据持久化与关键词被动触发',
 
+  /** @param {RoostCtx} ctx */
   setup(ctx) {
     // 定义本插件自己的权限等级。
     // 主程序会给每个插件分配一个号段（如 dice 是 10-19），
@@ -62,7 +63,80 @@ export default {
     ctx.menu('说明', [
       { text: '每个玩家的次数与最高值单独记录' },
       { text: '数据存在 data/plugins/dice.json' },
+      { text: '面板「骰子战绩」页可以看到排行榜' },
     ]);
+
+    /**
+     * 往面板注册一个自己的页面。
+     *
+     * 页面是一段 HTML，在 iframe 里渲染，样式和面板互不影响。
+     * 数据从面板自己的接口拿（/api/plugins/dice/panel 会返回 ctx.storage 的全部内容），
+     * 所以插件不用额外开 HTTP 服务。
+     */
+    ctx.registerPage({
+      key: 'rank',
+      label: '骰子战绩',
+      html: `<!doctype html>
+<meta charset="utf-8">
+<style>
+  /* 面板会注入 --text / --panel / --border 等变量，直接用，不用自己适配深浅色 */
+  body { padding: 18px; background: transparent; }
+  h1 { font-size: 15px; margin: 0 0 2px; }
+  .tip { font-size: 12px; opacity: .6; margin-bottom: 16px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid rgba(128,128,128,.22); }
+  th { font-size: 12px; font-weight: 600; opacity: .6; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .track { display: block; height: 6px; border-radius: 3px; background: rgba(128,128,128,.2); overflow: hidden; }
+  .track > i { display: block; height: 100%; background: currentColor; opacity: .55; }
+  .empty { text-align: center; opacity: .55; padding: 28px 0; }
+</style>
+<h1>掷骰子排行榜</h1>
+<div class="tip">数据来自插件存档，实时读取</div>
+<div id="box" class="empty">加载中…</div>
+<script>
+  // 面板会把访问密钥和当前机器人拼在 iframe 地址上，这里原样转发给接口，
+  // 否则多机器人时永远只能拿到第一个机器人的数据
+  const sp = new URLSearchParams(location.search);
+  const q = new URLSearchParams();
+  if (sp.get('key')) q.set('key', sp.get('key'));
+  if (sp.get('bot')) q.set('bot', sp.get('bot'));
+  const qs = q.toString() ? '?' + q.toString() : '';
+  fetch('/api/plugins/dice/panel' + qs)
+    .then((r) => r.json())
+    .then((d) => {
+      const rows = Object.entries(d.data || {})
+        .filter(([k]) => k.indexOf('user:') === 0)
+        .map(([k, v]) => ({ uid: k.slice(5), rolls: v.rolls || 0, best: v.best || 0 }))
+        .sort((a, b) => b.best - a.best)
+        .slice(0, 20);
+      const box = document.getElementById('box');
+      if (!rows.length) {
+        box.textContent = '还没有人掷过骰子，发 /roll 试试';
+        return;
+      }
+      const max = rows[0].best || 1;
+      box.className = '';
+      box.innerHTML =
+        '<table><thead><tr><th>玩家</th><th>最高</th><th>次数</th><th style="width:38%"></th></tr></thead><tbody>' +
+        rows
+          .map((r, i) => {
+            const w = Math.max(4, Math.round((r.best / max) * 100));
+            return (
+              '<tr><td>' + (i + 1) + '. ' + r.uid.slice(0, 10) + '…</td>' +
+              '<td class="num">' + r.best + '</td>' +
+              '<td class="num">' + r.rolls + '</td>' +
+              '<td><span class="track"><i style="width:' + w + '%"></i></span></td></tr>'
+            );
+          })
+          .join('') +
+        '</tbody></table>';
+    })
+    .catch((e) => {
+      document.getElementById('box').textContent = '读取失败：' + e.message;
+    });
+</script>`,
+    });
 
     // 需要插件级权限的命令：全局管理员也能用（等级更小），普通玩家不行
     ctx.command('reset', { desc: '清空掷骰子排行榜（插件管理员）' }, async (msg) => {

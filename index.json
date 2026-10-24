@@ -5,6 +5,25 @@
   "updated": "2026-10-24",
   "plugins": [
     {
+      "id": "demo-x",
+      "name": "演示插件",
+      "version": "0.1.0",
+      "description": "入门示例：一个命令 + 一份配置 + 一份菜单，照着改就能写自己的插件",
+      "tags": [
+        "示例",
+        "入门"
+      ],
+      "frameworkVersion": "",
+      "runtime": "node",
+      "path": "plugins/demo-x",
+      "sha256": "fc1071eb3fb0d45fc5ad4625d8760630370779d7f6254ad4f7837b8fbb8947fe",
+      "author": "tdcq9594",
+      "commands": [
+        "hello"
+      ],
+      "addedAt": "2026-10-24"
+    },
+    {
       "id": "dice",
       "name": "掷骰子",
       "version": "1.1.0",
@@ -22,7 +41,7 @@
         "reset"
       ],
       "addedAt": "2026-10-23",
-      "sha256": "1b019018aa51772b832d54dc25124bcb1427ecc23ecbef7a34c2a2cf92da7b83"
+      "sha256": "7a67e72daa699e22983bd397a5099f9bf77d301ccb3fd8264e55000b7e99515d"
     },
     {
       "id": "echo",
@@ -87,6 +106,25 @@
       "sha256": "92c3b313ea672aa06595dac1c7f92bcfffb2dd33bc68b8abd7540e044c9a4dfc"
     },
     {
+      "id": "imgbed",
+      "name": "图床",
+      "version": "0.1.0",
+      "description": "把图片转存到自己的图床，支持 base64 / multipart 两种上传方式",
+      "tags": [
+        "工具",
+        "图床"
+      ],
+      "frameworkVersion": "",
+      "runtime": "node",
+      "path": "plugins/imgbed",
+      "sha256": "955e76ee37a3c78534c990147cee99bac95a245c1dcd50494a8a52d291cfcdc2",
+      "author": "tdcq9594",
+      "commands": [
+        "imgbed"
+      ],
+      "addedAt": "2026-10-24"
+    },
+    {
       "id": "kun",
       "name": "养鲲",
       "version": "3.3.0",
@@ -141,6 +179,25 @@
       "addedAt": "2026-10-23",
       "credits": "玩法设计来自 Agam《简单的养鲲游戏》(CQP, 2020)",
       "sha256": "87cbe8d8e00a95c89177efbba8c759eb0c20de59dcc0df0a28e581ed000a1aa1"
+    },
+    {
+      "id": "render",
+      "name": "图片渲染",
+      "version": "0.1.0",
+      "description": "把文字画成图片（需要可选依赖 @napi-rs/canvas）",
+      "tags": [
+        "工具",
+        "图片"
+      ],
+      "frameworkVersion": "",
+      "runtime": "node",
+      "path": "plugins/render",
+      "sha256": "119f21a5146d08d2bcfc8bd2dda481aa35d2bb2400fb2b186630ce01ad48ce55",
+      "author": "tdcq9594",
+      "commands": [
+        "render"
+      ],
+      "addedAt": "2026-10-24"
     }
   ]
 }
