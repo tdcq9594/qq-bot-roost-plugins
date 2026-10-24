@@ -2,7 +2,7 @@
   "schema": 1,
   "repo": "tdcq9594/qq-bot-roost-plugins",
   "branch": "main",
-  "updated": "2026-10-23",
+  "updated": "2026-10-24",
   "plugins": [
     {
       "id": "dice",
@@ -21,7 +21,8 @@
         "rank",
         "reset"
       ],
-      "addedAt": "2026-10-23"
+      "addedAt": "2026-10-23",
+      "sha256": "1b019018aa51772b832d54dc25124bcb1427ecc23ecbef7a34c2a2cf92da7b83"
     },
     {
       "id": "echo",
@@ -38,7 +39,33 @@
       "commands": [
         "echo"
       ],
-      "addedAt": "2026-10-23"
+      "addedAt": "2026-10-23",
+      "sha256": "815d28c030aca24a36ef0386c63766560249268fa41fe9385794bf424307e0c0"
+    },
+    {
+      "id": "group-admin",
+      "name": "群管",
+      "version": "1.1.0",
+      "description": "禁言、解禁、踢人、群信息（需要机器人是群管理员）",
+      "tags": [
+        "群管",
+        "管理",
+        "安全"
+      ],
+      "frameworkVersion": "",
+      "runtime": "node",
+      "path": "plugins/group-admin",
+      "sha256": "49edd49c8f5a34bfd2e6a5d2a89bb960878e14d922d3c50e7f4bb033ce137794",
+      "author": "tdcq9594",
+      "commands": [
+        "禁言",
+        "解禁",
+        "踢人",
+        "群信息",
+        "群管状态",
+        "最近发言"
+      ],
+      "addedAt": "2026-10-24"
     },
     {
       "id": "hello-py",
@@ -57,7 +84,8 @@
         "pyinfo",
         "pyadmin"
       ],
-      "addedAt": "2026-10-23"
+      "addedAt": "2026-10-23",
+      "sha256": "92c3b313ea672aa06595dac1c7f92bcfffb2dd33bc68b8abd7540e044c9a4dfc"
     },
     {
       "id": "kun",
@@ -112,7 +140,8 @@
         "报名"
       ],
       "addedAt": "2026-10-23",
-      "credits": "玩法设计来自 Agam《简单的养鲲游戏》(CQP, 2020)"
+      "credits": "玩法设计来自 Agam《简单的养鲲游戏》(CQP, 2020)",
+      "sha256": "87cbe8d8e00a95c89177efbba8c759eb0c20de59dcc0df0a28e581ed000a1aa1"
     }
   ]
 }
