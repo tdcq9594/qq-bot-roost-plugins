@@ -7,7 +7,7 @@
     {
       "id": "ai-chat",
       "name": "AI 对话",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "description": "把大模型接进群聊和私聊，@机器人 就能对话，每会话独立上下文",
       "tags": [
         "AI",
@@ -17,7 +17,7 @@
       "frameworkVersion": ">=0.6.0",
       "runtime": "node",
       "path": "plugins/ai-chat",
-      "sha256": "e2f08dadc2ac959ff83a34586592ba11f47e99b474f53e60d8cd89cc3e6463fd",
+      "sha256": "c27ced98638f7f717499fc7e9e703a065411df3f520ab6e1015a541dc0c57f24",
       "author": "tdcq9594",
       "commands": [
         "ai",
@@ -53,7 +53,7 @@
     {
       "id": "dice",
       "name": "掷骰子",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "description": "演示参数解析、玩家数据持久化与关键词被动触发",
       "author": "tdcq9594",
       "path": "plugins/dice",
@@ -68,7 +68,7 @@
         "reset"
       ],
       "addedAt": "2026-10-23",
-      "sha256": "7a67e72daa699e22983bd397a5099f9bf77d301ccb3fd8264e55000b7e99515d"
+      "sha256": "5f9bbbeab2f40e0920d6cd93be68dc757cb4886d02a881b9ab0bbcf19c629e2d"
     },
     {
       "id": "echo",

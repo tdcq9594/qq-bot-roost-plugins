@@ -1,0 +1,115 @@
+name: CI
+
+# 插件仓库的检查。主仓库那套（语法/单测/e2e）在这里跑不了——
+# 插件依赖主仓库的框架，单独 checkout 没有 src/。
+#
+# 所以这里只管插件仓库自己能验证的事：
+#   1. 语法别写错
+#   2. 改了内容要升版本号（市场只比版本号，不升版等于没发）
+#   3. 索引和插件目录对得上（sha256 一致）
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: 检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 版本检查要和上一个 commit 比，得拿到历史
+          fetch-depth: 2
+
+      - name: 装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: 语法检查
+        shell: bash
+        run: |
+          fail=0
+          for f in $(find plugins scripts -type f \( -name '*.js' -o -name '*.mjs' \) 2>/dev/null); do
+            node --check "$f" || { echo "语法错误: $f"; fail=1; }
+          done
+          exit $fail
+
+      - name: 改了内容要升版本号
+        shell: bash
+        run: |
+          # push 到 main 时比 HEAD~1；PR 时比目标分支的合并基点
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --depth=1 origin "${{ github.base_ref }}"
+            node scripts/check-versions.mjs --base "origin/${{ github.base_ref }}"
+          else
+            node scripts/check-versions.mjs --base HEAD~1
+          fi
+
+      - name: 索引与插件目录一致
+        shell: bash
+        run: |
+          # 索引里的 sha256 必须和插件目录的真实内容对得上，
+          # 否则用户装的时候会校验失败（那是我们自己的错，不该让用户撞上）
+          fail=0
+          for d in plugins/*/; do
+            id=$(basename "$d")
+            [ -f "$d/index.js" ] || [ -f "$d/plugin.json" ] || continue
+            node -e "
+              const fs=require('fs'),path=require('path'),crypto=require('crypto');
+              // 和主仓库 src/hashdir.js 同一套算法：路径\0大小\0内容\0，CRLF 归一成 LF
+              const SKIP_DIRS=new Set(['node_modules','.venv','venv','__pycache__','.git']);
+              const SKIP_FILES=new Set(['.deps.json','.DS_Store','Thumbs.db']);
+              const norm=(b)=>{ if(b.includes(0))return b; if(!b.includes(0x0d))return b;
+                return Buffer.from(b.toString('latin1').replace(/\r\n/g,'\n'),'latin1'); };
+              const files=[];
+              (function walk(dir){
+                for(const e of fs.readdirSync(dir,{withFileTypes:true})){
+                  if(e.isDirectory()){ if(!SKIP_DIRS.has(e.name)) walk(path.join(dir,e.name)); }
+                  else if(!SKIP_FILES.has(e.name)) files.push(path.join(dir,e.name));
+                }
+              })('$d');
+              files.sort();
+              const h=crypto.createHash('sha256');
+              for(const f of files){
+                const rel=path.relative('$d',f).split(path.sep).join('/');
+                const buf=norm(fs.readFileSync(f));
+                h.update(rel); h.update('\0');
+                h.update(String(buf.length)); h.update('\0');
+                h.update(buf); h.update('\0');
+              }
+              const got=h.digest('hex');
+              const idx=JSON.parse(fs.readFileSync('index.json','utf8'));
+              const entry=idx.plugins.find(p=>p.id==='$id');
+              if(!entry){ console.error('✗ $id 不在 index.json 里'); process.exit(1); }
+              if(entry.sha256!==got){
+                console.error('✗ $id sha256 不匹配');
+                console.error('   索引 '+entry.sha256);
+                console.error('   实际 '+got);
+                console.error('   跑 node scripts/../bot/scripts/build-market-index.mjs 重建索引');
+                process.exit(1);
+              }
+              console.log('✓ $id');
+            " || fail=1
+          done
+          exit $fail
+
+  # 换行符单独查：Windows 本地检出是 CRLF，一提交进去 sha256 就对不上了
+  eol:
+    name: 换行符检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 插件文件不应含 CRLF
+        shell: bash
+        run: |
+          bad=$(git grep -Il $'\r' -- 'plugins/**' 'scripts/**' '*.json' '*.md' || true)
+          if [ -n "$bad" ]; then
+            echo "以下文件含 CRLF，请转成 LF："
+            echo "$bad"
+            exit 1
+          fi
+          echo "OK：没有 CRLF"

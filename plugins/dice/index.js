@@ -8,7 +8,7 @@
 export default {
   id: 'dice',
   name: '掷骰子',
-  version: '1.1.0',
+  version: '1.2.0',
   description: '演示参数解析、玩家数据持久化与关键词被动触发',
 
   /** @param {RoostCtx} ctx */
