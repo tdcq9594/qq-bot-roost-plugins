@@ -198,15 +198,25 @@ async function build() {
   }
   const prevById = new Map((prev.plugins ?? []).map((p) => [p.id, p]));
 
-  const merged = found.map((p) => {
-    const old = prevById.get(p.id);
-    if (!old) return p; // 新插件：全量写入
-    const out = { ...old };
-    for (const k of STRUCT_FIELDS) {
-      if (p[k] !== undefined && p[k] !== '') out[k] = p[k];
-    }
-    return out;
-  });
+  const merged = found
+    .map((p) => {
+      const old = prevById.get(p.id);
+      if (!old) return p; // 新插件：全量写入
+      const out = { ...old };
+      for (const k of STRUCT_FIELDS) {
+        if (p[k] !== undefined && p[k] !== '') out[k] = p[k];
+      }
+      return out;
+    })
+    .map((p) => {
+      /**
+       * `frameworkVersion` 是可选的（插件可以不声明最低框架版本）。
+       * 空值一律删掉——否则老插件留着 `""`、新插件干脆没这个键，
+       * 同一份索引里出现两种「没有」，读起来容易误以为漏了字段。
+       */
+      if (!p.frameworkVersion) delete p.frameworkVersion;
+      return p;
+    });
 
   return {
     out: {

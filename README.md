@@ -93,7 +93,7 @@ plugins/<插件id>/
 | `description` | ✅ | 一句话，别超过 60 字 |
 | `author` | ✅ | 你的 GitHub 用户名 |
 | `path` | ✅ | 相对仓库根目录的路径 |
-| `runtime` | ✅ | `node`（内建）/ `python` / `exec` |
+| `runtime` | ✅ | 外部插件的启动方式：`python` / `node` / `go` / `exec`。内建插件（`index.js`）没有 `plugin.json`，也就没有这个字段 |
 | `tags` | | 分类标签 |
 | `commands` | | 主要命令名，方便用户检索 |
 | `addedAt` | | 收录日期 |
