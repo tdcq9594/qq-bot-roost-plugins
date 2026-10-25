@@ -78,6 +78,11 @@ jobs:
         with:
           repository: tdcq9594/qq-bot-roost
           path: .framework
+          # 固定到已发布的框架 tag，而不是默认分支 HEAD。
+          # 否则会出现：框架 master 有插件依赖的新能力但还没发布 → 插件 CI 假绿，
+          # 用户装到旧版运行时坏；或 master 瞬时坏掉 → 插件 CI 假红。
+          # 发框架新版时改这里，或在仓库 Variables 里设 FRAMEWORK_REF 覆盖。
+          ref: ${{ vars.FRAMEWORK_REF || 'v0.6.15' }}
 
       - name: 跑插件测试
         shell: bash
