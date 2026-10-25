@@ -51,51 +51,11 @@ jobs:
 
       - name: 索引与插件目录一致
         shell: bash
-        run: |
-          # 索引里的 sha256 必须和插件目录的真实内容对得上，
-          # 否则用户装的时候会校验失败（那是我们自己的错，不该让用户撞上）
-          fail=0
-          for d in plugins/*/; do
-            id=$(basename "$d")
-            [ -f "$d/index.js" ] || [ -f "$d/plugin.json" ] || continue
-            node -e "
-              const fs=require('fs'),path=require('path'),crypto=require('crypto');
-              // 和主仓库 src/hashdir.js 同一套算法：路径\0大小\0内容\0，CRLF 归一成 LF
-              const SKIP_DIRS=new Set(['node_modules','.venv','venv','__pycache__','.git']);
-              const SKIP_FILES=new Set(['.deps.json','.DS_Store','Thumbs.db']);
-              const norm=(b)=>{ if(b.includes(0))return b; if(!b.includes(0x0d))return b;
-                return Buffer.from(b.toString('latin1').replace(/\r\n/g,'\n'),'latin1'); };
-              const files=[];
-              (function walk(dir){
-                for(const e of fs.readdirSync(dir,{withFileTypes:true})){
-                  if(e.isDirectory()){ if(!SKIP_DIRS.has(e.name)) walk(path.join(dir,e.name)); }
-                  else if(!SKIP_FILES.has(e.name)) files.push(path.join(dir,e.name));
-                }
-              })('$d');
-              files.sort();
-              const h=crypto.createHash('sha256');
-              for(const f of files){
-                const rel=path.relative('$d',f).split(path.sep).join('/');
-                const buf=norm(fs.readFileSync(f));
-                h.update(rel); h.update('\0');
-                h.update(String(buf.length)); h.update('\0');
-                h.update(buf); h.update('\0');
-              }
-              const got=h.digest('hex');
-              const idx=JSON.parse(fs.readFileSync('index.json','utf8'));
-              const entry=idx.plugins.find(p=>p.id==='$id');
-              if(!entry){ console.error('✗ $id 不在 index.json 里'); process.exit(1); }
-              if(entry.sha256!==got){
-                console.error('✗ $id sha256 不匹配');
-                console.error('   索引 '+entry.sha256);
-                console.error('   实际 '+got);
-                console.error('   跑 node scripts/../bot/scripts/build-market-index.mjs 重建索引');
-                process.exit(1);
-              }
-              console.log('✓ $id');
-            " || fail=1
-          done
-          exit $fail
+        # 索引里的 sha256 必须和插件目录的真实内容对得上，
+        # 否则用户装的时候会校验失败（那是我们自己的错，不该让用户撞上）。
+        # 哈希算法在 scripts/build-index.mjs 里，和框架的 src/hashdir.js 同一套；
+        # 以前这段是内联在 yml 里的第二份实现，两份漏改一边就会互相打架。
+        run: node scripts/build-index.mjs --check
 
   # 插件自己的断言测试。
   #

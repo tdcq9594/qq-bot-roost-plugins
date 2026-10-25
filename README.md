@@ -11,10 +11,33 @@
 
 1. Fork 本仓库
 2. 把你的插件放进 `plugins/<插件id>/`
-3. 在 `index.json` 的 `plugins` 数组里加一条
+3. 跑 `node scripts/build-index.mjs` 更新 `index.json`
 4. 提 PR
 
 合并后，所有用户刷新面板的插件市场就能看到并安装。
+
+---
+
+## 改完插件要更新索引
+
+```bash
+node scripts/build-index.mjs          # 重算 index.json
+node scripts/build-index.mjs --check  # 只校验（CI 跑的就是这个）
+```
+
+索引里的 `sha256` 是插件目录的内容指纹，用户安装时会按同一算法重算，
+对不上就拒绝安装。**手改不了**，只能让脚本算。
+
+脚本会：
+
+- 扫一遍 `plugins/*/`，从 `index.js`（内建）或 `plugin.json`（外部）读 `id` / `version` 等字段
+- 重算每个插件的 `sha256`
+- 按 `id` 合并进已有的 `index.json`：结构字段（版本、路径、哈希）以磁盘为准，
+  展示字段（`author` / `commands` / `addedAt` / `tags` / 描述）保留你手写的内容
+- 新插件自动补一条，删掉的插件自动移除
+
+`version` 要写成字面量（`version: '1.2.3'`）。写成常量的话，
+`check-versions.mjs` 和本脚本都读不到——CI 会直接判「读不到 version」。
 
 ---
 
