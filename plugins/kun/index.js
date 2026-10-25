@@ -176,10 +176,19 @@ function freshGroup() {
   };
 }
 
-export default {
+/**
+ * 插件元信息先存成常量，最后再 `export default`。
+ *
+ * 为什么不直接 `export default { ... }`：启动日志想用同一个版本号，
+ * 但工具链（插件仓库的 scripts/check-versions.mjs、市场安装时的
+ * readVersionLoose）是用正则读 `version: '...'` **字面量**的。
+ * 写成 `version: VERSION` 它们读不到，CI 会直接判「读不到 version」。
+ * 这样两边都满足：字面量还在，日志也不用再抄一份。
+ */
+const PLUGIN = {
   id: 'kun',
   name: '养鲲',
-  version: '4.1.0',
+  version: '4.1.1',
   description: '开局一条鲲，进化全靠吞（Agam《简单的养鲲游戏》1:1 还原）',
   frameworkVersion: '>=0.6.0',
 
@@ -3163,7 +3172,11 @@ export default {
       if (msg.kind !== 'group') return false;
 
       const fn = HANDLERS[v];
-      if (!fn) return false;   // 认不出的指令静默忽略（原版如此）
+      // 认不出的指令静默忽略（原版如此），但留一行 debug 方便排查「为什么没反应」
+      if (!fn) {
+        log.debug(`不认识的指令 ${JSON.stringify(v)}，已忽略`);
+        return false;
+      }
 
       const gid = msg.groupId;
       const uid = msg.userId;
@@ -3220,6 +3233,8 @@ export default {
       { text: '/kun 排行', desc: '本群前十' },
     ]);
 
-    log.info('[kun] 养鲲 v4.0（1:1 还原版）已加载：@机器人 /kun 菜单，或直接发 *菜单');
+    log.info(`[kun] 养鲲 v${PLUGIN.version}（1:1 还原版）已加载：@机器人 /kun 菜单，或直接发 *菜单`);
   },
 };
+
+export default PLUGIN;
