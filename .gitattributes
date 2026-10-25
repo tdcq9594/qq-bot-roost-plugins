@@ -1,0 +1,14 @@
+# 一律按 LF 存。插件包要算 sha256（见 index.json），
+# 换行符一变哈希就变，Windows 检出后装上去校验必然失败。
+* text=auto eol=lf
+
+# 二进制别碰
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.zip binary
+*.woff binary
+*.woff2 binary

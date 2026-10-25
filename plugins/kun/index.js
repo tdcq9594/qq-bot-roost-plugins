@@ -179,7 +179,7 @@ function freshGroup() {
 export default {
   id: 'kun',
   name: '养鲲',
-  version: '4.0.0',
+  version: '4.1.0',
   description: '开局一条鲲，进化全靠吞（Agam《简单的养鲲游戏》1:1 还原）',
   frameworkVersion: '>=0.6.0',
 
@@ -276,18 +276,29 @@ export default {
      */
     function mdEmphasis(text) {
       return String(text ?? '')
-        .split(/(<@[^>]+>)/g)
+        .split(/(<@[^>]+>|<qqbot-cmd-[^>]*\/>)/g)
         .map((seg) => {
           if (/^<@[^>]+>$/.test(seg)) {
             // 官方 markdown 里的 @ 标签
             return `<qqbot-at-user id="${seg.slice(2, -1)}" />`;
           }
+          // 指令标签原样透传：属性里 urlencode 过，加粗数字会把它弄坏
+          if (/^<qqbot-cmd-/.test(seg)) return seg;
           let s = mdSafe(seg);
           s = boldTitles(s);
           s = s.replace(/(\d+)/g, '**$1**');
           return s;
         })
         .join('');
+    }
+
+    /**
+     * 可点击指令标签：显示原文，点一下把 /kun 指令填进输入框。
+     * show 用原文（`*签到`），text 用新写法（`/kun 签到`）——
+     * 菜单看起来和原版一模一样，但每条都能点。
+     */
+    function cmdTag(show, text) {
+      return `<qqbot-cmd-input text="${encodeURIComponent(text)}" show="${encodeURIComponent(show)}" />`;
     }
 
     /** 发一条 markdown 消息；发不出去（未开放等）自动退回纯文本，内容不丢 */
@@ -346,17 +357,29 @@ export default {
       return (h % 9000) + 1000;
     }
 
-    /** 运势（原版 运势()）：按 ID 基数 + 月日算，0-100 */
+    /**
+     * 运势：0~100，同一个人同一天固定，换天就变。
+     *
+     * 原版拿 QQ 号前四位套一串整除取余（`a*b/c/99` 再取小数部分前两位），
+     * 在 openid 上会退化——前四位不是数字、小数部分又常常不足 1%，
+     * 结果几乎恒为 0，砸蛋永远出不了货。
+     * 这里改成「用户 + 日期」的稳定哈希取模，分布均匀且每天变。
+     */
+    function baseFortune(uid) {
+      const now = new Date();
+      const day = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+      const s = `${uid}:${day}`;
+      let h = 2166136261;
+      for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 16777619) >>> 0;
+      }
+      return h % 101;   // 0~100
+    }
+
+    /** 运势（原版 运势()）：基础运势 + 好运加成，夹到 0~100 */
     async function fortune(gid, uid) {
-      const a = idSeed(uid);
-      let b = new Date().getMonth() + 1;
-      let c = new Date().getDate();
-      if (b % 2 === 0) b += 13;
-      if (c % 2 === 0) c += 31;
-      let d = (a * b) / c / 99;
-      d = (d - trunc(d)) * 100;
-      d = toNum(left(toText(d), 2));
-      d += await luckOf(gid, uid);
+      let d = baseFortune(uid) + (await luckOf(gid, uid));
       if (d < 0) d = 0;
       if (d > 100) d = 100;
       return d;
@@ -364,49 +387,61 @@ export default {
 
     /* ================= 菜单 / 帮助 ================= */
 
-    const MENU_TEXT =
-      '====命令菜单====' + '\n' +
-      '*鲲开/关【@机器人】' + '\n' +
-      '*小游戏开/关【@机器人】' + '\n' +
-      '*数据清除【@机器人】（慎用）' + '\n' +
-      '*查看群主指令' + '\n' +
-      '——————————' + '\n' +
-      '*出售【起拍价】' + '\n' +
-      '*出价【竞拍价】' + '\n' +
-      '*成交' + '\n' +
-      '*下架 ' + '\n' +
-      '*强制下架' + '\n' +
-      '*拍卖行 ' + '\n' +
-      '——————————' + '\n' +
-      '*签到' + '\n' +
-      '*查询' + '\n' +
-      '*排行' + '\n' +
-      '——————————' + '\n' +
-      '*孵化' + '\n' +
-      '*喂食【数量】' + '\n' +
-      '*磨炼【数值】（私）' + '\n' +
-      '*幻化（私）' + '\n' +
-      '*渡劫' + '\n' +
-      '*复活' + '\n' +
-      '*放生' + '\n' +
-      '——————————' + '\n' +
-      '*吞噬【@QQ】' + '\n' +
-      '*攻击【@QQ】' + '\n' +
-      '*强袭【@QQ】' + '\n' +
-      '*扔蛋【@QQ】' + '\n' +
-      '——————————' + '\n' +
-      '*买蛋【数量】' + '\n' +
-      '*砸蛋【数量】（私）' + '\n' +
-      '*喝鸡汤【数量】' + '\n' +
-      '*今日运势' + '\n' +
-      '*当前游戏' + '\n' +
-      '*BOSS菜单' + '\n' +
-      '*查阅属性' + '\n' +
-      '——————————' + '\n' +
-      '带有（私）标记的指令可以私聊机器人使用';
+    /**
+     * 菜单条目：字符串 = 原样一行；数组 = [显示文本, 点击后插入的指令]。
+     * 显示文本照抄原版（连 `*下架 ` 后面的空格都留着），
+     * 点击插入的是新写法 `/kun <指令>`。
+     */
+    const MENU_ITEMS = [
+      '====命令菜单====',
+      ['*鲲开/关【@机器人】', '/kun 鲲开'],
+      ['*小游戏开/关【@机器人】', '/kun 小游戏开'],
+      ['*数据清除【@机器人】（慎用）', '/kun 数据清除'],
+      ['*查看群主指令', '/kun 查看群主指令'],
+      '——————————',
+      ['*出售【起拍价】', '/kun 出售 '],
+      ['*出价【竞拍价】', '/kun 出价 '],
+      ['*成交', '/kun 成交'],
+      ['*下架 ', '/kun 下架'],
+      ['*强制下架', '/kun 强制下架'],
+      ['*拍卖行 ', '/kun 拍卖行'],
+      '——————————',
+      ['*签到', '/kun 签到'],
+      ['*查询', '/kun 查询'],
+      ['*排行', '/kun 排行'],
+      '——————————',
+      ['*孵化', '/kun 孵化'],
+      ['*喂食【数量】', '/kun 喂食 '],
+      ['*磨炼【数值】（私）', '/kun 磨炼 '],
+      ['*幻化（私）', '/kun 幻化'],
+      ['*渡劫', '/kun 渡劫'],
+      ['*复活', '/kun 复活'],
+      ['*放生', '/kun 放生'],
+      '——————————',
+      ['*吞噬【@QQ】', '/kun 吞噬 '],
+      ['*攻击【@QQ】', '/kun 攻击 '],
+      ['*强袭【@QQ】', '/kun 强袭 '],
+      ['*扔蛋【@QQ】', '/kun 扔蛋 '],
+      '——————————',
+      ['*买蛋【数量】', '/kun 买蛋 '],
+      ['*砸蛋【数量】（私）', '/kun 砸蛋 '],
+      ['*喝鸡汤【数量】', '/kun 喝鸡汤 '],
+      ['*今日运势', '/kun 今日运势'],
+      ['*当前游戏', '/kun 当前游戏'],
+      ['*BOSS菜单', '/kun BOSS菜单'],
+      ['*查阅属性', '/kun 查阅属性'],
+      '——————————',
+      '带有（私）标记的指令可以私聊机器人使用',
+    ];
+
+    /** 纯文本版菜单（测试断言和降级用） */
+    const MENU_TEXT = MENU_ITEMS.map((it) => (Array.isArray(it) ? it[0] : it)).join('\n');
+
+    /** markdown 版菜单：每条指令都能点 */
+    const MENU_MD = MENU_ITEMS.map((it) => (Array.isArray(it) ? cmdTag(it[0], it[1]) : it)).join('\n');
 
     function showMenu(msg, gid) {
-      say(msg, MENU_TEXT);
+      say(msg, MENU_MD);
     }
 
     const OWNER_HELP =
@@ -2163,11 +2198,17 @@ export default {
     }
 
     async function bossMenu(msg) {
-      say(
-        msg,
-        '==BOSS菜单==' + '\n' + '*刷新BOSS' + '\n' + '---------' + '\n' + '*查询BOSS' + '\n' +
-        '*强袭BOSS' + '\n' + '*攻击BOSS' + '\n' + '*吞噬BOSS' + '\n' + '*阵亡名单',
-      );
+      const lines = [
+        '==BOSS菜单==',
+        cmdTag('*刷新BOSS', '/kun 刷新BOSS'),
+        '---------',
+        cmdTag('*查询BOSS', '/kun 查询BOSS'),
+        cmdTag('*强袭BOSS', '/kun 强袭BOSS'),
+        cmdTag('*攻击BOSS', '/kun 攻击BOSS'),
+        cmdTag('*吞噬BOSS', '/kun 吞噬BOSS'),
+        cmdTag('*阵亡名单', '/kun 阵亡名单'),
+      ];
+      say(msg, lines.join('\n'));
     }
 
     async function queryBoss(msg, gid) {

@@ -97,6 +97,41 @@ jobs:
           done
           exit $fail
 
+  # 插件自己的断言测试。
+  #
+  # 夹具（src/plugin/testkit.js）在框架仓库里，所以先把框架 checkout 到
+  # .framework/，再用 ROOST_FRAMEWORK 指过去。插件仓库不复制夹具，
+  # 免得两边版本漂移。
+  test:
+    name: 插件测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: 取框架（测试夹具在那边）
+        uses: actions/checkout@v4
+        with:
+          repository: tdcq9594/qq-bot-roost
+          path: .framework
+
+      - name: 跑插件测试
+        shell: bash
+        run: |
+          fail=0
+          for t in test/*.mjs; do
+            case "$(basename "$t")" in
+              kun-play.mjs) continue ;;   # 通关脚本只打印过程，不断言，不参与 CI
+            esac
+            echo "--- $t"
+            ROOST_FRAMEWORK="$PWD/.framework" node "$t" || fail=1
+          done
+          exit $fail
+
   # 换行符单独查：Windows 本地检出是 CRLF，一提交进去 sha256 就对不上了
   eol:
     name: 换行符检查
