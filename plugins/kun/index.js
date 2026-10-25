@@ -259,11 +259,14 @@ export default {
         .replace(/-{2,}/g, (m) => m.split('').join('\u200B'));
     }
 
-    /** =标题= 行整行加粗（====命令菜单==== 这种） */
+    /**
+     * =标题= 行整行加粗（====命令菜单==== 这种）。
+     * 要求等号中间有实际内容——`=============` 是分隔线，加粗没意义还难看。
+     */
     function boldTitles(s) {
       return String(s)
         .split('\n')
-        .map((line) => (/^=+.*=+$/.test(line) ? `**${line}**` : line))
+        .map((line) => (/^=+[^=]+=+$/.test(line) ? `**${line}**` : line))
         .join('\n');
     }
 
