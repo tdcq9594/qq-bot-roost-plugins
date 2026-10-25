@@ -188,7 +188,7 @@ function freshGroup() {
 const PLUGIN = {
   id: 'kun',
   name: '养鲲',
-  version: '4.1.1',
+  version: '4.1.2',
   description: '开局一条鲲，进化全靠吞（Agam《简单的养鲲游戏》1:1 还原）',
   frameworkVersion: '>=0.6.0',
 
@@ -403,9 +403,18 @@ const PLUGIN = {
      */
     const MENU_ITEMS = [
       '====命令菜单====',
-      ['*鲲开/关【@机器人】', '/kun 鲲开'],
-      ['*小游戏开/关【@机器人】', '/kun 小游戏开'],
-      ['*数据清除【@机器人】（慎用）', '/kun 数据清除'],
+      /**
+       * 开关类的两条拆成两行。
+       *
+       * 原版是一行「*鲲开/关【@机器人】」，但菜单现在每条都是**可点的**
+       * （`cmdTag` 插入一条具体指令），一行里塞两个指令就只能插进去一个，
+       * 点「鲲开/关」得到「鲲开」，标签和实际不符。拆开各自准确。
+       */
+      ['*鲲开【@机器人】', '/kun 鲲开'],
+      ['*鲲关【@机器人】', '/kun 鲲关'],
+      ['*小游戏开【@机器人】', '/kun 小游戏开'],
+      ['*小游戏关【@机器人】', '/kun 小游戏关'],
+      ['*数据清除【@机器人】（仅群主·慎用）', '/kun 数据清除'],
       ['*查看群主指令', '/kun 查看群主指令'],
       '——————————',
       ['*出售【起拍价】', '/kun 出售 '],
@@ -427,10 +436,11 @@ const PLUGIN = {
       ['*复活', '/kun 复活'],
       ['*放生', '/kun 放生'],
       '——————————',
-      ['*吞噬【@QQ】', '/kun 吞噬 '],
-      ['*攻击【@QQ】', '/kun 攻击 '],
-      ['*强袭【@QQ】', '/kun 强袭 '],
-      ['*扔蛋【@QQ】', '/kun 扔蛋 '],
+      // 目标是 @ 成员（官方机器人拿不到 QQ 号，openid 用户也打不出来）
+      ['*吞噬【@成员】', '/kun 吞噬 '],
+      ['*攻击【@成员】', '/kun 攻击 '],
+      ['*强袭【@成员】', '/kun 强袭 '],
+      ['*扔蛋【@成员】', '/kun 扔蛋 '],
       '——————————',
       ['*买蛋【数量】', '/kun 买蛋 '],
       ['*砸蛋【数量】（私）', '/kun 砸蛋 '],
@@ -454,22 +464,25 @@ const PLUGIN = {
     }
 
     const OWNER_HELP =
-      '*OP/【QQ号】/【项目】/【数值】' + '\n' +
+      '*OP @成员 项目 数值' + '\n' +
       '===================' + '\n' +
-      '1、在【QQ号】处填入群成员QQ号。' + '\n' +
+      '1、先 @ 要改的那个成员。' + '\n' +
       '2、在【项目】处填入要修改的项目。有以下项目可选：' +
       '【鲲】【体重】【属性】【节操】【蛋】【神器】【幻化丹】【鸡汤】【复活药】【运势】' + '\n' +
-      '3、在数值处填入要修改的属性或数值（正为加负为减）' + '\n' +
+      '3、在数值处填要改成什么／加减多少（正为加负为减）' + '\n' +
       '===================' + '\n' +
       '例：' + '\n' +
-      '*OP/12345/属性/妒' + '\n' +
-      '即将成员Q号12345的的鲲的属性改为[妒]' + '\n' +
-      '*OP/13579/蛋/-10' + '\n' +
-      '即使群成员Q号13579的蛋的数量减10' + '\n' +
-      '*OP/24680/节操/+1' + '\n' +
-      '即使群成员Q号24680的节操的数量加1' + '\n' +
+      '*OP @张三 属性 妒' + '\n' +
+      '把张三的鲲的属性改为[妒]' + '\n' +
+      '*OP @张三 蛋 -10' + '\n' +
+      '张三的蛋减10' + '\n' +
+      '*OP @张三 节操 +1' + '\n' +
+      '张三的节操加1' + '\n' +
       '===================' + '\n' +
-      '管理员命令需要严格按照形式填写，请谨慎使用！错误操作造成的损失本人概不负责！';
+      '官方机器人拿不到 QQ 号，所以目标是 @ 成员；' + '\n' +
+      '@ 不上时也可以填对方的 openid（面板「权限」页能查到）。' + '\n' +
+      '【鲲】【属性】是「改成」，其余是「加减」。' + '\n' +
+      '群主和管理员可用，请谨慎操作！错误操作造成的损失概不负责！';
 
     function showOwnerHelp(msg) {
       say(msg, OWNER_HELP);
@@ -3005,9 +3018,167 @@ const PLUGIN = {
       say(msg, '游戏数据成功清除！');
     }
 
-    /** OP（原版已取消，只剩这句） */
-    function opCmd(msg, uid) {
-      say(msg, 'OP指令已经取消！' + '\n' + '狗群主再也不能为所欲为啦！哈哈哈！');
+    /* ================= 群主 / 管理员指令 OP ================= */
+
+    /**
+     * OP 能改的项目 → 存档字段。
+     *
+     * 字段名沿用短键（见 freshPlayer）：n 鲲名 / a 属性 / w 体重 / e 蛋 /
+     * j 节操 / s 神器 / h 幻化丹 / p 鸡汤 / r 复活药 / l 好运。
+     *
+     * `kind` 决定「数值」怎么用：
+     *   num  → 加减（正为加负为减）
+     *   name → 改成指定鲲名（必须是那 50 个鲲名之一，「无」清空）
+     *   attr → 改成指定属性（傲妒怒惰贪馋淫悲，「无」清空）
+     */
+    const OP_ITEMS = {
+      鲲: { key: 'n', kind: 'name' },
+      体重: { key: 'w', kind: 'num' },
+      属性: { key: 'a', kind: 'attr' },
+      节操: { key: 'j', kind: 'num' },
+      蛋: { key: 'e', kind: 'num' },
+      神器: { key: 's', kind: 'num' },
+      幻化丹: { key: 'h', kind: 'num' },
+      鸡汤: { key: 'p', kind: 'num' },
+      复活药: { key: 'r', kind: 'num' },
+      运势: { key: 'l', kind: 'num' },
+    };
+
+    const OP_USAGE =
+      '*OP @成员 项目 数值' + '\n' +
+      '例：*OP @张三 蛋 10' + '\n' +
+      '　　*OP @张三 节操 -5' + '\n' +
+      '　　*OP @张三 属性 妒' + '\n' +
+      '也可以把 @成员 换成 openid，或写成斜杠式 *OP/项目/数值（目标取消息里的 @）' + '\n' +
+      '项目：' + Object.keys(OP_ITEMS).join(' / ');
+
+    /**
+     * 从原文里拆 OP 的三个参数。
+     *
+     * **不能用 dispatch 递进来的 argText**：那是 `args.join('')`，
+     * `*OP/12345/属性/妒` 整串会被当成一个「动词」，根本进不了 HANDLERS；
+     * 空格写法拼起来又会把「12345 属性 妒」粘成「12345属性妒」。
+     * 所以直接读原文，`/`、`／`、空格都当分隔符。
+     *
+     * @returns {{targetId:string,item:string,value:string}|null}
+     */
+    function parseOpArgs(msg) {
+      const t = String(msg.content ?? '');
+      const m = /OP(?:[/／\s]+|$)/i.exec(t);
+      if (!m) return null;
+      const parts = t
+        .slice(m.index + m[0].length)
+        .split(/[/／\s]+/)
+        .filter(Boolean);
+
+      // 正文里的 @ 已经被框架剥掉了，目标只能从 mentions 里拿
+      let targetId = (msg.mentions ?? []).find((x) => !x.isBot)?.id ?? '';
+
+      // 没 @ 人：第一个参数当 openid（32 位十六进制那种长串）
+      if (!targetId && parts.length >= 3) targetId = parts.shift();
+      // @ 了人却又多写了一遍 openid：把它摘掉，别当成项目名
+      else if (targetId && parts.length >= 3 && /^[0-9A-Za-z]{16,}$/.test(parts[0])) parts.shift();
+
+      return { targetId, item: parts[0] ?? '', value: parts[1] ?? '' };
+    }
+
+    /**
+     * OP：直接改某个成员的存档。
+     *
+     * 原版写的是 `*OP/QQ号/项目/数值`。官方机器人拿不到 QQ 号，只有 openid
+     * （一串 32 位十六进制，用户既记不住也打不出来），所以目标改成
+     * **@成员** 为主、手填 openid 为辅。
+     *
+     * 权限：群主和管理员（roleOf 的 3 / 2）。
+     */
+    async function opCmd(msg, gid, uid) {
+      const role = await roleOf(msg);
+      if (role < 2) {
+        say(msg, at(uid) + 'OP 只有群主和管理员能用。');
+        return;
+      }
+
+      const parsed = parseOpArgs(msg);
+      if (!parsed) {
+        say(msg, OP_USAGE);
+        return;
+      }
+      const { targetId, item, value } = parsed;
+
+      if (!targetId) {
+        say(
+          msg,
+          '没认出要改谁。' + '\n' + '在指令里 @ 一下那个成员。' + '\n' +
+          '-------------------' + OP_USAGE,
+        );
+        return;
+      }
+
+      const spec = OP_ITEMS[item];
+      if (!spec) {
+        say(
+          msg,
+          (item ? `没有「${item}」这个项目。` : '缺项目。') + '\n' +
+          '-------------------' + OP_USAGE,
+        );
+        return;
+      }
+
+      // 必须是已经玩过的人：没有存档就不知道「改之前」是什么
+      const existed = await ctx.storage.get(pKey(gid, targetId));
+      if (!existed) {
+        say(
+          msg,
+          at(targetId) + '还没有养鲲存档。' + '\n' +
+          '让他先发一次【*签到】，或者确认 @ 的是不是同一个人。',
+        );
+        return;
+      }
+
+      const cur = { ...existed };
+      const before = cur[spec.key];
+      let after;
+      let delta = 0;
+
+      if (spec.kind === 'num') {
+        if (!/[+-]?\d/.test(String(value))) {
+          say(
+            msg,
+            `「${item}」要填数字，正为加负为减。` + '\n' +
+            `例：*OP @张三 ${item} +10`,
+          );
+          return;
+        }
+        delta = toNum(value);
+        after = Math.max(0, Math.round(Number(before || 0) + delta));
+      } else if (spec.kind === 'attr') {
+        const v2 = String(value).trim();
+        if (v2 === '无' || v2 === '无属性') after = '';
+        else if (ATTR_DESC[v2]) after = v2;
+        else {
+          say(msg, '属性只能是：' + Object.keys(ATTR_DESC).join(' / ') + '（或填「无」清空）');
+          return;
+        }
+      } else {
+        const v2 = String(value).trim();
+        if (v2 === '无' || v2 === '') after = '';
+        else if (KUN_NAMES.includes(v2)) after = v2;
+        else {
+          say(msg, `没有「${v2}」这种鲲。` + '\n' + '可用的鲲名：' + KUN_NAMES.join(' / '));
+          return;
+        }
+      }
+
+      await mutateP(gid, targetId, cur.nm, (x) => {
+        x[spec.key] = after;
+      });
+
+      const who = at(targetId) + (cur.nm ? `（${cur.nm}）` : '');
+      const line =
+        spec.kind === 'num'
+          ? `${item}：${toText(before || 0)} → ${toText(after)}（${delta >= 0 ? '+' : ''}${toText(delta)}）`
+          : `${item}：${before || '（空）'} → ${after || '（空）'}`;
+      say(msg, who + ' 已修改' + '\n' + line);
     }
 
     /** 抽嘴巴/单挑群主 的禁言判定（原版在 游戏() 之后那两段） */
@@ -3171,7 +3342,14 @@ const PLUGIN = {
       }
       if (msg.kind !== 'group') return false;
 
-      const fn = HANDLERS[v];
+      /**
+       * OP 有两种写法：`*OP/目标/项目/数值`（斜杠连写，整串会被当成一个
+       * 「动词」）和 `*OP 目标 项目 数值`。这里统一成动词 `OP`，
+       * 具体参数由 opCmd 自己从原文里拆（见 parseOpArgs）——
+       * dispatch 给的 argText 是 `args.join('')`，会把空格写法粘成一坨。
+       */
+      const verbName = /^OP(?:[/／]|$)/i.test(v) ? 'OP' : v;
+      const fn = HANDLERS[verbName];
       // 认不出的指令静默忽略（原版如此），但留一行 debug 方便排查「为什么没反应」
       if (!fn) {
         log.debug(`不认识的指令 ${JSON.stringify(v)}，已忽略`);
@@ -3183,8 +3361,8 @@ const PLUGIN = {
       await touchName(gid, uid, msg.userName);
 
       // 菜单 / BOSS 四连 / 鲲开鲲关：不过开关和冷却
-      if (PLAIN_VERBS.has(v)) {
-        await fn(msg, gid, uid, argText, v);
+      if (PLAIN_VERBS.has(verbName)) {
+        await fn(msg, gid, uid, argText, verbName);
         return true;
       }
 
@@ -3192,8 +3370,8 @@ const PLUGIN = {
       const g = await readG(gid);
       if (g.on === '关') return true;   // 开关关着：算处理过，但什么都不做
       if (!(await passCooldown(gid, uid))) return true;   // 冷却中：静默丢弃
-      await gameStep(msg, gid, uid, v, argText);
-      await fn(msg, gid, uid, argText, v);
+      await gameStep(msg, gid, uid, verbName, argText);
+      await fn(msg, gid, uid, argText, verbName);
       return true;
     }
 

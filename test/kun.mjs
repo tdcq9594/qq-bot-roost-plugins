@@ -123,7 +123,10 @@ const cmd = async (name, opts = {}) => {
 /* ---- 查看群主指令 ---- */
 {
   const { plain: replies } = await cmd('查看群主指令');
-  check('养鲲: 群主指令首行', (replies[0] ?? '').startsWith('*OP/【QQ号】/【项目】/【数值】'), replies[0]?.slice(0, 20));
+  const t = replies[0] ?? '';
+  check('养鲲: 群主指令首行', t.startsWith('*OP @成员 项目 数值'), t.slice(0, 24));
+  check('养鲲: 群主指令不再提 QQ 号', !t.includes('QQ号') && !t.includes('Q号'), t.slice(0, 40));
+  check('养鲲: 群主指令列出项目', t.includes('【鲲】【体重】【属性】'));
 }
 
 /* ---- 默认就是开启的（原版开关默认空=开） ---- */
@@ -324,10 +327,87 @@ const cmd = async (name, opts = {}) => {
   check('养鲲: 当前游戏有题目', /回复【\*=数值】来抢答/.test(r2.plain[0] ?? ''), (r2.plain[0] ?? '').slice(0, 40));
 }
 
-/* ---- OP 已取消 ---- */
+/* ---- OP：群主/管理员改别人存档 ----
+ *
+ * 原版是 `*OP/QQ号/项目/数值`。官方机器人拿不到 QQ 号，目标改成 @成员 或 openid。
+ * 这里把三种写法、权限、和几种错误输入都锁住。
+ */
 {
-  const { plain: replies } = await cmd('OP');
-  check('养鲲: OP 已取消', (replies[0] ?? '') === 'OP指令已经取消！\n狗群主再也不能为所欲为啦！哈哈哈！', replies[0] ?? '');
+  const ADMIN = { author: { member_role: 'admin' } };
+  const OWNER = { author: { member_role: 'owner' } };
+  /**
+   * 单独一个用户，不复用 U2。
+   * U2 在上面的拍卖用例里被手工塞过一条**缺字段**的存档
+   * （`{...undefined, n:'雪鲲', ...}` 里没有 e），签到会 `undefined += 10` 变成 NaN。
+   * 那是夹具的问题，不是插件的问题，但会把这里的基线算错。
+   */
+  const OPU = 'op-user';
+  const at2 = [{ id: OPU, isBot: false, name: '三号' }];
+  const key2 = `p:${G}:${OPU}`;
+
+  // 先让目标有一份存档（走真实流程，顺便验证签到）
+  await cmd('签到', { userId: OPU });
+  const before = { ...((await ctx.storage.get(key2)) ?? {}) };
+  check('养鲲: OP 前置-目标有存档', before.e > 0 && before.j > 0, `e=${before.e} j=${before.j}`);
+
+  // 普通成员不能用
+  {
+    const { plain } = await cmd('OP', { content: '/OP 蛋 10', mentions: at2 });
+    check('养鲲: OP 普通成员被拒', (plain[0] ?? '').includes('只有群主和管理员能用'), plain[0] ?? '');
+  }
+
+  // 管理员 + @人 + 空格写法：蛋 +10
+  {
+    const { plain } = await cmd('OP', { content: '/OP 蛋 10', mentions: at2, raw: ADMIN });
+    const after = await ctx.storage.get(key2);
+    check('养鲲: OP 管理员可用', (plain[0] ?? '').includes('已修改'), plain[0] ?? '');
+    check('养鲲: OP 蛋 +10 生效', after.e === before.e + 10, `${before.e} -> ${after.e}`);
+  }
+
+  // 斜杠写法 + 负数
+  {
+    const { plain } = await cmd('OP/蛋/-5', { mentions: at2, raw: ADMIN });
+    const after = await ctx.storage.get(key2);
+    check('养鲲: OP 斜杠写法可用', (plain[0] ?? '').includes('已修改'), plain[0] ?? '');
+    check('养鲲: OP 负数生效', after.e === before.e + 5, `e=${after.e}`);
+  }
+
+  // 不 @ 人，直接填 openid
+  {
+    const { plain } = await cmd('OP', { content: `/OP ${OPU}/节操/-5`, raw: ADMIN });
+    const after = await ctx.storage.get(key2);
+    check('养鲲: OP openid 写法可用', (plain[0] ?? '').includes('已修改'), plain[0] ?? '');
+    check('养鲲: OP 节操 -5 生效', after.j === before.j - 5, `${before.j} -> ${after.j}`);
+  }
+
+  // 属性是「改成」不是加减；群主也能用
+  {
+    await cmd('OP', { content: '/OP 属性 妒', mentions: at2, raw: OWNER });
+    const after = await ctx.storage.get(key2);
+    check('养鲲: OP 属性改成妒', after.a === '妒', `a=${after.a}`);
+  }
+
+  // 没 @ 人也没给 openid
+  {
+    const { plain } = await cmd('OP', { content: '/OP 蛋 1', raw: ADMIN });
+    check('养鲲: OP 没认出目标有提示', (plain[0] ?? '').includes('没认出要改谁'), plain[0] ?? '');
+  }
+
+  // 项目名写错
+  {
+    const { plain } = await cmd('OP', { content: '/OP 体重x 1', mentions: at2, raw: ADMIN });
+    check('养鲲: OP 项目非法有提示', (plain[0] ?? '').includes('没有「体重x」这个项目'), plain[0] ?? '');
+  }
+
+  // 目标没玩过（没有存档）
+  {
+    const { plain } = await cmd('OP', {
+      content: '/OP 蛋 1',
+      mentions: [{ id: 'nobody', isBot: false, name: '路人' }],
+      raw: ADMIN,
+    });
+    check('养鲲: OP 目标没存档有提示', (plain[0] ?? '').includes('还没有养鲲存档'), plain[0] ?? '');
+  }
 }
 
 /* ---- 私聊：未绑定 ---- */

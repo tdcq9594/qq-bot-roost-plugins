@@ -178,7 +178,7 @@
     {
       "id": "kun",
       "name": "养鲲",
-      "version": "4.1.1",
+      "version": "4.1.2",
       "description": "开局一条鲲，进化全靠吞：养成、道具、拍卖行、BOSS、群主互动（24 个命令）",
       "author": "tdcq9594",
       "path": "plugins/kun",
@@ -229,7 +229,7 @@
       ],
       "addedAt": "2026-10-23",
       "credits": "玩法设计来自 Agam《简单的养鲲游戏》(CQP, 2020)",
-      "sha256": "5bed6aecd06a0190470b6638fcacc5616777c5c4ae7cbe511a50dddcc280c391",
+      "sha256": "1944316d7e30e6cdfd0292b12170edb7ffc5fe59dcd70c9a066e5fdc4b4d38d4",
       "frameworkVersion": ">=0.6.0"
     },
     {
