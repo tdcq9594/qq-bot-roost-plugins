@@ -2,7 +2,7 @@
   "schema": 1,
   "repo": "tdcq9594/qq-bot-roost-plugins",
   "branch": "main",
-  "updated": "2026-10-24",
+  "updated": "2026-10-25",
   "plugins": [
     {
       "id": "ai-chat",
@@ -154,7 +154,7 @@
     {
       "id": "kun",
       "name": "养鲲",
-      "version": "3.3.0",
+      "version": "4.0.0",
       "description": "开局一条鲲，进化全靠吞：养成、道具、拍卖行、BOSS、群主互动（24 个命令）",
       "author": "tdcq9594",
       "path": "plugins/kun",
@@ -205,7 +205,8 @@
       ],
       "addedAt": "2026-10-23",
       "credits": "玩法设计来自 Agam《简单的养鲲游戏》(CQP, 2020)",
-      "sha256": "87cbe8d8e00a95c89177efbba8c759eb0c20de59dcc0df0a28e581ed000a1aa1"
+      "sha256": "f815b31cd99691792af1b5a8f5115465260bdb2ab2f454a6b3213d0d43523b2b",
+      "frameworkVersion": ">=0.6.0"
     },
     {
       "id": "render",
