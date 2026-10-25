@@ -34,17 +34,17 @@
     {
       "id": "anime-img",
       "name": "二次元图",
-      "version": "1.0.0",
-      "description": "来张二次元图：国内图源拉取 → 本地缓存 → 发到群里，附作品出处",
+      "version": "2.0.0",
+      "description": "来张二次元图：夜轻图源拉取 → 本地缓存 → 图文同一条发到群里",
       "tags": [
         "图片",
         "二次元",
         "娱乐"
       ],
-      "frameworkVersion": ">=0.6.0",
+      "frameworkVersion": ">=0.6.13",
       "runtime": "node",
       "path": "plugins/anime-img",
-      "sha256": "17b5df7debabb361fea15734ac0a2be5a2aa4239d8737b5b3cfe4b2dbe7a6796",
+      "sha256": "a75bf5f0ff9a30bc1fdf727dd71877e5f348cced3634bfc45c336ce475b892ef",
       "author": "tdcq9594",
       "commands": [
         "来张图",

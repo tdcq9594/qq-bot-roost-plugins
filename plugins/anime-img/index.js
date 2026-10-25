@@ -1,29 +1,37 @@
 /**
- * 二次元图 v1.0
+ * 二次元图 v2.0
  * ==============
  *
- * 发一张二次元图片到群里。三条原则：
+ * 发一张二次元图片到群里，图片和出处文字走**同一条消息**发出
+ * （msg_type=7 富媒体消息自带的 content 字段，见框架 replyImage 的 text 选项）。
  *
- *   1. **国内图源**：用 Lolicon API（国内团队维护，https://api.lolicon.app），
- *      返回 JSON，带标题/作者/尺寸/pid，不用抓 HTML。
- *   2. **本地缓存**：第一次拉到就存到插件自己的目录（ctx.dataDir），
- *      之后优先发缓存里的。好处有俩：图源慢了不用每次等十几秒；
- *      官方接口上传本地文件比让它去拉远程 URL 稳（远程拉不动就发不出去）。
- *   3. **LRU 回收**：缓存上限默认 200 张，超了先删最久没被发过的。
+ * 图源：夜轻 ACG API（https://api.yppp.net，文档 https://www.yeqing.net/blog/acg-api/）
  *
- * 指令：
- *   /来张图        随机发一张（缓存空了会现拉）
- *   /图库          看缓存里有多少张、占多大
- *   /清图库        清空缓存（管理员）
+ *   pc    横图      https://api.yppp.net/pc?return=json
+ *   pe    竖图      https://api.yppp.net/pe?return=json
+ *   random 随机横竖（默认）
  *
- * 图片来源是 pixiv 上的作品，API 只返回 r18=false 的。请遵守原站规定，
- * 不要用于商业用途。
+ * 为什么不直接用自适应接口 /api：它按 User-Agent 判断跳 pc 还是 pe，
+ * 机器人侧的 UA 不是移动端，调它永远落到 pc，还多一次 302。要竖图就
+ * 直接调 pe。
+ *
+ * 和 v1（Lolicon 图源）的差别：
+ *   1. 图源换成夜轻 API：国内腾讯云 CDN，不需要 key，?return=json
+ *      直接给元数据。但它**不做去重**（官方原话「懒得做去重」），
+ *      所以缓存按 URL 文件名去重，补货循环连续拿到重复图就收手。
+ *   2. 没有标题/画师/pid 了，出处只剩「横图 2290×1200」这样的尺寸信息。
+ *   3. 图片和出处合并成一条消息发出（v1 是先发图再发一句话，两条）。
+ *
+ * 缓存 / LRU 回收 / 后台补货 / 发送次数轮转的机制沿用 v1。
+ *
+ * 图片来源为互联网收集（QQ 群、壁纸网站等），可能包含 AIGC 作品，
+ * API 未提供内容分级参数。请遵守原站规定，不要用于商业用途。
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-/** Lolicon API：国内可直连，返回 JSON */
-const LOLICON = 'https://api.lolicon.app/setu/v2';
+/** 夜轻 ACG API：国内可直连，不需要 key */
+const BASE = 'https://api.yppp.net';
 
 /** 单张图最大 8MB——再大官方接口也传不动 */
 const MAX_BYTES = 8 * 1024 * 1024;
@@ -31,20 +39,37 @@ const MAX_BYTES = 8 * 1024 * 1024;
 /** 允许的图片扩展名 */
 const EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
 
+/** 横/竖图的中文叫法，出处文字用 */
+const TYPE_LABEL = { pc: '横图', pe: '竖图' };
+
+/**
+ * 图源限流：官方规定 10 秒内超过 20 次请求会触发 30 秒速率限制。
+ * 留点余量——滑窗里攒到 18 次就排队等，不踩线。
+ * 只统计 API 元数据请求，图片本体在 list.yppp.net，不占这里的额度。
+ */
+const RATE_WINDOW = 10_000;
+const RATE_MAX = 18;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 export default {
   id: 'anime-img',
   name: '二次元图',
-  version: '1.0.0',
-  description: '来张二次元图：国内图源拉取 → 本地缓存 → 发到群里',
-  frameworkVersion: '>=0.6.0',
+  version: '2.0.0',
+  description: '来张二次元图：夜轻图源拉取 → 本地缓存 → 图文同一条发到群里',
+  // 图文同一条依赖框架 replyImage 的 text 选项（0.6.13 起）
+  frameworkVersion: '>=0.6.13',
 
   async setup(ctx) {
     const log = ctx.logger;
 
     /** 配置（面板「插件 → 二次元图 → 设置」可改） */
     const cfg = {
-      /** 图源，目前只实现 lolicon */
-      source: 'lolicon',
+      /**
+       * 图类型：pc 横图 / pe 竖图 / random 随机横竖。
+       * 面板存进来可能是字符串，甚至手打的大小写，这里统一小写比较。
+       */
+      type: 'random',
       /** 缓存上限（张） */
       maxFiles: 200,
       /** 缓存少于这个数就在后台补货 */
@@ -54,6 +79,9 @@ export default {
       ...ctx.config,
     };
 
+    const timeoutMs = () => Math.max(1000, Number(cfg.timeoutMs) || 25000);
+    const maxFiles = () => Math.max(1, Number(cfg.maxFiles) || 200);
+
     const DIR = ctx.dataDir;
     const CACHE_DIR = path.join(DIR, 'imgcache');
     const INDEX_FILE = path.join(DIR, 'index.json');
@@ -62,7 +90,7 @@ export default {
 
     /* ---------------- 缓存索引 ---------------- */
 
-    /** items: [{ file, pid, title, author, w, h, size, at, used }] */
+    /** items: [{ file, id, type, w, h, size, at, used }] */
     let index = { items: [] };
     try {
       index = JSON.parse(await fs.readFile(INDEX_FILE, 'utf8'));
@@ -93,52 +121,112 @@ export default {
       return saving;
     };
 
-    /* ---------------- 拉图 ---------------- */
+    /* ---------------- 图源 ---------------- */
+
+    /** 图源限流滑窗：记最近的请求时间，超了排队等 */
+    let apiTimes = [];
+    async function rateLimit() {
+      for (;;) {
+        const now = Date.now();
+        apiTimes = apiTimes.filter((t) => now - t < RATE_WINDOW);
+        if (apiTimes.length < RATE_MAX) {
+          apiTimes.push(now);
+          return;
+        }
+        const wait = RATE_WINDOW - (now - apiTimes[0]) + 50;
+        log.info(`[anime] 图源请求太密，等 ${Math.ceil(wait / 1000)} 秒`);
+        await sleep(wait);
+      }
+    }
+
+    /** 这次要横图还是竖图 */
+    function pickType() {
+      const t = String(cfg.type ?? 'random').trim().toLowerCase();
+      if (t === 'pc' || t === 'pe') return t;
+      return Math.random() < 0.5 ? 'pc' : 'pe';
+    }
 
     /** 问 API 要一张图的元数据 */
     async function fetchMeta() {
-      const url = `${LOLICON}?r18=0&size=regular&num=1`;
-      const r = await fetch(url, {
-        signal: AbortSignal.timeout(cfg.timeoutMs),
+      await rateLimit();
+      const type = pickType();
+      const r = await fetch(`${BASE}/${type}?return=json`, {
+        signal: AbortSignal.timeout(timeoutMs()),
         headers: { 'user-agent': 'qq-bot-roost/anime-img' },
       });
       if (!r.ok) throw new Error(`图源返回 ${r.status}`);
       const j = await r.json();
-      if (j?.error) throw new Error(`图源报错: ${j.error}`);
-      const d = j?.data?.[0];
-      if (!d) throw new Error('图源没返回数据（可能是 r18 过滤后为空）');
-      const imgUrl = d.urls?.regular || d.urls?.original || d.urls?.small;
-      if (!imgUrl) throw new Error('图源没给图片地址');
+      // 官方成功时 code 是字符串 "200"；失败时没有 acgurl
+      if (String(j?.code) !== '200' || !j?.acgurl) {
+        throw new Error(`图源没返回图片（code=${j?.code ?? '?'}）`);
+      }
       return {
-        pid: d.pid,
-        p: d.p ?? 0,
-        title: String(d.title ?? '').trim(),
-        author: String(d.author ?? '').trim(),
-        w: d.width ?? 0,
-        h: d.height ?? 0,
-        url: imgUrl,
+        type,
+        url: String(j.acgurl),
+        w: Number(j.width) || 0,
+        h: Number(j.height) || 0,
+        ext: normExt(j.size),
       };
     }
 
-    /** 下载到缓存目录，返回索引条目；失败返回 null */
-    async function download(meta) {
-      const ext = path.extname(new URL(meta.url).pathname).toLowerCase();
-      if (!EXTS.has(ext)) return null;
+    /** 官方 size 字段给的是扩展名（"png" / "jpg"），不是字节数 */
+    function normExt(s) {
+      const e = String(s ?? '').trim().toLowerCase().replace(/^\./, '');
+      return EXTS.has(`.${e}`) ? e : '';
+    }
 
-      const file = `${meta.pid}_${meta.p}.${ext.replace('.', '')}`;
+    /**
+     * 缓存 id：图片 URL 的文件名主干。
+     * 夜轻的图床文件名形如 `2025-10-4fa10e18f4b501b44ac16a481591009c.png`，
+     * 日期 + 哈希，天然不重样，拿来当 id 正合适。
+     */
+    function idOf(url) {
+      let stem = '';
+      try {
+        stem = path.basename(new URL(url).pathname).replace(/\.[^./]+$/, '');
+      } catch {
+        /* url 解析不了就退化成固定 id，反正还会按内容去重 */
+      }
+      const clean = stem.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+      return clean || 'img';
+    }
+
+    /** 扩展名优先看 URL，其次看 API 的 size 字段；都不认就返回空 */
+    function extOf(url, fallback) {
+      try {
+        const e = path.extname(new URL(url).pathname).toLowerCase();
+        if (EXTS.has(e)) return e;
+      } catch {
+        /* 同上 */
+      }
+      return fallback ? `.${fallback}` : '';
+    }
+
+    /**
+     * 拉一张图进缓存。
+     *
+     * 返回 { item, fresh }：
+     *   fresh=true  新下载的
+     *   fresh=false 图源给了张缓存里已有的图（夜轻不去重，这很常见）
+     *   item=null   格式不支持，这一张作废
+     *
+     * 调用方靠 fresh 判断「补货有没有进展」——不然图源一直给重复图时，
+     * 「补到 N 张」的循环会永远停不下来。
+     */
+    async function download(meta) {
+      const id = idOf(meta.url);
+      const hit = index.items.find((x) => x.id === id);
+      if (hit) return { item: hit, fresh: false };
+
+      const ext = extOf(meta.url, meta.ext);
+      if (!ext) return { item: null, fresh: false };
+
+      const file = `${id}${ext}`;
       const dest = path.join(CACHE_DIR, file);
 
-      // 已经在缓存里（同一个 pid）就不重复下
-      const exists = index.items.find((x) => x.file === file);
-      if (exists) return exists;
-
       const r = await fetch(meta.url, {
-        signal: AbortSignal.timeout(cfg.timeoutMs),
-        headers: {
-          'user-agent': 'qq-bot-roost/anime-img',
-          // pixiv 的图床对 referer 敏感，带上原站
-          referer: 'https://www.pixiv.net/',
-        },
+        signal: AbortSignal.timeout(timeoutMs()),
+        headers: { 'user-agent': 'qq-bot-roost/anime-img' },
       });
       if (!r.ok) throw new Error(`图片下载失败 ${r.status}`);
       const type = String(r.headers.get('content-type') ?? '');
@@ -150,9 +238,8 @@ export default {
       await fs.writeFile(dest, buf);
       const item = {
         file,
-        pid: meta.pid,
-        title: meta.title,
-        author: meta.author,
+        id,
+        type: meta.type,
         w: meta.w,
         h: meta.h,
         size: buf.length,
@@ -163,8 +250,11 @@ export default {
       await prune();
       await saveIndex();
       log.info(`[anime] 缓存新图 ${file}（${(buf.length / 1024).toFixed(0)}KB）`);
-      return item;
+      return { item, fresh: true };
     }
+
+    /** 拉一张图进缓存（要新元数据） */
+    const fetchOne = async () => download(await fetchMeta());
 
     /** 超上限就删最久没用的 */
     async function prune() {
@@ -180,24 +270,27 @@ export default {
 
     /** 从缓存里挑一张（最久没发的优先，保证轮转） */
     function pickCached() {
-      const alive = index.items.filter((it) => it.used >= 0);
-      if (!alive.length) return null;
-      alive.sort((a, b) => a.used - b.used || a.at - b.at);
+      if (!index.items.length) return null;
+      const alive = [...index.items].sort((a, b) => a.used - b.used || a.at - b.at);
       return alive[0];
     }
 
-    /** 缓存上限（配置可能是字符串，兜一下） */
-    const maxFiles = () => Math.max(1, Number(cfg.maxFiles) || 200);
-
     /**
      * 连续补货到 n 张（启动时用）。
+     *
+     * 图源不去重，连续拿到重复图就认为没进展：攒够 3 次 Miss 就收手，
+     * 不然「补到 5 张」在图源图少的时候会变成死循环。
      * 中途失败就停——图源不通的话没必要死磕。
      */
     async function fillTo(n) {
       const target = Math.min(n, maxFiles());
-      while (index.items.length < target) {
+      let miss = 0;
+      while (index.items.length < target && miss < 3) {
         try {
-          await download(await fetchMeta());
+          const { item, fresh } = await fetchOne();
+          if (!item) miss += 1; // 格式不支持，换一张
+          else if (fresh) miss = 0;
+          else miss += 1; // 重复图，没进展
         } catch (e) {
           log.warn(`[anime] 补货失败: ${e.message}`);
           return;
@@ -222,7 +315,7 @@ export default {
       lastPrefetchAt = Date.now();
       (async () => {
         try {
-          await download(await fetchMeta());
+          await fetchOne();
         } catch (e) {
           log.warn(`[anime] 补货失败: ${e.message}`);
         } finally {
@@ -233,15 +326,17 @@ export default {
 
     /* ---------------- 指令 ---------------- */
 
-    const line = (it) => {
-      const bits = [it.title || '无题', it.author ? `by ${it.author}` : '', `pixiv ${it.pid}`];
-      return bits.filter(Boolean).join(' · ');
+    /** 出处文字：新图源没有标题/画师，能给的就是横竖和尺寸 */
+    const line = (it, fresh = false) => {
+      const label = TYPE_LABEL[it.type] ?? '图';
+      const dim = it.w && it.h ? ` ${it.w}×${it.h}` : '';
+      return `${label}${dim}${fresh ? ' · 刚收录' : ''}`;
     };
 
-    /** 发一张图：先挑缓存，没有再拉 */
+    /** 发一张图：先挑缓存，没有再拉；图和出处同一条消息 */
     async function sendOne(msg) {
       let item = pickCached();
-      let fromCache = Boolean(item);
+      let fresh = false;
 
       if (item) {
         // 文件被手动删过？跳过这条，重新拉
@@ -249,16 +344,18 @@ export default {
           await fs.access(path.join(CACHE_DIR, item.file));
         } catch {
           index.items = index.items.filter((x) => x.file !== item.file);
+          await saveIndex();
           item = null;
-          fromCache = false;
         }
       }
 
       if (!item) {
         try {
-          item = await download(await fetchMeta());
+          const r = await fetchOne();
+          item = r.item;
+          fresh = r.fresh;
         } catch (e) {
-          await msg.reply(`图源没响应：${e.message}\n过会儿再试，或者检查这台机器能不能访问 api.lolicon.app`);
+          await msg.reply(`图源没响应：${e.message}\n过会儿再试，或者检查这台机器能不能访问 api.yppp.net`);
           return;
         }
       }
@@ -270,18 +367,20 @@ export default {
       item.used = (item.used ?? 0) + 1;
       await saveIndex();
 
-      const sent = await msg.replyImage(path.join(CACHE_DIR, item.file), { local: true });
+      const caption = line(item, fresh);
+      // text 会和图片走同一条富媒体消息；框架 < 0.6.13 会忽略 text（只发图），
+      // 所以插件在 frameworkVersion 里卡了 >=0.6.13，不会走到那条路
+      const sent = await msg.replyImage(path.join(CACHE_DIR, item.file), { local: true, text: caption });
       if (sent === null || sent === undefined) {
         // 图片没发出去（上传失败/额度），退回一句话，别让用户干等
-        await msg.reply(`图没发出去（可能是官方接口上传失败）。\n${line(item)}\n本地已经缓存好了，过会儿再试。`);
+        await msg.reply(`图没发出去（可能是官方接口上传失败）。\n${caption}\n本地已经缓存好了，过会儿再试。`);
         return;
       }
 
-      await msg.reply(line(item) + (fromCache ? '' : ' · 刚收录'));
       ensurePool();
     }
 
-    ctx.command('来张图', { desc: '随机来一张二次元图' }, sendOne);
+    ctx.command('来张图', { desc: '随机来一张，出处和图同条发出' }, sendOne);
     ctx.command('二次元', { desc: '同 来张图' }, sendOne);
     ctx.command('acg', { desc: '同 来张图' }, sendOne);
 
@@ -294,12 +393,14 @@ export default {
       const total = index.items.reduce((s, it) => s + (it.size ?? 0), 0);
       const newest = index.items.reduce((a, b) => (a.at > b.at ? a : b));
       const oldest = index.items.reduce((a, b) => (a.at < b.at ? a : b));
+      const pc = index.items.filter((it) => it.type === 'pc').length;
+      const pe = n - pc;
       const fmt = (t) => new Date(t).toLocaleString('zh-CN', { hour12: false });
       await msg.reply(
         [
-          `图库：${n} 张，共 ${(total / 1048576).toFixed(1)}MB`,
+          `图库：${n} 张，共 ${(total / 1048576).toFixed(1)}MB（横图 ${pc} · 竖图 ${pe}）`,
           `最早 ${fmt(oldest.at)} · 最新 ${fmt(newest.at)}`,
-          `上限 ${cfg.maxFiles} 张，超了会自动删最久没发过的。`,
+          `上限 ${maxFiles()} 张，超了会自动删最久没发过的。`,
         ].join('\n'),
       );
     });
@@ -314,9 +415,18 @@ export default {
       await msg.reply(n ? `清掉了 ${n} 张缓存。` : '图库本来就是空的。');
     });
 
+    /**
+     * 菜单补充说明。
+     *
+     * 命令会自动进「指令」组（可点击），这里只放 v2 起用户能感觉到的变化。
+     * **不在这里重复列命令**——那会和「指令」组撞车，/help 里同一个功能
+     * 出现两遍，看着像 bug。条目不带 cmd，渲染出来是不可点的说明文字
+     * （同 dice 插件「说明」组的做法）。
+     */
     ctx.menu('二次元图', [
-      { text: '来张图', desc: '随机一张' },
-      { text: '图库', desc: '缓存统计' },
+      { text: '图和出处同一条消息发出', desc: 'v2 起；以前是先发图、再补一句出处' },
+      { text: '横图 / 竖图可切换', desc: '面板「插件 → 二次元图 → 设置」改 type' },
+      { text: '图源是夜轻 ACG API', desc: 'api.yppp.net，国内 CDN，无需 key' },
     ]);
 
     // 启动时悄悄补到 minPool，第一张图不用等
