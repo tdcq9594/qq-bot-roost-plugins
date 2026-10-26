@@ -167,14 +167,28 @@ const baseConf = (over = {}) => () => ({
 
 /* ---------------- 适配器选择 ---------------- */
 
+/** 假回话通道：只用来验证适配器构造，不真等回话 */
+const fakeBridge = () => ({ create: () => ({ id: 'e', token: 't', promise: new Promise(() => {}) }), handleReply: () => ({ code: 200, body: {} }), dispose() {} });
+const pubUrl = () => 'http://127.0.0.1:8080';
+
 {
-  let err = null;
-  try {
-    createAdapter({ conf: baseConf({ adapter: 'dsh' }), explainHttp });
-  } catch (e) {
-    err = e;
-  }
-  ok('选择: 未实现的 dsh 明确报错', /dsh 适配器还没做/.test(err?.message ?? ''), err?.message ?? '');
+  const a = createAdapter({
+    conf: baseConf({ adapter: 'dsh', dshUrl: 'http://127.0.0.1:17321' }),
+    explainHttp,
+    bridge: fakeBridge(),
+    publicUrl: pubUrl,
+  });
+  ok('选择: dsh 适配器可用', a?.name === 'dsh', a?.name ?? '');
+}
+
+{
+  const a = createAdapter({
+    conf: baseConf({ adapter: 'webhook', hostUrl: 'http://host' }),
+    explainHttp,
+    bridge: fakeBridge(),
+    publicUrl: pubUrl,
+  });
+  ok('选择: webhook 适配器可用', a?.name === 'webhook', a?.name ?? '');
 }
 
 {
@@ -189,14 +203,13 @@ const baseConf = (over = {}) => () => ({
 
 {
   // 关键：选了 dsh 不能悄悄回落到 openai
-  let fellBack = false;
-  try {
-    const a = createAdapter({ conf: baseConf({ adapter: 'dsh' }), explainHttp });
-    fellBack = a?.name === 'openai';
-  } catch {
-    fellBack = false;
-  }
-  ok('选择: 不会静默回落到 openai', fellBack === false);
+  const a = createAdapter({
+    conf: baseConf({ adapter: 'dsh', dshUrl: 'http://d' }),
+    explainHttp,
+    bridge: fakeBridge(),
+    publicUrl: pubUrl,
+  });
+  ok('选择: 选了 dsh 就不会变成 openai', a?.name === 'dsh', a?.name ?? '');
 }
 
 /* ---------------- 汇总 ---------------- */

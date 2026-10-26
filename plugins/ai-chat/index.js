@@ -1,117 +1,47 @@
 /**
- * AI 对话
- * ======
+ * AI 对话（v3，从头重写）
+ * ====================
  *
- * 把大模型接进 QQ：群里 @机器人 说话、私聊直接说，都能对话。
- * 每个会话（群 / 私聊）各自一份上下文，互不串台。
+ * 跟 1.x 的根本区别：**没有指令**。
  *
- * 移植自腾讯官方的 [dsh-qqbot](https://github.com/tencent-connect/dsh-qqbot)，
- * 但**没有照搬它的架构**——它是 DSH 的插件，靠 DSH 的 agent loop 调模型；
- * 我们是独立框架，所以直接打 OpenAI 兼容的 `/chat/completions`。
- * 这样不绑定任何一家：DeepSeek、Kimi、通义、本地 Ollama 都只要改 baseUrl。
+ * 1.x 是「@机器人 /ai 问题」——用户得先知道有 `/ai` 这回事，
+ * 还得记得 @ 一下。群友看到的是一个「要按规程使用」的机器。
  *
- * 保留了哪些：每会话独立上下文、闲置回收、内置命令、访问控制、
- * 群聊 @ 触发 / 私聊直接触发、错误翻译成人话。
+ * 3.x 改成「它就在群里待着」：
+ *   · 群里每条消息它都看得见（需要开放平台开「接收所有消息」）
+ *   · 它自己判断这条该不该接话，不该接就一声不吭
+ *   · 不占用任何指令前缀，不会跟别的插件抢 `/xxx`
  *
- * 没做哪些，以及为什么：
- *   · 流式输出——QQ 群聊不支持，用户看到的只是最终那条消息，
- *     流式唯一的好处是「打字机效果」，为此引入 SSE 解析不值得。
- *   · 工具调用（agent loop）——我们是机器人框架不是 agent 运行时，
- *     真要做应该是「插件提供工具」，那是另一个量级的事。
- *   · 图片视觉理解——需要先下载 QQ 的图片（带鉴权的临时链接）、
- *     再调视觉模型，链路长且容易失效，等有人真需要再说。
+ * 为什么不怕吵到别人，靠三层：
+ *   1. **规则门**（decide.js，0 成本）：冷却、每分钟配额、忽略词、
+ *      别的插件的指令——大部分消息在这一层就挡掉了
+ *   2. **模型判断**：剩下的交给模型，不该接就输出 `<skip>`
+ *   3. **硬锁**：同一个群同时只跑一轮，不会因为群里刷屏就并发一堆请求
+ *
+ * 别的插件的指令为什么不用自己过滤：内核在分派阶段就把命令交给
+ * 对应插件并 `return` 了，监听器根本收不到。这是框架给的，不是我们算的。
+ *
+ * 记忆和人设也没有指令——模型自己在回复里带 `<<remember: 内容>>` 这类标记，
+ * 插件解析执行后把标记摘掉。用户说「记住我住在杭州」就行。
  */
-/** 一次请求最多等多久。超过就中断，别让用户干等 */
-import { createAdapter, ADAPTER_OPTIONS } from './adapter/index.js';
 
+import { createAdapter, ADAPTER_OPTIONS } from './adapter/index.js';
+import { createBridge } from './adapter/bridge.js';
+import { buildUserContent } from './inbound.js';
+import { sendReply } from './outbound.js';
+import { createProfile } from './profile.js';
+import { shouldConsider, isSkip, parseActions, SKIP_MARK, DEFAULT_IGNORE } from './decide.js';
+import { ChatStore, PaceStore } from './session.js';
+
+/** 一次请求最多等多久 */
 const DEFAULT_TIMEOUT_SEC = 90;
 const DEFAULT_MODEL = 'deepseek-flash';
 
-/**
- * 旧模型名自动映射。
- *
- * DeepSeek 换过名字：`deepseek-chat` / `deepseek-reasoner` 是老的，
- * 现在只有 `deepseek-flash` / `deepseek-v4-pro`。
- *
- * 为什么要在代码里兜：**升级上来的用户，配置文件里存的还是旧名**。
- * 配置项的值优先于默认值，所以光改默认值对老用户没用——他们会一直
- * 拿一个官方文档里已经查不到的名字去调接口。
- *
- * 不直接改用户配置文件：那是用户的东西，悄悄改写不合适；
- * 读的时候映射一下，用户在面板上看到、改过的仍然是自己的值。
- */
-const MODEL_ALIAS = {
-  'deepseek-chat': 'deepseek-flash',
-  'deepseek-reasoner': 'deepseek-v4-pro',
-  // 更早的写法
-  'deepseek-coder': 'deepseek-flash',
-};
-
+/** 常用的模型别名，省得用户记全名 */
+const MODEL_ALIAS = { flash: 'deepseek-flash', pro: 'deepseek-v4-pro' };
 const aliasModel = (m) => MODEL_ALIAS[m] ?? m;
 
-/**
- * 会话容器。
- *
- * 为什么放内存不落盘：上下文是「最近聊了什么」，重启后用户本来也该重新开始。
- * 落盘反而有隐私问题（聊天记录存本地）和写放大问题（每轮都写）。
- * 官方的 dsh-qqbot 也是内存 + 闲置回收，思路一致。
- */
-class ChatStore {
-  constructor({ historyLimit, idleMs }) {
-    /** chatId -> { messages, lastAt, busy, controller, model, rounds } */
-    this.map = new Map();
-    this.historyLimit = historyLimit;
-    this.idleMs = idleMs;
-  }
-
-  get(chatId) {
-    let s = this.map.get(chatId);
-    if (!s) {
-      s = { messages: [], lastAt: Date.now(), busy: false, controller: null, model: '', rounds: 0 };
-      this.map.set(chatId, s);
-    }
-    s.lastAt = Date.now();
-    return s;
-  }
-
-  reset(chatId) {
-    this.map.delete(chatId);
-  }
-
-  /**
-   * 裁剪上下文。
-   *
-   * 保留 system（第 0 条，如果有）+ 最近 N 轮。按「条数」而不是「token 数」裁
-   * 是有意的：数 token 要引依赖或写估算器，而 10 轮对话对绝大多数模型都安全。
-   */
-  trim(s) {
-    const keep = Math.max(2, this.historyLimit * 2);
-    if (s.messages.length <= keep) return;
-    const hasSystem = s.messages[0]?.role === 'system';
-    const sys = hasSystem ? [s.messages[0]] : [];
-    const rest = hasSystem ? s.messages.slice(1) : s.messages;
-    s.messages = [...sys, ...rest.slice(-keep)];
-  }
-
-  /** 回收闲置会话，返回清掉的个数 */
-  evictIdle(now = Date.now()) {
-    let n = 0;
-    for (const [id, s] of this.map) {
-      if (s.busy) continue; // 正在生成的不动
-      if (now - s.lastAt > this.idleMs) {
-        this.map.delete(id);
-        n += 1;
-      }
-    }
-    return n;
-  }
-
-  get size() {
-    return this.map.size;
-  }
-}
-
-/** 把 HTTP 状态码翻译成人话——AI 和人都看得懂的那种 */
+/** HTTP 错误翻成人话 */
 function explainHttp(status, bodyText = '') {
   const detail = String(bodyText).slice(0, 160);
   if (status === 401 || status === 403) return 'API Key 不对或没有权限，去面板「插件 → AI 对话 → 设置」重新填';
@@ -125,20 +55,11 @@ function explainHttp(status, bodyText = '') {
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '1.3.0',
-  description: '把大模型接进群聊和私聊，@机器人 就能对话，每会话独立上下文',
-  frameworkVersion: '>=0.6.10',
+  version: '3.0.0',
+  description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
+  frameworkVersion: '>=0.7.0',
 
-  /**
-   * 面板上的「快速填入」。
-   *
-   * 换服务商要同时改 baseUrl 和 model 两个字段，手输地址容易多写/漏写 `/v1`
-   * （然后拿到一个 404，看着像服务商挂了）。这里把常见组合列出来，点一下填好。
-   *
-   * 地址都是实测过的（不带 Key 请求返回 401，说明接口真实存在）。
-   * **模型名会变**：服务商上下架模型比改域名勤得多，所以 desc 里写清
-   * 「以官网为准」，用户填完最好核对一眼。
-   */
+  /** 面板上的「快速填入」。地址都是实测过的（不带 Key 返回 401 说明接口真实存在） */
   configPresets: [
     {
       name: 'DeepSeek',
@@ -158,10 +79,7 @@ export default {
     {
       name: '通义千问',
       desc: '阿里云百炼，OpenAI 兼容模式',
-      values: {
-        baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-        model: 'qwen-plus',
-      },
+      values: { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
     },
     {
       name: '智谱 GLM',
@@ -174,13 +92,8 @@ export default {
       values: { baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct' },
     },
     {
-      name: '火山方舟',
-      desc: '字节豆包。model 要填「接入点 ID」或模型名，看控制台',
-      values: { baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-pro-32k' },
-    },
-    {
       name: '本地 Ollama',
-      desc: '跑在自己电脑上，不花钱不出网。先 ollama pull 一个模型',
+      desc: '本机跑，不要钱也不要网（先在 Ollama 里 pull 好模型）',
       values: { baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen2.5:7b' },
     },
   ],
@@ -191,13 +104,13 @@ export default {
       default: 'openai',
       options: ADAPTER_OPTIONS,
       label: '适配器',
-      desc: '这一轮交给谁去想。openai = 直连兼容端点（默认，装上就能用）；dsh = 交给 DeepSeek Harness，能用它的工具和记忆（需另装 dsh-roost）',
+      desc: '这一轮交给谁去想。openai = 直连兼容端点（默认，装上就能用）；dsh = 交给 DeepSeek Harness，能用它的工具和记忆（需另装 dsh-roost）；webhook = 自建服务',
     },
     apiKey: {
       type: 'text',
       default: '',
       label: 'API 密钥',
-      desc: '必填。在服务商控制台创建，通常以 sk- 开头。留空时对话不可用',
+      desc: 'openai 适配器必填。在服务商控制台创建，通常以 sk- 开头',
       placeholder: 'sk-...',
     },
     baseUrl: {
@@ -211,23 +124,56 @@ export default {
       type: 'text',
       default: 'deepseek-flash',
       label: '模型',
-      desc: '服务商提供的模型名，以官网文档为准。也可以在群里发 /模型 临时换',
+      desc: '服务商提供的模型名，以官网文档为准',
       placeholder: 'deepseek-flash',
     },
+
+    decide: {
+      type: 'select',
+      default: 'ai',
+      options: [
+        { value: 'ai', label: 'AI 自己判断（读全量消息）' },
+        { value: 'mention', label: '只在被 @ 或回复时说话' },
+      ],
+      label: '什么时候接话',
+      desc: '「AI 自己判断」= 群里每条消息都看一眼，该接才接；「只在被叫到时」= 其余消息完全不理，最省 token',
+    },
+    cooldownSec: {
+      type: 'number',
+      default: 20,
+      min: 0,
+      max: 600,
+      label: '接话冷却（秒）',
+      desc: '回过一次之后，这么多秒内不再主动接话。防止它跟着群里刷屏',
+    },
+    maxRepliesPerMin: {
+      type: 'number',
+      default: 3,
+      min: 0,
+      max: 30,
+      label: '每分钟最多接几条',
+      desc: '每个会话的主动接话上限，0 表示不限。被 @ 时不受这个限制',
+    },
+    ignoreWords: {
+      type: 'json',
+      default: DEFAULT_IGNORE,
+      label: '忽略这些开头',
+      desc: '以这些字符开头的消息一律不理，填 JSON 数组。默认 ["/"]——别的插件的指令本来也到不了这里，这是第二道保险',
+    },
+
     systemPrompt: {
       type: 'textarea',
       default:
         '你在一个 QQ 群里聊天。回答简短口语化，通常两三句话就够，别写长篇大论。' +
-        '可以用 Markdown 排版（标题、列表、加粗、代码块），但别为了排版而排版。' +
-        '不确定的事直说不确定，不要编。',
+        '可以用 Markdown 排版，但别为了排版而排版。不确定的事直说不确定，不要编。',
       label: '人设',
-      desc: '所有会话共用的系统提示词。默认已按 QQ 群聊调好（简短、允许 Markdown）。关掉下面的「Markdown 消息」后记得把这里的 Markdown 那句删掉',
+      desc: '所有会话共用的系统提示词',
     },
     groupPrompt: {
       type: 'textarea',
       default: '',
       label: '群聊追加人设',
-      desc: '只在群里生效，叠加在「人设」后面。比如「群里说话简短些」',
+      desc: '只在群里生效，叠加在「人设」后面',
     },
     directPrompt: {
       type: 'textarea',
@@ -235,29 +181,31 @@ export default {
       label: '私聊追加人设',
       desc: '只在私聊生效，叠加在「人设」后面',
     },
+
     historyLimit: {
       type: 'number',
       default: 10,
       min: 1,
       max: 50,
       label: '记住几轮对话',
-      desc: '1 轮 = 一问一答。越大越费 token，也越容易撞上下文上限',
+      desc: '1 轮 = 一问一答。越大越费 token',
     },
     idleTimeoutMin: {
       type: 'number',
       default: 30,
       min: 1,
       max: 1440,
-      label: '闲置清空（分钟）',
-      desc: '这么久没人说话就忘掉之前的对话。上下文只存内存，重启也会清空',
+      label: '闲置多久忘掉上下文（分钟）',
+      desc: '群里很久没人说话就把上下文回收，省内存也避免拿很久以前的话当上下文',
     },
+
     maxTokens: {
       type: 'number',
       default: 1024,
       min: 1,
-      max: 32000,
+      max: 8192,
       label: '单条回复上限（token）',
-      desc: '太小会说到一半断掉，太大容易又臭又长还费钱',
+      desc: '太小会被截断，太大会让它写长篇',
     },
     temperature: {
       type: 'number',
@@ -265,13 +213,13 @@ export default {
       min: 0,
       max: 2,
       label: '发散程度',
-      desc: '0 最保守、2 最跳脱。注意：开了「思考模式」这项不生效（服务商限制）',
+      desc: '越小越稳，越大越活泼。开了「思考模式」时不生效',
     },
     thinking: {
       type: 'boolean',
       default: false,
       label: '思考模式',
-      desc: '让模型先打草稿再回答，难题更准，但慢好几倍、还更费钱。QQ 聊天一般不用开',
+      desc: '让模型先打草稿再回答，难题更准，但慢好几倍、还更费钱。群聊一般不用开',
     },
     reasoningEffort: {
       type: 'select',
@@ -282,124 +230,125 @@ export default {
         { value: 'max', label: '最高（最慢最贵）' },
       ],
       label: '思考强度',
-      desc: '只在「思考模式」开启时有意义。DeepSeek 官方默认是「高」',
+      desc: '只在「思考模式」开启时有意义',
+    },
+
+    markdown: {
+      type: 'boolean',
+      default: true,
+      label: 'Markdown 消息',
+      desc: '用 QQ 的 markdown 消息类型发回复，标题/列表/加粗能真的渲染。发不出去会自动退回纯文本',
     },
     timeoutSec: {
       type: 'number',
       default: DEFAULT_TIMEOUT_SEC,
       min: 5,
-      max: 600,
-      label: '请求超时（秒）',
-      desc: '超过就放弃这次回答。开了思考模式要调大，不然容易超时',
+      max: 300,
+      label: '超时（秒）',
+      desc: '模型这么久没回就放弃，别让用户干等',
     },
-    access: {
-      type: 'select',
-      default: 'open',
-      // 值是代码里判断的，label 是给人看的
-      options: [
-        { value: 'open', label: '谁都能用' },
-        { value: 'allowlist', label: '只白名单里的会话' },
-      ],
-      label: '谁能用',
-      desc: '选「只白名单」后，名单外的会话不响应、也不消耗 token',
+
+    hostUrl: {
+      type: 'text',
+      default: '',
+      label: 'Webhook 地址',
+      desc: 'webhook 适配器用。插件把消息 POST 到这个地址的 /inbound，并等你回调 /reply',
+      placeholder: 'http://127.0.0.1:9000',
     },
-    allowList: {
-      type: 'json',
-      default: [],
-      label: '白名单',
-      desc: '填会话 id 的数组，如 ["群openid","用户openid"]。只有上面选了 allowlist 才生效',
+    dshUrl: {
+      type: 'text',
+      default: 'http://127.0.0.1:17321',
+      label: 'DSH 地址',
+      desc: 'dsh 适配器用，指向 dsh-roost 插件。装了 DSH 一般不用改',
+      placeholder: 'http://127.0.0.1:17321',
     },
-    markdown: {
-      type: 'boolean',
-      default: true,
-      label: 'Markdown 消息',
-      desc: '用 QQ 的 markdown 消息类型发回复，标题/列表/加粗能真的渲染。关掉则发纯文本、参与多插件合并；发不出去会自动退回纯文本',
+    publicUrl: {
+      type: 'text',
+      default: 'http://127.0.0.1:8080',
+      label: '面板地址',
+      desc: '宿主回话时要能访问到本插件，所以填**宿主能访问到的**面板地址。同机填 127.0.0.1，跨机填内网 IP',
+      placeholder: 'http://127.0.0.1:8080',
     },
+
     debug: {
       type: 'boolean',
       default: false,
       label: '调试日志',
-      desc: '在日志里打印每轮耗时和 token 消耗，排查慢/贵的时候用',
+      desc: '在日志里打印每轮耗时、token 消耗，以及「这条为什么没接」',
     },
   },
 
-  /** @param {RoostCtx} ctx */
+  /** @param {object} ctx Roost 插件上下文 */
   setup(ctx) {
-    const P = ctx.prefix;
-
     const num = (v, def, min = 0) => {
       const n = Number(v);
       return Number.isFinite(n) && n >= min ? n : def;
+    };
+
+    /** 配置每次现读：面板改完立刻生效，不用重启 */
+    const conf = () => {
+      const c = ctx.config ?? {};
+      return {
+        adapter: String(c.adapter ?? 'openai'),
+        apiKey: String(c.apiKey ?? '').trim(),
+        baseUrl: String(c.baseUrl ?? 'https://api.deepseek.com').trim().replace(/\/+$/, ''),
+        model: aliasModel(String(c.model ?? DEFAULT_MODEL).trim()),
+        decide: c.decide === 'mention' ? 'mention' : 'ai',
+        cooldownSec: num(c.cooldownSec, 20),
+        maxRepliesPerMin: num(c.maxRepliesPerMin, 3),
+        ignoreWords: Array.isArray(c.ignoreWords) ? c.ignoreWords.map(String).filter(Boolean) : DEFAULT_IGNORE,
+        systemPrompt: String(c.systemPrompt ?? '').trim(),
+        groupPrompt: String(c.groupPrompt ?? '').trim(),
+        directPrompt: String(c.directPrompt ?? '').trim(),
+        maxTokens: num(c.maxTokens, 1024, 1),
+        temperature: Number.isFinite(Number(c.temperature)) ? Number(c.temperature) : 1,
+        thinking: Boolean(c.thinking),
+        reasoningEffort: ['low', 'high', 'max'].includes(c.reasoningEffort) ? c.reasoningEffort : 'high',
+        markdown: c.markdown !== false,
+        timeoutSec: num(c.timeoutSec, DEFAULT_TIMEOUT_SEC, 5),
+        hostUrl: String(c.hostUrl ?? '').trim().replace(/\/+$/, ''),
+        dshUrl: String(c.dshUrl ?? 'http://127.0.0.1:17321').trim().replace(/\/+$/, ''),
+        publicUrl: String(c.publicUrl ?? 'http://127.0.0.1:8080').trim().replace(/\/+$/, ''),
+        debug: Boolean(c.debug),
+      };
     };
 
     const store = new ChatStore({
       historyLimit: num(ctx.config.historyLimit, 10, 1),
       idleMs: num(ctx.config.idleTimeoutMin, 30, 1) * 60_000,
     });
-
-    /** 配置每次现读：面板改完立刻生效，不用重启 */
-    const conf = () => ({
-      apiKey: String(ctx.config.apiKey ?? '').trim(),
-      baseUrl: String(ctx.config.baseUrl ?? 'https://api.deepseek.com').trim().replace(/\/+$/, ''),
-      model: aliasModel(String(ctx.config.model ?? DEFAULT_MODEL).trim()),
-      systemPrompt: String(ctx.config.systemPrompt ?? '').trim(),
-      groupPrompt: String(ctx.config.groupPrompt ?? '').trim(),
-      directPrompt: String(ctx.config.directPrompt ?? '').trim(),
-      maxTokens: num(ctx.config.maxTokens, 1024, 1),
-      temperature: Number.isFinite(Number(ctx.config.temperature))
-        ? Number(ctx.config.temperature)
-        : 1,
-      thinking: Boolean(ctx.config.thinking),
-      reasoningEffort: ['low', 'high', 'max'].includes(ctx.config.reasoningEffort)
-        ? ctx.config.reasoningEffort
-        : 'high',
-      // 默认开：QQ 支持 markdown 消息类型，能渲染就别浪费
-      markdown: ctx.config.markdown !== false,
-      timeoutSec: num(ctx.config.timeoutSec, DEFAULT_TIMEOUT_SEC, 5),
-      access: ctx.config.access === 'allowlist' ? 'allowlist' : 'open',
-      allowList: Array.isArray(ctx.config.allowList)
-        ? ctx.config.allowList.map((x) => String(x).trim()).filter(Boolean)
-        : [],
-      debug: Boolean(ctx.config.debug),
+    const pace = new PaceStore({
+      cooldownSec: num(ctx.config.cooldownSec, 20),
+      maxRepliesPerMin: num(ctx.config.maxRepliesPerMin, 3),
     });
 
-    /** 没配 Key 时统一走这句，别每个入口各写一遍 */
-    const noKeyHint = () =>
-      `还没配 API Key。\n去面板「插件 → ${ctx.name} → 设置」填上，` +
-      `DeepSeek 的 Key 在 platform.deepseek.com 申请。`;
-
-    const allowed = (chatId) => {
-      const c = conf();
-      if (c.access === 'open') return true;
-      return c.allowList.includes(String(chatId));
-    };
-
-    /** 拼 system 消息：全局人设 + 场景人设 */
-    function systemMessage(msg) {
-      const c = conf();
-      const extra = msg.kind === 'c2c' ? c.directPrompt : c.groupPrompt;
-      const text = [c.systemPrompt, extra].filter(Boolean).join('\n\n');
-      return text ? { role: 'system', content: text } : null;
-    }
-
     /**
-     * 真正调模型。
-     *
-     * 用 OpenAI 兼容格式而不是 DeepSeek 私有 SDK：零依赖，且换服务商只改 baseUrl。
-     * `stream: false` 是有意的——QQ 群聊不支持流式，用户只看最终消息。
+     * 宿主回话通道。webhook / dsh 适配器用它等宿主把话说完；
+     * openai 适配器不走这条路，这条路由平时是空闲的。
      */
-    /**
-     * 这一轮交给谁去想。
-     *
-     * 插件本体不关心模型是哪家的：openai 适配器直连兼容端点，
-     * 以后 dsh / webhook 适配器把同一份 messages 交给别的宿主。
-     * 懒加载是故意的——用户选了还没实现的适配器时，
-     * 应该在**说话的时候**报错，而不是整个插件加载失败。
-     */
+    const bridge = createBridge({ log: (m) => ctx.logger.warn(`[ai-chat] ${m}`) });
+    const profile = createProfile({ storage: ctx.storage });
+
+    ctx.registerRoute('POST', '/reply', async ({ body, json }) => {
+      const r = bridge.handleReply(body ?? {});
+      return json(r.code, r.body);
+    });
+    ctx.onTeardown(() => bridge.dispose());
+
+    /* ---------------- 适配器 ---------------- */
+
     let adapter = null;
     function getAdapter() {
-      const name = String(conf().adapter || 'openai');
-      if (!adapter || adapter.name !== name) adapter = createAdapter({ conf, explainHttp });
+      const c = conf();
+      if (!adapter || adapter.name !== c.adapter) {
+        adapter = createAdapter({
+          conf,
+          explainHttp,
+          bridge,
+          publicUrl: () => conf().publicUrl,
+          log: (m) => ctx.logger.info(`[ai-chat] ${m}`),
+        });
+      }
       return adapter;
     }
 
@@ -407,27 +356,128 @@ export default {
       return getAdapter().chat({ messages, ...opts });
     }
 
-    /**
-     * 处理一条对话。
-     *
-     * 同一会话串行：正在生成时又来个问题，直接告诉用户在等，
-     * 不排队——排队会让后一个问题的回答对不上上下文，反而更乱。
-     */
-    async function converse(msg, userText) {
-      const c = conf();
-      const s = store.get(msg.chatId);
+    /* ---------------- 提示词 ---------------- */
 
-      if (s.busy) {
-        return msg.reply('上一条还在想，稍等一下。');
+    /**
+     * 拼 system。
+     *
+     * 三层：全局人设 → 场景人设 → 这个会话自己的（人设 + 记忆）。
+     * `force` 为假时再追加一段「判断要不要接话」——只在需要它自己判断时才说，
+     * 被 @ 时说这段反而会让它犹豫。
+     */
+    async function systemMessage(msg, c, force) {
+      const extra = msg.kind === 'c2c' ? c.directPrompt : c.groupPrompt;
+      const mine = await profile.systemExtra(msg.chatId);
+
+      const parts = [c.systemPrompt, extra, mine].filter(Boolean);
+
+      if (!force) {
+        parts.push(
+          [
+            '【判断要不要接话】',
+            '这是群里的普通聊天，不一定在跟你说话。**大多数时候你不该接**。',
+            `不需要你回应时（别人互相聊、自言自语、跟你无关、只是在说「哈哈哈」），只输出 ${SKIP_MARK}，不要输出任何别的内容。`,
+            '确实该你说话时才回答，并且尽量短。',
+          ].join('\n'),
+        );
       }
 
-      s.busy = true;
-      s.controller = new AbortController();
+      parts.push(
+        [
+          '【动作标记】',
+          '需要长期记住某件事：在回复里加 <<remember: 内容>>',
+          '要忘掉某件事：<<forget: 关键词>>',
+          '要改这个会话的人设：<<persona: 内容>>',
+          '要清空这个会话的上下文：<<clear>>',
+          '这些标记不会展示给用户，放在回复最后就行。不需要就不要写。',
+        ].join('\n'),
+      );
+
+      const text = parts.join('\n\n');
+      return text ? { role: 'system', content: text } : null;
+    }
+
+    /* ---------------- 动作标记 ---------------- */
+
+    /** 执行模型要求的动作，返回给用户的确认话（没有就返回空串） */
+    async function runActions(msg, actions) {
+      if (!actions.length) return '';
+      const done = new Set();
+
+      for (const a of actions) {
+        try {
+          if (a.type === 'remember' && a.value) {
+            await profile.addFact(msg.chatId, a.value);
+            done.add('记住了');
+          } else if (a.type === 'forget' && a.value) {
+            await profile.removeFact(msg.chatId, a.value);
+            done.add('忘掉了');
+          } else if (a.type === 'persona' && a.value) {
+            await profile.setPersona(msg.chatId, a.value);
+            done.add('人设改了');
+          } else if (a.type === 'clear') {
+            store.reset(msg.chatId);
+            done.add('上下文清了');
+          }
+        } catch (e) {
+          ctx.logger.warn(`[ai-chat] 动作 ${a.type} 执行失败：${e.message}`);
+        }
+      }
+      return done.size ? `${[...done].join('，')}。` : '';
+    }
+
+    /* ---------------- 主流程 ---------------- */
+
+    /**
+     * 收到一条消息。
+     *
+     * 这里会**一直 await 到回复发完**——因为 `msg.reply` 是攒到本次处理结束
+     * 由内核合并发出的，提前 return 的话回复会留在缓冲里发不出去。
+     */
+    async function handle(msg) {
+      const c = conf();
+      const paceSt = pace.get(msg.chatId);
+      const gate = shouldConsider(msg, c, paceSt);
+
+      if (!gate.go) {
+        if (c.debug) ctx.logger.debug(`[ai-chat] 不接（${gate.reason}）：${String(msg.content).slice(0, 30)}`);
+        return;
+      }
+
+      // 同一个群同时只跑一轮：群里刷屏时不要并发一堆请求
+      if (paceSt.busy) {
+        if (c.debug) ctx.logger.debug(`[ai-chat] ${msg.chatId} 上一轮还没完，跳过`);
+        return;
+      }
+
+      // 没配 Key 只在被明确叫到时提醒一句，否则静默——群聊里不该刷这个
+      if (c.adapter === 'openai' && !c.apiKey) {
+        if (gate.force) {
+          await msg
+            .reply(
+              `还没配 API Key。\n去面板「插件 → ${ctx.name} → 设置」填上，DeepSeek 的 Key 在 platform.deepseek.com 申请。`,
+            )
+            .catch(() => {});
+        }
+        return;
+      }
+
+      paceSt.busy = true;
+      paceSt.controller = new AbortController();
+      const s = store.get(msg.chatId);
       const started = Date.now();
+      let timer = null;
 
       try {
-        // 每轮重建 system，这样面板改人设立刻生效
-        const sys = systemMessage(msg);
+        // 超时：到点直接中断，别让用户干等
+        timer = setTimeout(() => {
+          try {
+            paceSt.controller.abort(Object.assign(new Error('timeout'), { name: 'TimeoutError' }));
+          } catch {}
+        }, c.timeoutSec * 1000);
+        timer.unref?.();
+
+        const sys = await systemMessage(msg, c, gate.force);
         if (sys) {
           if (s.messages[0]?.role === 'system') s.messages[0] = sys;
           else s.messages.unshift(sys);
@@ -435,246 +485,82 @@ export default {
           s.messages.shift();
         }
 
-        s.messages.push({ role: 'user', content: userText });
+        // 入站整形：语音 ASR、引用原文、合并转发、卡片都并进来
+        s.messages.push({ role: 'user', content: buildUserContent(msg, msg.content) });
         store.trim(s);
 
         const { text, usage, model } = await callModel(s.messages, {
-          signal: s.controller.signal,
-          model: s.model || c.model,
+          signal: paceSt.controller.signal,
+          model: c.model,
+          msg,
+          chat: { kind: msg.kind, chatId: msg.chatId },
         });
 
-        s.messages.push({ role: 'assistant', content: text });
+        const { text: cleaned, actions } = parseActions(text);
+        const confirm = await runActions(msg, actions);
+
+        /**
+         * 不该接话：把这条用户消息**从上下文里撤掉**。
+         *
+         * 不撤的话，下次真说话时模型会看到一堆「自己没理的插话」，
+         * 上下文全是噪音，而且它可能以为自己当时应该回答。
+         */
+        if (!gate.force && isSkip(cleaned) && !confirm) {
+          if (s.messages.at(-1)?.role === 'user') s.messages.pop();
+          if (c.debug) ctx.logger.debug(`[ai-chat] ${msg.chatId} 模型判断不接话`);
+          return;
+        }
+
+        const body = [cleaned, confirm].filter(Boolean).join('\n\n');
+        if (!body) return; // 只有动作、没有话要说
+
+        s.messages.push({ role: 'assistant', content: cleaned || confirm });
         store.trim(s);
         s.rounds += 1;
 
+        await sendReply(msg, body, {
+          markdown: c.markdown,
+          log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
+        });
+
+        // 只有「主动接话」才计入节奏，被 @ 的不占配额
+        if (!gate.force) pace.markReply(msg.chatId);
+
         if (c.debug) {
           const tok = usage ? ` · ${usage.prompt_tokens}+${usage.completion_tokens} tok` : '';
-          ctx.logger.info(`[ai-chat] ${msg.chatId.slice(0, 8)} ${model} ${Date.now() - started}ms${tok}`);
-        }
-
-        /**
-         * 发送方式取决于 `markdown` 开关。
-         *
-         * 开：用 `replyMarkdown` 发 markdown 消息类型，标题、列表、加粗、
-         * 代码块在 QQ 里能真的渲染出来。**但它会先把攒着的文本 flush 掉
-         * 再单独发**，所以这时不参与多插件合并——能渲染比合并更值。
-         *
-         * 关：用 `reply`，纯文本，参与合并，带【插件名】标题。
-         *
-         * markdown 失败要降级：`replyMarkdown` 内部把错误吞了只记日志，
-         * 返回 null。不降级的话用户什么都收不到，还以为机器人挂了。
-         */
-        if (c.markdown) {
-          const sent = await msg.replyMarkdown({ content: text });
-          if (!sent) await msg.reply(text);
-        } else {
-          await msg.reply(text);
+          ctx.logger.info(
+            `[ai-chat] ${msg.chatId.slice(0, 8)} ${model} ${Date.now() - started}ms${tok}${gate.force ? ' · 被叫' : ''}`,
+          );
         }
       } catch (e) {
-        // 用户主动 /停止 会走到这里，不算错误
-        if (e?.name === 'AbortError') {
-          await msg.reply('已停止。').catch(() => {});
+        const name = e?.name ?? '';
+        if (name === 'AbortError') {
+          if (c.debug) ctx.logger.info(`[ai-chat] ${msg.chatId} 已中断`);
+        } else if (name === 'TimeoutError') {
+          // 只在被明确叫到时才说「超时了」，否则安静点
+          if (gate.force) await msg.reply(`模型 ${c.timeoutSec} 秒没回，先放弃了。`).catch(() => {});
         } else {
-          const friendly = e?.name === 'TimeoutError'
-            ? `模型 ${c.timeoutSec} 秒没回，先放弃了。可以发 ${P}停止 或重试。`
-            : e.message || '调用失败';
+          const friendly = e?.message || '调用失败';
           ctx.logger.warn(`[ai-chat] 调用失败：${friendly}`);
-          await msg.reply(`出错了：${friendly}`).catch(() => {});
+          if (gate.force) await msg.reply(`出错了：${friendly}`).catch(() => {});
         }
         // 失败就把这轮的提问撤掉，免得下一轮带着「没答上的问题」继续
         if (s.messages.at(-1)?.role === 'user') s.messages.pop();
       } finally {
-        s.busy = false;
-        s.controller = null;
+        if (timer) clearTimeout(timer);
+        paceSt.busy = false;
+        paceSt.controller = null;
         s.lastAt = Date.now();
       }
     }
 
-    /* ---------------- 对话入口 ---------------- */
+    ctx.on('message', handle);
 
-    /**
-     * 固定格式：`@机器人 /ai 内容`。
-     *
-     * 为什么不做「@ 了随便说就接」：
-     *   · 群里 @ 一下往往只是提到机器人，不是要它回答——那样每句都得接，很吵
-     *   · 免 @ 窗口（sticky）更糟，@ 过一次之后整个群几分钟内说什么都被吃掉
-     *   · 有个明确的 `/ai`，用户知道自己什么时候在跟 AI 说话，不 @ 也不误触发
-     *
-     * **发给模型的是 `/ai` 后面的内容**，指令本身剔除。
-     * 用 `args` 而不是 `msg.content` 就是这个道理：content 里带着 `/ai`，
-     * 直接发过去模型会以为用户在让它执行命令，回答容易跑偏。
-     */
-    ctx.command('ai <内容...>', {
-      desc: '和 AI 对话，后面跟你的问题',
-      usage: `${P}ai 今天天气怎么样`,
-    }, async (msg, { args }) => {
-      // args 是 `/ai` 后面按空格切开的部分，拼回去就是用户想问的原文
-      const text = String((args ?? []).join(' ') ?? '').trim();
+    /* ---------------- 定时清扫 ---------------- */
 
-      if (!text) {
-        const lines = [
-          '要问什么？格式是：',
-          msg.kind === 'c2c' ? `  ${P}ai 你的问题` : `  @我 ${P}ai 你的问题`,
-          '',
-          `例：${P}ai 用一句话解释什么是递归`,
-          `换个话题：${P}新会话`,
-        ];
-        return msg.reply(lines.join('\n'));
-      }
-
-      if (!allowed(msg.chatId)) {
-        // 白名单外：不响应、不消耗 token。但明确说一句，
-        // 否则用户以为机器人坏了
-        return msg.reply('这个会话不在 AI 对话的白名单里。');
-      }
-
-      const c = conf();
-      if (!c.apiKey) return msg.reply(noKeyHint());
-
-      await converse(msg, text);
+    ctx.schedule('ai-chat-sweep', 60_000, () => {
+      pace.sweep();
+      store.evictIdle();
     });
-
-    /* ---------------- 命令 ---------------- */
-
-    ctx.command('新会话 [说明]', {
-      desc: '清空当前对话的上下文，重新开始',
-      usage: `${P}新会话`,
-    }, async (msg) => {
-      store.reset(msg.chatId);
-      await msg.reply('上下文已清空，重新开始吧。');
-    });
-
-    // 常见的别名，用户凭直觉打的词都接住
-    ctx.command('清空', { desc: '同「新会话」' }, async (msg) => {
-      store.reset(msg.chatId);
-      await msg.reply('上下文已清空，重新开始吧。');
-    });
-
-    ctx.command('重置', { desc: '同「新会话」' }, async (msg) => {
-      store.reset(msg.chatId);
-      await msg.reply('上下文已清空，重新开始吧。');
-    });
-
-    /**
-     * 切模型要管理员。
-     *
-     * 模型直接决定花多少钱——`deepseek-v4-pro` 的输出价是 `deepseek-flash`
-     * 的三四倍，而钱是机器人在付。普通群友随口一句 `/模型 xxx`
-     * 就把整个会话的单价抬上去，这个权限不该开放。
-     *
-     * 只读的 `/模型`（不带参数看当前是哪个）也一起限了：
-     * 分开判太绕，而「看当前模型」对普通用户也没什么用。
-     */
-    ctx.command('模型 [名字]', {
-      desc: '查看或切换当前会话用的模型（需管理员）',
-      usage: `${P}模型  ·  ${P}模型 deepseek-v4-pro`,
-      admin: true,
-    }, async (msg, { args }) => {
-      const c = conf();
-      const s = store.get(msg.chatId);
-      const want = String(args?.[0] ?? '').trim();
-
-      if (!want) {
-        const cur = s.model || c.model;
-        const hint = cur === c.model ? '' : `（默认是 ${c.model}）`;
-        return msg.reply(`当前模型：${cur}${hint}\n换一个：${P}模型 deepseek-v4-pro`);
-      }
-      /**
-       * 校验模型名。
-       *
-       * 必须挡住 `../../etc/passwd` 这种——只写 `[A-Za-z0-9._:/-]` 是不够的，
-       * 点、斜杠、横线都在允许集里，`..` 也能通过。所以额外要求：
-       * 以字母数字开头、不含 `..`。
-       *
-       * 现在模型名只进请求体不进 URL，所以不是安全问题；但填错了要等
-       * 服务商返回 400 才知道，不如在这里直接说清楚。
-       */
-      if (want.length > 64 || !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(want) || want.includes('..')) {
-        return msg.reply('模型名看着不对：要以字母或数字开头，不能有空格和 ..');
-      }
-      s.model = want;
-      await msg.reply(`已切到 ${want}，只影响这个会话。发 ${P}新会话 可以重新开始。`);
-    });
-
-    ctx.command('停止', { desc: '中止正在生成的回答' }, async (msg) => {
-      const s = store.map.get(msg.chatId);
-      if (!s?.busy || !s.controller) return msg.reply('当前没有在生成的回答。');
-      s.controller.abort();
-      await msg.reply('正在停…');
-    });
-
-    ctx.command('对话状态', { desc: '看这个会话的上下文情况' }, async (msg) => {
-      const c = conf();
-      const s = store.map.get(msg.chatId);
-      const rounds = s?.rounds ?? 0;
-      const kept = s?.messages.filter((m) => m.role !== 'system').length ?? 0;
-      const idleMin = Math.max(0, Math.round(((s?.lastAt ?? 0) + store.idleMs - Date.now()) / 60000));
-      const lines = [
-        `模型：${s?.model || c.model}`,
-        `已对话 ${rounds} 轮，上下文里存着 ${kept} 条`,
-        `正在生成：${s?.busy ? '是' : '否'}`,
-        rounds ? `闲置 ${idleMin} 分钟后自动清空` : '还没开始对话',
-        `全局共 ${store.size} 个活跃会话`,
-      ];
-      await msg.reply(lines.join('\n'));
-    });
-
-    ctx.command('AI帮助', { desc: 'AI 对话怎么用' }, async (msg) => {
-      const c = conf();
-      const lines = [
-        '## AI 对话',
-        '',
-        '格式固定是「指令 + 你的问题」，指令本身不会发给 AI：',
-        msg.kind === 'c2c' ? `  ${P}ai 你的问题` : `  @我 ${P}ai 你的问题`,
-        `例：${P}ai 用一句话解释什么是递归`,
-        '',
-        '## 其它指令',
-        `- ${P}新会话 —— 清空上下文重新开始`,
-        `- ${P}模型 —— 看当前模型，${P}模型 deepseek-v4-pro 换一个`,
-        `- ${P}停止 —— 中止正在生成的回答`,
-        `- ${P}对话状态 —— 看这个会话聊了几轮`,
-        '',
-        `当前模型：${c.model}`,
-        `上下文：保留最近 ${store.historyLimit} 轮，闲置 ${Math.round(store.idleMs / 60000)} 分钟清空`,
-      ];
-      await msg.reply(lines.join('\n'));
-    });
-
-    ctx.menu('AI 对话', [
-      { text: `${P}ai 问题`, desc: '固定格式，指令会被剔除，AI 只看到你的问题' },
-      { text: `${P}新会话`, desc: '聊偏了就用这个清掉上下文' },
-      { text: `${P}模型`, desc: '换模型，比如 deepseek-v4-pro 能力更强' },
-      { text: `${P}停止`, desc: '回答太长等不及了，中止它' },
-    ]);
-
-    /* ---------------- 后台维护 ---------------- */
-
-    // 每分钟扫一次闲置会话。用 ctx.schedule，插件卸载时框架会自动清掉定时器
-    ctx.schedule('ai-chat-evict', 60_000, () => {
-      const n = store.evictIdle();
-      if (n) ctx.logger.debug(`[ai-chat] 回收 ${n} 个闲置会话`);
-    });
-
-    /**
-     * 把配置文件里的旧模型名迁移掉。
-     *
-     * `conf()` 读的时候已经映射了，调用不会出错；但面板上显示的仍是
-     * 文件里那个旧名（`deepseek-chat`），用户会以为改没生效、或者以为自己
-     * 用着老模型。所以启动时顺手把文件里的值改成新名，显示和实际一致。
-     *
-     * 只改这一种情况：值确实是已知的旧名。用户自己填的其它模型名一律不碰。
-     */
-    const rawModel = String(ctx.config.model ?? '').trim();
-    if (MODEL_ALIAS[rawModel]) {
-      const fixed = MODEL_ALIAS[rawModel];
-      ctx.logger.info(`配置里的模型名 ${rawModel} 已过时，自动改为 ${fixed}`);
-      ctx.setConfig?.({ model: fixed }).catch(() => {
-        // 写不进去也不影响运行：conf() 每次读都会映射
-      });
-    }
-
-    if (!conf().apiKey) {
-      ctx.logger.warn('[ai-chat] 还没配 API Key，对话功能不可用。去面板「插件 → AI 对话 → 设置」填上');
-    }
   },
 };

@@ -1,0 +1,131 @@
+/**
+ * 出站整形：把宿主的回复变成 QQ 里能发出去的一条或几条消息。
+ *
+ * 三件事：
+ *   1. **切段**——QQ 单条有长度上限，长回答硬发会被平台截断（或者直接失败）
+ *   2. **不切坏 Markdown**——代码块、列表被拦腰截断，渲染出来是乱的
+ *   3. **被动回复次数有上限**——同一条消息最多回 5 次（`msg_seq` 1–5），
+ *      切太多段会撞墙，所以段数也要封顶
+ */
+
+/** 单条上限。官方没给明确数字，留足余量：1800 个字符 */
+export const MAX_CHUNK = 1800;
+
+/** 最多发几段。同一条消息官方只让回 5 次，留一段给「出错了」这类提示 */
+export const MAX_CHUNKS = 4;
+
+/**
+ * 按行切，尽量在段落/列表边界断开，且不把 ``` 代码块切断。
+ *
+ * @param {string} text
+ * @param {number} [max]
+ * @returns {string[]}
+ */
+export function splitText(text, max = MAX_CHUNK) {
+  const s = String(text ?? '');
+  if (!s) return [];
+  if (s.length <= max) return [s];
+
+  const lines = s.split('\n');
+  const chunks = [];
+  let cur = '';
+  let inFence = false;
+
+  const push = () => {
+    if (cur.trim()) chunks.push(cur.replace(/\s+$/, ''));
+    cur = '';
+  };
+
+  for (const line of lines) {
+    const isFence = /^\s*```/.test(line);
+
+    // 单行就超长：硬切（代码块里的长行只能这样）
+    if (line.length > max) {
+      if (cur) push();
+      for (let i = 0; i < line.length; i += max) {
+        const piece = line.slice(i, i + max);
+        if (piece) chunks.push(piece);
+      }
+      continue;
+    }
+
+    if (cur.length + line.length + 1 > max) {
+      /**
+       * 断在这里。如果正处在代码块里，得先把围栏补上，
+       * 否则下一段开头是代码、却没有起始的 ```，渲染全乱。
+       */
+      if (inFence) {
+        cur += '\n```';
+        push();
+        cur = '```\n';
+      } else {
+        push();
+      }
+    }
+
+    cur += (cur ? '\n' : '') + line;
+    if (isFence) inFence = !inFence;
+  }
+  push();
+
+  return chunks;
+}
+
+/**
+ * 切段 + 封顶。超过段数上限就丢掉后面的，并留一句提示。
+ *
+ * @param {string} text
+ * @param {number} [maxChunks]
+ * @returns {string[]}
+ */
+export function planChunks(text, maxChunks = MAX_CHUNKS) {
+  const all = splitText(text);
+  if (all.length <= maxChunks) return all;
+  const kept = all.slice(0, maxChunks);
+  const dropped = all.slice(maxChunks).join('');
+  kept[kept.length - 1] += `\n\n（太长了，后面还有约 ${dropped.length} 字没发出来）`;
+  return kept;
+}
+
+/**
+ * 发回复。
+ *
+ * 第一段走被动回复（带 msg_id，不消耗主动额度），后续段同样走 `msg.reply`——
+ * 框架会自动递增 `msg_seq`，只要不超过 5 次就行（`MAX_CHUNKS` 就是为此留的余量）。
+ *
+ * `markdown` 开着时第一段用 markdown 消息类型发；它内部失败会返回 null，
+ * 这时降级成纯文本——不降级的话用户什么都收不到，以为机器人挂了。
+ *
+ * @param {object} msg
+ * @param {string} text
+ * @param {object} p
+ * @param {boolean} [p.markdown]
+ * @param {(s:string)=>void} [p.log]
+ * @returns {Promise<number>} 实际发出去几段
+ */
+export async function sendReply(msg, text, { markdown = false, log = () => {} } = {}) {
+  const chunks = planChunks(text);
+  if (!chunks.length) return 0;
+
+  let sent = 0;
+  for (let i = 0; i < chunks.length; i++) {
+    const body = chunks[i];
+    try {
+      if (i === 0 && markdown) {
+        const r = await msg.replyMarkdown({ content: body });
+        if (r) {
+          sent++;
+          continue;
+        }
+        log('markdown 发送失败，降级纯文本');
+      }
+      await msg.reply(body);
+      sent++;
+    } catch (e) {
+      log(`第 ${i + 1} 段发送失败：${e?.message ?? e}`);
+      // 后面的段也别发了——大概率是同一个原因（被禁言、超限）
+      break;
+    }
+  }
+  return sent;
+}
