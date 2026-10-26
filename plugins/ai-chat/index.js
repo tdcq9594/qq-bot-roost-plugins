@@ -22,6 +22,8 @@
  *     再调视觉模型，链路长且容易失效，等有人真需要再说。
  */
 /** 一次请求最多等多久。超过就中断，别让用户干等 */
+import { createAdapter, ADAPTER_OPTIONS } from './adapter/index.js';
+
 const DEFAULT_TIMEOUT_SEC = 90;
 const DEFAULT_MODEL = 'deepseek-flash';
 
@@ -123,7 +125,7 @@ function explainHttp(status, bodyText = '') {
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '1.2.3',
+  version: '1.3.0',
   description: '把大模型接进群聊和私聊，@机器人 就能对话，每会话独立上下文',
   frameworkVersion: '>=0.6.10',
 
@@ -184,6 +186,13 @@ export default {
   ],
 
   config: {
+    adapter: {
+      type: 'select',
+      default: 'openai',
+      options: ADAPTER_OPTIONS,
+      label: '适配器',
+      desc: '这一轮交给谁去想。openai = 直连兼容端点（默认，装上就能用）；dsh = 交给 DeepSeek Harness，能用它的工具和记忆（需另装 dsh-roost）',
+    },
     apiKey: {
       type: 'text',
       default: '',
@@ -379,62 +388,23 @@ export default {
      * 用 OpenAI 兼容格式而不是 DeepSeek 私有 SDK：零依赖，且换服务商只改 baseUrl。
      * `stream: false` 是有意的——QQ 群聊不支持流式，用户只看最终消息。
      */
-    async function callModel(messages, { signal, model }) {
-      const c = conf();
+    /**
+     * 这一轮交给谁去想。
+     *
+     * 插件本体不关心模型是哪家的：openai 适配器直连兼容端点，
+     * 以后 dsh / webhook 适配器把同一份 messages 交给别的宿主。
+     * 懒加载是故意的——用户选了还没实现的适配器时，
+     * 应该在**说话的时候**报错，而不是整个插件加载失败。
+     */
+    let adapter = null;
+    function getAdapter() {
+      const name = String(conf().adapter || 'openai');
+      if (!adapter || adapter.name !== name) adapter = createAdapter({ conf, explainHttp });
+      return adapter;
+    }
 
-      /**
-       * 请求体按服务商分别拼。
-       *
-       * `thinking` 是 DeepSeek 的参数，别家（Kimi / 通义 / Ollama）不认识，
-       * 塞过去可能直接 400。所以只在地址是 DeepSeek 时才带。
-       *
-       * 为什么要显式传 `disabled`：**DeepSeek 的思考模式默认是开的、
-       * 强度默认 high**。不显式关掉，群里问一句「在吗」它先想半天，
-       * 而且思考过程算输出 token（比普通 token 贵），又慢又费钱。
-       *
-       * 思考模式还**不支持 temperature**（传了不报错但不生效），
-       * 所以开着的时候干脆不传，免得用户以为调了发散程度有用。
-       */
-      const isDeepSeek = /deepseek/i.test(c.baseUrl);
-      const body = {
-        model: model || c.model,
-        messages,
-        max_tokens: c.maxTokens,
-        stream: false,
-      };
-      if (isDeepSeek) {
-        body.thinking = { type: c.thinking ? 'enabled' : 'disabled' };
-        if (c.thinking) body.reasoning_effort = c.reasoningEffort;
-      }
-      if (!c.thinking) body.temperature = c.temperature;
-
-      const res = await fetch(`${c.baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${c.apiKey}`,
-        },
-        body: JSON.stringify(body),
-        signal,
-      });
-
-      if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        throw new Error(explainHttp(res.status, body));
-      }
-
-      const data = await res.json().catch(() => null);
-      const text = data?.choices?.[0]?.message?.content;
-      if (typeof text !== 'string' || !text.trim()) {
-        // 有的服务商会把「内容被过滤」放在 finish_reason 里，一起说出来
-        const reason = data?.choices?.[0]?.finish_reason;
-        throw new Error(reason === 'content_filter' ? '回复被服务商的内容审核拦了' : '模型返回了空内容');
-      }
-      return {
-        text: text.trim(),
-        usage: data?.usage ?? null,
-        model: data?.model || model || c.model,
-      };
+    async function callModel(messages, opts = {}) {
+      return getAdapter().chat({ messages, ...opts });
     }
 
     /**
