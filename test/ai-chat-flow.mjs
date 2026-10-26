@@ -289,6 +289,40 @@ const baseConf = (over = {}) => () => ({
   ok('webhook: 没填地址时提示清楚', /还没填宿主的接收地址/.test(err?.message ?? ''), err?.message ?? '');
 }
 
+/* ---------------- 富媒体 ---------------- */
+
+{
+  const { sendMedia, isRemote, MAX_MEDIA } = await load('outbound.js');
+  const calls = [];
+  const msg = {
+    replyImage: async (src, o) => { calls.push(['img', src, o.local]); return { ok: 1 } },
+    replyVoice: async (src, o) => { calls.push(['voice', src, o.local]); return { ok: 1 } },
+  };
+
+  const n = await sendMedia(msg, [
+    { type: 'image', value: 'https://x/a.png' },
+    { type: 'image', value: 'D:/pics/b.jpg' },
+    { type: 'voice', value: '/tmp/c.silk' },
+  ]);
+  ok('媒体: 三个都发了', n === 3, String(n));
+  ok('媒体: 网址走远程', calls[0][2] === false);
+  ok('媒体: 本地路径走 local', calls[1][2] === true);
+  ok('媒体: 语音走 replyVoice', calls[2][0] === 'voice');
+
+  // 模型有文件工具，能发任何文件——扩展名白名单是最后一道闸
+  const logs = [];
+  const n2 = await sendMedia(msg, [
+    { type: 'image', value: '/etc/passwd' },
+    { type: 'image', value: 'a.env' },
+  ], { log: (m) => logs.push(m) });
+  ok('媒体: 非图片扩展名被拒', n2 === 0 && logs.length === 2, logs.join(' | '));
+
+  const n3 = await sendMedia(msg, Array.from({ length: 6 }, (_, i) => ({ type: 'image', value: `a${i}.png` })));
+  ok('媒体: 数量封顶', n3 === MAX_MEDIA, String(n3));
+
+  ok('媒体: 识别网址', isRemote('http://a/b.png') === true && isRemote('D:/a.png') === false);
+}
+
 /* ---------------- 汇总 ---------------- */
 
 console.log(`\n${pass}/${pass + fails.length} 通过`);

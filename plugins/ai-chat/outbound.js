@@ -88,6 +88,59 @@ export function planChunks(text, maxChunks = MAX_CHUNKS) {
 }
 
 /**
+ * 一次最多发几个富媒体。发太多会被平台限流，也吵。
+ */
+export const MAX_MEDIA = 3;
+
+/** 图片/语音的扩展名白名单——不让模型把任意文件当图发出去 */
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i;
+const VOICE_EXT = /\.(silk|amr|mp3|wav|ogg|m4a)$/i;
+
+/** 是网址还是本地路径 */
+export function isRemote(src) {
+  return /^https?:\/\//i.test(String(src ?? ''));
+}
+
+/**
+ * 发富媒体（图片 / 语音）。
+ *
+ * 表情包、生图都走这条：DSH 那边生成或找到文件，模型输出
+ * `<<image: 路径>>`，这里调 `msg.replyImage` 发出去。
+ *
+ * 为什么要白名单扩展名：模型有文件工具，理论上能发任何文件。
+ * 加一道扩展名校验，至少不会把 `.env` 当图片传上去。
+ *
+ * @param {object} msg
+ * @param {Array<{type:string, value:string}>} items
+ * @param {object} [opts]
+ * @returns {Promise<number>} 成功发出几个
+ */
+export async function sendMedia(msg, items, { log = () => {}, max = MAX_MEDIA } = {}) {
+  let sent = 0;
+  for (const it of (items ?? []).slice(0, max)) {
+    const src = String(it?.value ?? '').trim();
+    if (!src) continue;
+
+    const ext = src.split(/[?#]/)[0];
+    const ok = it.type === 'voice' ? VOICE_EXT.test(ext) : IMAGE_EXT.test(ext);
+    if (!ok) {
+      log(`${it.type} 扩展名不在白名单里，跳过：${src}`);
+      continue;
+    }
+
+    const opts = { local: !isRemote(src) };
+    try {
+      const r = it.type === 'voice' ? await msg.replyVoice?.(src, opts) : await msg.replyImage?.(src, opts);
+      if (r) sent++;
+      else log(`${it.type} 没发出去：${src}`);
+    } catch (e) {
+      log(`${it.type} 发送失败：${e?.message ?? e}`);
+    }
+  }
+  return sent;
+}
+
+/**
  * 发回复。
  *
  * 第一段走被动回复（带 msg_id，不消耗主动额度），后续段同样走 `msg.reply`——

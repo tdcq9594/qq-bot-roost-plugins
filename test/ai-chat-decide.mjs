@@ -175,6 +175,25 @@ ok(
   ok('动作: 不完整的标记原样保留', r.text.includes('没闭合'));
 }
 
+{
+  const r = parseActions('画好了 <<image: D:/out/cat.png>>');
+  ok('动作: 解析出 image', r.actions.length === 1 && r.actions[0].type === 'image');
+  ok('动作: image 带路径', r.actions[0].value === 'D:/out/cat.png', r.actions[0].value);
+  ok('动作: 正文只剩「画好了」', r.text === '画好了', JSON.stringify(r.text));
+}
+
+{
+  const r = parseActions('<<voice: https://x/a.silk>>');
+  ok('动作: 解析出 voice', r.actions[0]?.type === 'voice' && r.actions[0].value === 'https://x/a.silk');
+}
+
+{
+  // 图片和文字标记能共存
+  const r = parseActions('记一下 <<remember: 喜欢猫>> <<image: a.png>>');
+  ok('动作: 文本动作和媒体动作共存', r.actions.length === 2);
+  ok('动作: 类型对', r.actions.map((a) => a.type).join() === 'remember,image');
+}
+
 /* ---------------- 汇总 ---------------- */
 
 console.log(`\n${pass}/${pass + fails.length} 通过`);

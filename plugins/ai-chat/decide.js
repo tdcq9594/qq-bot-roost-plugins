@@ -94,6 +94,8 @@ export function isSkip(text) {
  *   <<forget: 关键词>>   忘掉一件事
  *   <<persona: 内容>>    改这个会话的人设
  *   <<clear>>            清空这个会话的上下文
+ *   <<image: 地址或路径>> 发一张图（表情包、生成的图都走这条）
+ *   <<voice: 地址或路径>> 发一条语音
  *
  * @param {string} text
  * @returns {{ text: string, actions: Array<{type:string, value?:string}> }}
@@ -113,6 +115,9 @@ export function parseActions(text) {
   take(/<<forget:\s*([\s\S]*?)>>/gi, 'forget');
   take(/<<persona:\s*([\s\S]*?)>>/gi, 'persona');
   take(/<<clear>>/gi, 'clear', false);
+  // 富媒体：图片（表情包/生图都走这条）和语音
+  take(/<<image:\s*([\s\S]*?)>>/gi, 'image');
+  take(/<<voice:\s*([\s\S]*?)>>/gi, 'voice');
 
   // 摘掉标记后可能留下多余空行，收一下
   out = out.replace(/\n{3,}/g, '\n\n').trim();

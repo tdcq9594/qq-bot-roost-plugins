@@ -28,7 +28,7 @@
 import { createAdapter, ADAPTER_OPTIONS } from './adapter/index.js';
 import { createBridge } from './adapter/bridge.js';
 import { buildUserContent } from './inbound.js';
-import { sendReply } from './outbound.js';
+import { sendReply, sendMedia } from './outbound.js';
 import { createProfile } from './profile.js';
 import { shouldConsider, isSkip, parseActions, SKIP_MARK, DEFAULT_IGNORE } from './decide.js';
 import { ChatStore, PaceStore } from './session.js';
@@ -55,7 +55,7 @@ function explainHttp(status, bodyText = '') {
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '3.0.0',
+  version: '3.1.0',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -426,6 +426,8 @@ export default {
           '要忘掉某件事：<<forget: 关键词>>',
           '要改这个会话的人设：<<persona: 内容>>',
           '要清空这个会话的上下文：<<clear>>',
+          '要发图片（表情包、画好的图）：<<image: 网址或本地路径>>',
+          '要发语音：<<voice: 网址或本地路径>>',
           '这些标记不会展示给用户，放在回复最后就行。不需要就不要写。',
         ].join('\n'),
       );
@@ -554,6 +556,8 @@ export default {
 
         const { text: cleaned, actions } = parseActions(text);
         const confirm = await runActions(msg, actions);
+        /** 富媒体（图片 / 语音）单独发，不混进文本 */
+        const media = actions.filter((a) => a.type === 'image' || a.type === 'voice');
 
         /**
          * 不该接话：把这条用户消息**从上下文里撤掉**。
@@ -561,23 +565,34 @@ export default {
          * 不撤的话，下次真说话时模型会看到一堆「自己没理的插话」，
          * 上下文全是噪音，而且它可能以为自己当时应该回答。
          */
-        if (!gate.force && isSkip(cleaned) && !confirm) {
+        if (!gate.force && isSkip(cleaned) && !confirm && !media.length) {
           if (s.messages.at(-1)?.role === 'user') s.messages.pop();
           if (c.debug) ctx.logger.debug(`[ai-chat] ${msg.chatId} 模型判断不接话`);
           return;
         }
 
         const body = [cleaned, confirm].filter(Boolean).join('\n\n');
-        if (!body) return; // 只有动作、没有话要说
+        // 既没话也没附件，就什么都不发
+        if (!body && !media.length) return;
 
-        s.messages.push({ role: 'assistant', content: cleaned || confirm });
+        s.messages.push({ role: 'assistant', content: cleaned || confirm || `（发了 ${media.length} 个附件）` });
         store.trim(s);
         s.rounds += 1;
 
-        await sendReply(msg, body, {
-          markdown: c.markdown,
-          log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
-        });
+        if (body) {
+          await sendReply(msg, body, {
+            markdown: c.markdown,
+            log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
+          });
+        }
+
+        /**
+         * 富媒体放最后发：`replyImage` 会先把攒着的文本 flush 掉，
+         * 所以顺序天然是「先说一句，再上图」。
+         */
+        if (media.length) {
+          await sendMedia(msg, media, { log: (m) => ctx.logger.warn(`[ai-chat] ${m}`) });
+        }
 
         // 只有「主动接话」才计入节奏，被 @ 的不占配额
         if (!gate.force) pace.markReply(msg.chatId);
