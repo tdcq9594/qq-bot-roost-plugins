@@ -82,7 +82,7 @@ jobs:
           # 否则会出现：框架 master 有插件依赖的新能力但还没发布 → 插件 CI 假绿，
           # 用户装到旧版运行时坏；或 master 瞬时坏掉 → 插件 CI 假红。
           # 发框架新版时改这里，或在仓库 Variables 里设 FRAMEWORK_REF 覆盖。
-          ref: ${{ vars.FRAMEWORK_REF || 'v0.6.15' }}
+          ref: ${{ vars.FRAMEWORK_REF || 'v0.7.0' }}
 
       - name: 跑插件测试
         shell: bash
