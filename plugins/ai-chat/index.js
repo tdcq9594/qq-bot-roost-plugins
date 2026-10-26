@@ -365,6 +365,34 @@ export default {
       return getAdapter().chat({ messages, ...opts });
     }
 
+    /* ---------------- 说话人的权限 ---------------- */
+
+    /**
+     * 这一句是谁说的、什么权限。只给宿主用（openai 适配器会忽略）。
+     *
+     * **算不准就返回 null**——宿主拿不到权限信息时会按「身份不明」处理，
+     * 只给聊天能力。错报成「普通成员」更危险：宿主可能因此放开工具。
+     */
+    async function senderInfo(msg) {
+      try {
+        if (ctx.isOwner?.(msg.userId)) {
+          return { bucket: 'owner', level: 0, role: ctx.levelName?.(0) ?? '主人' };
+        }
+        const lv = await ctx.levelOf?.(msg);
+        if (Number.isFinite(lv)) {
+          return {
+            // 框架里 0 = 主人、1 = 管理员，数字越小权限越高
+            bucket: lv <= 1 ? 'admin' : 'member',
+            level: lv,
+            role: ctx.levelName?.(lv) ?? '',
+          };
+        }
+      } catch {
+        // 权限查不出来就当不知道，别猜
+      }
+      return null;
+    }
+
     /* ---------------- 提示词 ---------------- */
 
     /**
@@ -517,8 +545,11 @@ export default {
         const { text, usage, model } = await callModel(s.messages, {
           signal: paceSt.controller.signal,
           model: c.model,
+          // webhook / dsh 适配器要用原始消息整形，openai 适配器会忽略这几个
           msg,
           chat: { kind: msg.kind, chatId: msg.chatId },
+          // 权限档位给宿主，它据此决定给不给本地工具
+          sender: await senderInfo(msg),
         });
 
         const { text: cleaned, actions } = parseActions(text);

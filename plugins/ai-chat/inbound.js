@@ -93,7 +93,7 @@ export function buildUserContent(msg, text) {
  * 跟 `buildUserContent` 的区别：这个是**结构化**的，宿主可以自己决定怎么用；
  * 那个是压成一段文本给模型。webhook / dsh 适配器用这个。
  */
-export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [] }) {
+export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [], sender = null }) {
   return {
     id,
     chat: {
@@ -105,6 +105,11 @@ export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [] 
     sender: {
       id: msg.userId || '',
       name: msg.userName || '',
+      /**
+       * 权限档位。**算不准就不带这几个字段**——宿主拿不到就会按
+       * 「身份不明」处理（只给聊天能力），比错报成「普通成员」安全。
+       */
+      ...(sender?.bucket ? { bucket: sender.bucket, level: sender.level, role: sender.role } : {}),
     },
     text: msg.content || '',
     /**
