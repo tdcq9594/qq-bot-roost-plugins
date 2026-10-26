@@ -93,7 +93,7 @@ export function buildUserContent(msg, text) {
  * 跟 `buildUserContent` 的区别：这个是**结构化**的，宿主可以自己决定怎么用；
  * 那个是压成一段文本给模型。webhook / dsh 适配器用这个。
  */
-export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [], sender = null, system = '' }) {
+export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [], sender = null, system = '', images = [] }) {
   return {
     id,
     chat: {
@@ -129,6 +129,8 @@ export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [],
      */
     rendered: buildUserContent(msg, msg.content),
     quoted: msg.quoted || '',
+    /** 下载好的图片块（base64）。宿主直接拿去当 image 内容块用 */
+    images: Array.isArray(images) ? images : [],
     attachments: (msg.attachments ?? []).map((a) => ({
       type: a?.type,
       url: a?.url,

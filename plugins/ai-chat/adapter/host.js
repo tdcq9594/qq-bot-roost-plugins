@@ -40,7 +40,7 @@ export function createHostAdapter({ name, url, bridge, publicUrl, log = () => {}
      * @param {object} [p.chat] { kind, chatId }
      * @returns {Promise<{text:string, usage:null, model:string}>}
      */
-    async chat({ messages = [], signal, msg, chat, sender, system }) {
+    async chat({ messages = [], signal, msg, chat, sender, system, images }) {
       if (!url) {
         throw new Error(`还没填宿主的接收地址（面板 → 「${name} 地址」）`);
       }
@@ -60,6 +60,7 @@ export function createHostAdapter({ name, url, bridge, publicUrl, log = () => {}
         history: trimHistory(messages),
         sender,
         system,
+        images,
       });
 
       // 顺带把「这一轮是谁在跟谁说」也带上，宿主不用自己猜

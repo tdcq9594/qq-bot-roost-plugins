@@ -33,6 +33,7 @@ import { createProfile } from './profile.js';
 import { shouldConsider, isSkip, parseActions, parseButton, SKIP_MARK, DEFAULT_IGNORE } from './decide.js';
 import { ChatStore, PaceStore } from './session.js';
 import { createMerger } from './merge.js';
+import { collectImages } from './vision.js';
 
 /** 一次请求最多等多久 */
 const DEFAULT_TIMEOUT_SEC = 90;
@@ -56,7 +57,7 @@ function explainHttp(status, bodyText = '') {
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '3.3.0',
+  version: '3.5.0',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -265,6 +266,20 @@ export default {
       label: 'Markdown 消息',
       desc: '用 QQ 的 markdown 消息类型发回复，标题/列表/加粗能真的渲染。发不出去会自动退回纯文本',
     },
+    seeImages: {
+      type: 'boolean',
+      default: true,
+      label: '让它看得见图',
+      desc: '把群里发的图片下载下来交给模型（不是只给一个网址）。关掉能省不少 token',
+    },
+    maxImages: {
+      type: 'number',
+      default: 4,
+      min: 0,
+      max: 8,
+      label: '一次最多看几张图',
+      desc: '一张图几百到几千 token，太多了会撑爆上下文。0 等于不看',
+    },
     timeoutSec: {
       type: 'number',
       default: DEFAULT_TIMEOUT_SEC,
@@ -323,6 +338,8 @@ export default {
         cooldownSec: num(c.cooldownSec, 20),
         mergeWaitSec: num(c.mergeWaitSec, 1.5, 0),
         mergeMaxSec: num(c.mergeMaxSec, 6, 1),
+        seeImages: c.seeImages !== false,
+        maxImages: num(c.maxImages, 4, 0),
         maxRepliesPerMin: num(c.maxRepliesPerMin, 3),
         ignoreWords: Array.isArray(c.ignoreWords) ? c.ignoreWords.map(String).filter(Boolean) : DEFAULT_IGNORE,
         systemPrompt: String(c.systemPrompt ?? '').trim(),
@@ -345,6 +362,37 @@ export default {
       historyLimit: num(ctx.config.historyLimit, 10, 1),
       idleMs: num(ctx.config.idleTimeoutMin, 30, 1) * 60_000,
     });
+    /**
+     * 主动发消息的接口：`POST /api/plugins/ai-chat/r/send`
+     *
+     * 为什么要开这个口子：**主动消息只能由持有 QQ 连接的一方发**。
+     * DSH 那边（dsh-roost 的主动搭话）算出了「该说句话了」，但它没有 api，发不出去。
+     *
+     * 配额提醒：官方主动消息 **20 条/分钟、每群 1000 条/天**。
+     * 限频的责任在调用方，这里只做基本校验。
+     */
+    ctx.registerRoute?.('POST', '/send', async ({ body }) => {
+      const b = body ?? {};
+      const scene = b.scene === 'group' ? 'group' : 'c2c';
+      const target = String(b.target ?? '').trim();
+      const text = String(b.text ?? '').trim();
+
+      if (!target) return { ok: false, message: '缺 target（群 openid 或用户 openid）' };
+      if (!text) return { ok: false, message: '缺 text' };
+      if (text.length > 2000) return { ok: false, message: '太长了，主动消息别超过 2000 字' };
+
+      try {
+        const opts = { content: text, msgType: 0 };
+        if (scene === 'group') await ctx.api.sendGroup(target, opts);
+        else await ctx.api.sendC2C(target, opts);
+        ctx.logger.info(`[ai-chat] 主动发了 ${text.length} 字到 ${scene}:${target.slice(0, 8)}`);
+        return { ok: true, scene, target };
+      } catch (e) {
+        ctx.logger.warn(`[ai-chat] 主动发消息失败：${e?.message ?? e}`);
+        return { ok: false, message: e?.message ?? String(e) };
+      }
+    });
+
     /** 消息合并：连着发的几句话攒成一段再回 */
     const merger = createMerger({
       waitSec: num(ctx.config.mergeWaitSec, 1.5, 0),
@@ -603,6 +651,11 @@ export default {
         timer.unref?.();
 
         const sys = await systemMessage(msg, c, gate.force);
+
+        /** 下载图片给模型看（限张数限大小，任何一张失败都只是少看一张） */
+        const images = c.seeImages && c.maxImages > 0
+          ? await collectImages(msg, { max: c.maxImages, log: (m) => ctx.logger.warn(`[ai-chat] ${m}`) })
+          : [];
         if (sys) {
           if (s.messages[0]?.role === 'system') s.messages[0] = sys;
           else s.messages.unshift(sys);
@@ -631,6 +684,8 @@ export default {
            * 模型根本不知道有这些标记可用。
            */
           system: sys?.content ?? '',
+          // 图片块：宿主拿去做 image 内容块，openai 适配器暂时忽略
+          images,
         });
 
         const { text: cleaned, actions } = parseActions(text);
