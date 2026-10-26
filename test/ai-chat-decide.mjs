@@ -194,6 +194,15 @@ ok(
   ok('动作: 类型对', r.actions.map((a) => a.type).join() === 'remember,image');
 }
 
+/* ---------------- 语音 ---------------- */
+
+{
+  const r = parseActions('晚安 <<say: 早点睡呀>>');
+  ok('语音: 解析出 say', r.actions[0]?.type === 'say');
+  ok('语音: 内容对', r.actions[0]?.value === '早点睡呀', r.actions[0]?.value);
+  ok('语音: 正文不残留标记', r.text === '晚安', JSON.stringify(r.text));
+}
+
 /* ---------------- 按钮 ---------------- */
 
 {

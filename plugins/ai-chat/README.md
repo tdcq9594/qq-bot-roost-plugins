@@ -125,6 +125,26 @@
 一次最多发 3 个附件；扩展名有白名单（图片 png/jpg/gif/webp，语音 silk/amr/mp3/wav/ogg/m4a），
 免得模型把别的文件当图发出去。
 
+## 语音条（可选）
+
+让 AI 说的话被**念出来**。要先在插件目录装三个纯 JS/WASM 的依赖：
+
+```bash
+cd <Roost 目录>/plugins/ai-chat
+npm i @andresaya/edge-tts mpg123-decoder silk-wasm
+```
+
+然后在插件设置里把「语音音色」填成微软音色名，比如 `zh-CN-XiaoxiaoNeural`（女）
+或 `zh-CN-YunxiNeural`（男）。留空 = 不开。
+
+模型输出 `<<say: 要念的话>>` 就会发一条语音条。
+
+**为什么绕这么大一圈**：QQ 官方语音要 **silk**，而 TTS 出来的都是 mp3，
+所以中间转两道 —— 文字 → mp3 → PCM → silk。全在 Node 里跑，
+**不要 Python、不要 ffmpeg、不要装服务**。
+
+没装依赖、或者任何一步失败，都只是「这条没有语音」——文字照发，不影响对话。
+
 ## 它能看见什么
 
 官方接口给的东西全都用上了，不是只读一段文本：

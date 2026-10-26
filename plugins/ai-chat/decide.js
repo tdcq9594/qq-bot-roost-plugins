@@ -139,6 +139,8 @@ export function parseActions(text) {
   take(/<<voice:\s*([\s\S]*?)>>/gi, 'voice');
   // 可点击按钮
   take(/<<button:\s*([\s\S]*?)>>/gi, 'button');
+  // 语音：要念出来的话（插件转成 silk 再发）
+  take(/<<say:\s*([\s\S]*?)>>/gi, 'say');
 
   // 摘掉标记后可能留下多余空行，收一下
   out = out.replace(/\n{3,}/g, '\n\n').trim();

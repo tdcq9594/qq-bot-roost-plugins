@@ -34,6 +34,7 @@ import { shouldConsider, isSkip, parseActions, parseButton, SKIP_MARK, DEFAULT_I
 import { ChatStore, PaceStore } from './session.js';
 import { createMerger } from './merge.js';
 import { collectImages } from './vision.js';
+import { synthesize, DEFAULT_VOICE } from './tts.js';
 
 /** 一次请求最多等多久 */
 const DEFAULT_TIMEOUT_SEC = 90;
@@ -57,7 +58,7 @@ function explainHttp(status, bodyText = '') {
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '3.5.0',
+  version: '3.6.0',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -280,6 +281,13 @@ export default {
       label: '一次最多看几张图',
       desc: '一张图几百到几千 token，太多了会撑爆上下文。0 等于不看',
     },
+    ttsVoice: {
+      type: 'string',
+      default: '',
+      label: '语音音色',
+      desc: '填微软音色名就开启语音，例如 zh-CN-XiaoxiaoNeural（女）、zh-CN-YunxiNeural（男）。'
+        + '留空 = 不合成语音。需要先在插件目录 npm i @andresaya/edge-tts mpg123-decoder silk-wasm',
+    },
     timeoutSec: {
       type: 'number',
       default: DEFAULT_TIMEOUT_SEC,
@@ -340,6 +348,7 @@ export default {
         mergeMaxSec: num(c.mergeMaxSec, 6, 1),
         seeImages: c.seeImages !== false,
         maxImages: num(c.maxImages, 4, 0),
+        ttsVoice: String(c.ttsVoice || '').trim(),
         maxRepliesPerMin: num(c.maxRepliesPerMin, 3),
         ignoreWords: Array.isArray(c.ignoreWords) ? c.ignoreWords.map(String).filter(Boolean) : DEFAULT_IGNORE,
         systemPrompt: String(c.systemPrompt ?? '').trim(),
@@ -522,6 +531,7 @@ export default {
           '要清空这个会话的上下文：<<clear>>',
           '要发图片（表情包、画好的图）：<<image: 网址或本地路径>>',
           '要发语音：<<voice: 网址或本地路径>>',
+          '想让你的话被念出来（语音条）：<<say: 要念的内容>>（会自动转成语音）',
           '要放按钮：<<button: 显示文字 | 点了之后发的话>>（一行最多两个，总共最多四个）',
           '这些标记不会展示给用户，放在回复最后就行。不需要就不要写。',
         ].join('\n'),
@@ -732,6 +742,24 @@ export default {
          */
         if (media.length) {
           await sendMedia(msg, media, { log: (m) => ctx.logger.warn(`[ai-chat] ${m}`) });
+        }
+
+        /**
+         * 念一段话（语音条）。
+         *
+         * QQ 语音要 **silk**，TTS 出的是 mp3，所以中间转两道：
+         * 文字 → mp3 → PCM → silk。全在 tts.js 里，纯 JS/WASM，不要 Python。
+         *
+         * 任何一步失败都只是「这条没有语音」——文字已经发过了，不影响对话。
+         */
+        const say = actions.find((a) => a.type === 'say');
+        if (say && c.ttsVoice) {
+          const file = await synthesize(say.value, {
+            voice: c.ttsVoice,
+            cacheDir: `${ctx.dataDir}/tts-cache`,
+            log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
+          });
+          if (file) await msg.replyVoice?.(file, { local: true });
         }
 
         // 只有「主动接话」才计入节奏，被 @ 的不占配额
