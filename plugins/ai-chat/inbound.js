@@ -107,6 +107,14 @@ export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [] 
       name: msg.userName || '',
     },
     text: msg.content || '',
+    /**
+     * 整形好的那段话。
+     *
+     * 有它，宿主就不用自己把 ASR / 引用 / 合并转发拼进文本——
+     * 宿主应该尽量笨，整形是插件的事。没有它的老宿主可以退回 `text`
+     * 加上结构化字段自己拼。
+     */
+    rendered: buildUserContent(msg, msg.content),
     quoted: msg.quoted || '',
     attachments: (msg.attachments ?? []).map((a) => ({
       type: a?.type,
