@@ -70,6 +70,25 @@ export function shouldConsider(msg, c, state = {}) {
 }
 
 /**
+ * 解析一个按钮标记的内容：`显示文字 | 点了之后发的话`
+ *
+ * 竖线用半角或全角都行——模型两种都会写。
+ * 点了之后发的话为空时，退回用显示文字（至少别是个死按钮）。
+ *
+ * @param {string} value
+ * @returns {{label:string, data:string}|null}
+ */
+export function parseButton(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  const parts = raw.split(/\s*[|｜]\s*/);
+  const label = String(parts[0] ?? '').trim().slice(0, 12);
+  const data = String(parts[1] ?? label).trim().slice(0, 100);
+  if (!label) return null;
+  return { label, data };
+}
+
+/**
  * 从模型输出里剥掉 `<skip>` 标记。
  *
  * 只有「整条基本就是 <skip>」才算不接——模型有时会写
@@ -118,6 +137,8 @@ export function parseActions(text) {
   // 富媒体：图片（表情包/生图都走这条）和语音
   take(/<<image:\s*([\s\S]*?)>>/gi, 'image');
   take(/<<voice:\s*([\s\S]*?)>>/gi, 'voice');
+  // 可点击按钮
+  take(/<<button:\s*([\s\S]*?)>>/gi, 'button');
 
   // 摘掉标记后可能留下多余空行，收一下
   out = out.replace(/\n{3,}/g, '\n\n').trim();

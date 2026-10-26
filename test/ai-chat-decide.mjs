@@ -25,7 +25,7 @@ const ok = (name, cond, detail = '') => {
   }
 };
 
-const { shouldConsider, isSkip, parseActions, SKIP_MARK } = await import(
+const { shouldConsider, isSkip, parseActions, parseButton, SKIP_MARK } = await import(
   pathToFileURL(path.join(PLUGIN, 'decide.js'))
 );
 
@@ -192,6 +192,22 @@ ok(
   const r = parseActions('记一下 <<remember: 喜欢猫>> <<image: a.png>>');
   ok('动作: 文本动作和媒体动作共存', r.actions.length === 2);
   ok('动作: 类型对', r.actions.map((a) => a.type).join() === 'remember,image');
+}
+
+/* ---------------- 按钮 ---------------- */
+
+{
+  const b = parseButton('点赞 | 点赞');
+  ok('按钮: 解析 label 和 data', b.label === '点赞' && b.data === '点赞');
+
+  const full = parseButton('看运势｜今天运势怎么样');
+  ok('按钮: 全角竖线也认', full.label === '看运势' && full.data === '今天运势怎么样');
+
+  const only = parseButton('随便聊聊');
+  ok('按钮: 没写内容就用文字当内容', only.data === '随便聊聊');
+
+  ok('按钮: 空的返回 null', parseButton('') === null && parseButton('   ') === null);
+  ok('按钮: 太长会截断', parseButton('一二三四五六七八九十十一十二十三 | x').label.length <= 12);
 }
 
 /* ---------------- 汇总 ---------------- */

@@ -93,7 +93,7 @@ export function buildUserContent(msg, text) {
  * 跟 `buildUserContent` 的区别：这个是**结构化**的，宿主可以自己决定怎么用；
  * 那个是压成一段文本给模型。webhook / dsh 适配器用这个。
  */
-export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [], sender = null }) {
+export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [], sender = null, system = '' }) {
   return {
     id,
     chat: {
@@ -111,6 +111,14 @@ export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [],
        */
       ...(sender?.bucket ? { bucket: sender.bucket, level: sender.level, role: sender.role } : {}),
     },
+    /**
+     * 插件拼好的系统提示词。
+     *
+     * **宿主必须用它**：动作标记（<<skip>> / <<remember>> / <<image>> / <<button>>）
+     * 的契约写在这里，宿主自己另写一份人格就等于让这些标记失效。
+     * 之前就是这个 bug——DSH 模式下模型完全不知道有标记这回事。
+     */
+    system: String(system || ''),
     text: msg.content || '',
     /**
      * 整形好的那段话。

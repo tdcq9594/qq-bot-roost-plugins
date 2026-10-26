@@ -156,7 +156,67 @@ export async function sendMedia(msg, items, { log = () => {}, max = MAX_MEDIA } 
  * @param {(s:string)=>void} [p.log]
  * @returns {Promise<number>} 实际发出去几段
  */
-export async function sendReply(msg, text, { markdown = false, log = () => {} } = {}) {
+/**
+ * 拼按钮组（QQ 官方的 keyboard 结构）。
+ *
+ * 这是**官方接口独有的能力**——hook 客户端那套（OneBot）发不出真按钮。
+ *
+ * 用的是 `action.type: 2`（指令按钮）：点了等于用户自己发了 `data` 那句话，
+ * 所以它天然会走回我们正常的消息处理流程，不用额外处理点击事件。
+ *
+ * 布局：一行最多 2 个，总共最多 4 个（再多就是一张键盘了，群里很吵）。
+ *
+ * @param {Array<{label:string, data:string}>} buttons
+ */
+export function buildKeyboard(buttons, { max = 4, perRow = 2 } = {}) {
+  const list = (buttons ?? []).filter((b) => b && b.label).slice(0, max);
+  if (!list.length) return null;
+
+  const rows = [];
+  for (let i = 0; i < list.length; i += perRow) {
+    rows.push({
+      buttons: list.slice(i, i + perRow).map((b, j) => ({
+        id: String(i + j + 1),
+        render_data: { label: b.label, visited_label: b.label, style: 1 },
+        action: {
+          type: 2, // 2 = 指令：点击后把 data 当一条消息发出来
+          permission: { type: 0 }, // 0 = 所有人可点
+          data: b.data,
+          enter: true,
+        },
+      })),
+    });
+  }
+  return { content: { rows } };
+}
+
+/**
+ * 发回复。
+ *
+ * @param {object} msg
+ * @param {string} text
+ * @param {object} [opts]
+ * @param {boolean} [opts.markdown] 用 markdown 消息类型（标题/列表/加粗真渲染）
+ * @param {object} [opts.keyboard] 按钮组，见 buildKeyboard
+ * @param {(m:string)=>void} [opts.log]
+ */
+export async function sendReply(msg, text, { markdown = false, keyboard = null, log = () => {} } = {}) {
+  /**
+   * 带按钮时必须一条发完——按钮只属于这一条消息，
+   * 切段的话按钮会挂到第一段上，用户看着莫名其妙。
+   */
+  if (keyboard) {
+    try {
+      const r = await msg.replyMarkdown?.({ content: String(text) }, keyboard);
+      if (r) return 1;
+      log('带按钮的 markdown 没发出去，降级纯文本（按钮会丢）');
+    } catch (e) {
+      log(`带按钮的 markdown 发送失败：${e?.message ?? e}`);
+    }
+    await msg.reply(text);
+    return 1;
+  }
+
   const chunks = planChunks(text);
   if (!chunks.length) return 0;
 

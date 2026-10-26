@@ -28,9 +28,9 @@
 import { createAdapter, ADAPTER_OPTIONS } from './adapter/index.js';
 import { createBridge } from './adapter/bridge.js';
 import { buildUserContent } from './inbound.js';
-import { sendReply, sendMedia } from './outbound.js';
+import { sendReply, sendMedia, buildKeyboard } from './outbound.js';
 import { createProfile } from './profile.js';
-import { shouldConsider, isSkip, parseActions, SKIP_MARK, DEFAULT_IGNORE } from './decide.js';
+import { shouldConsider, isSkip, parseActions, parseButton, SKIP_MARK, DEFAULT_IGNORE } from './decide.js';
 import { ChatStore, PaceStore } from './session.js';
 
 /** 一次请求最多等多久 */
@@ -55,7 +55,7 @@ function explainHttp(status, bodyText = '') {
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '3.1.0',
+  version: '3.2.0',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -419,6 +419,23 @@ export default {
         );
       }
 
+      /**
+       * 【你能发什么】——这一段必须写，而且要写清楚。
+       *
+       * 模型不会自己发现「我在 QQ 里能发按钮」。
+       * 不告诉它，它就永远只发纯文本，官方接口这些能力全浪费了。
+       */
+      parts.push(
+        [
+          '【你能发什么】',
+          '这个 QQ 机器人走的是**官方接口**，比一般机器人能做得多：',
+          '· Markdown 真渲染：标题（##）、列表、加粗、代码块、引用块都能显示出来',
+          '· 真按钮：用户能点的按钮',
+          '· 图片和语音',
+          '所以需要排版的时候放心用 Markdown；需要给用户几个选项时用按钮，别让人手打。',
+        ].join('\n'),
+      );
+
       parts.push(
         [
           '【动作标记】',
@@ -428,6 +445,7 @@ export default {
           '要清空这个会话的上下文：<<clear>>',
           '要发图片（表情包、画好的图）：<<image: 网址或本地路径>>',
           '要发语音：<<voice: 网址或本地路径>>',
+          '要放按钮：<<button: 显示文字 | 点了之后发的话>>（一行最多两个，总共最多四个）',
           '这些标记不会展示给用户，放在回复最后就行。不需要就不要写。',
         ].join('\n'),
       );
@@ -552,12 +570,25 @@ export default {
           chat: { kind: msg.kind, chatId: msg.chatId },
           // 权限档位给宿主，它据此决定给不给本地工具
           sender: await senderInfo(msg),
+          /**
+           * 把拼好的 system 一起送过去。
+           *
+           * DSH / webhook 这类宿主有自己的 persona，如果不把这份传过去，
+           * 动作标记（skip / remember / image / button）的契约就丢了——
+           * 模型根本不知道有这些标记可用。
+           */
+          system: sys?.content ?? '',
         });
 
         const { text: cleaned, actions } = parseActions(text);
         const confirm = await runActions(msg, actions);
         /** 富媒体（图片 / 语音）单独发，不混进文本 */
         const media = actions.filter((a) => a.type === 'image' || a.type === 'voice');
+        /** 可点击按钮——官方接口独有，hook 客户端那套发不出来 */
+        const buttons = actions
+          .filter((a) => a.type === 'button')
+          .map((a) => parseButton(a.value))
+          .filter(Boolean);
 
         /**
          * 不该接话：把这条用户消息**从上下文里撤掉**。
@@ -582,6 +613,7 @@ export default {
         if (body) {
           await sendReply(msg, body, {
             markdown: c.markdown,
+            keyboard: buttons.length ? buildKeyboard(buttons) : null,
             log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
           });
         }

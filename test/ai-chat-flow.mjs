@@ -323,6 +323,43 @@ const baseConf = (over = {}) => () => ({
   ok('媒体: 识别网址', isRemote('http://a/b.png') === true && isRemote('D:/a.png') === false);
 }
 
+/* ---------------- 按钮 ---------------- */
+
+{
+  const { buildKeyboard } = await load('outbound.js');
+
+  const k = buildKeyboard([
+    { label: '点赞', data: '点赞' },
+    { label: '看运势', data: '今天运势怎么样' },
+    { label: '换个话题', data: '换个话题吧' },
+  ]);
+  ok('按钮: 两行（2+1）', k?.content?.rows?.length === 2, String(k?.content?.rows?.length));
+  ok('按钮: 第一行两个', k.content.rows[0].buttons.length === 2);
+  ok('按钮: 用指令型 action', k.content.rows[0].buttons[0].action.type === 2);
+  ok('按钮: 所有人可点', k.content.rows[0].buttons[0].action.permission.type === 0);
+  ok('按钮: data 是点了之后发的话', k.content.rows[0].buttons[1].action.data === '今天运势怎么样');
+
+  const many = buildKeyboard(Array.from({ length: 8 }, (_, i) => ({ label: `b${i}`, data: `d${i}` })));
+  ok('按钮: 最多四个', many.content.rows.reduce((n, r) => n + r.buttons.length, 0) === 4);
+
+  ok('按钮: 空的不生成 keyboard', buildKeyboard([]) === null && buildKeyboard(null) === null);
+}
+
+/* ---------------- 宿主 payload ---------------- */
+
+{
+  const { hostPayload } = await load('inbound.js');
+  const base = { kind: 'group', chatId: 'g1', content: '你好', userId: 'u1', userName: '小明' };
+  const opt = { id: 'e1', token: 't', replyUrl: 'http://127.0.0.1:1/r', expiresAt: Date.now() + 1000 };
+
+  const p = hostPayload(base, { ...opt, system: '你是小栖' });
+  ok('宿主: payload 带 system', p.system === '你是小栖');
+  ok('宿主: 没给 system 就是空串', hostPayload(base, opt).system === '');
+
+  // 这条很关键：system 里写着动作标记的契约，丢了模型就不知道有 <<skip>> <<button>> 这些
+  ok('宿主: system 不是 undefined（宿主会 String 它）', typeof hostPayload(base, opt).system === 'string');
+}
+
 /* ---------------- 汇总 ---------------- */
 
 console.log(`\n${pass}/${pass + fails.length} 通过`);
