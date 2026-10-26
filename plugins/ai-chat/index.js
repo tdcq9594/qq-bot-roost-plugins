@@ -32,6 +32,7 @@ import { sendReply, sendMedia, buildKeyboard } from './outbound.js';
 import { createProfile } from './profile.js';
 import { shouldConsider, isSkip, parseActions, parseButton, SKIP_MARK, DEFAULT_IGNORE } from './decide.js';
 import { ChatStore, PaceStore } from './session.js';
+import { createMerger } from './merge.js';
 
 /** 一次请求最多等多久 */
 const DEFAULT_TIMEOUT_SEC = 90;
@@ -55,7 +56,7 @@ function explainHttp(status, bodyText = '') {
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '3.2.0',
+  version: '3.3.0',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -154,6 +155,22 @@ export default {
       max: 600,
       label: '接话冷却（秒）',
       desc: '回过一次之后，这么多秒内不再主动接话。防止它跟着群里刷屏',
+    },
+    mergeWaitSec: {
+      type: 'number',
+      default: 1.5,
+      min: 0,
+      max: 10,
+      label: '合并等待（秒）',
+      desc: '对方发完一条后等这么久没新消息，才当作「说完了」一起回。设 0 关闭合并',
+    },
+    mergeMaxSec: {
+      type: 'number',
+      default: 6,
+      min: 1,
+      max: 30,
+      label: '合并上限（秒）',
+      desc: '对方一直发也最多等这么久，从第一条算。防止有人刷屏时它永远不回',
     },
     maxRepliesPerMin: {
       type: 'number',
@@ -304,6 +321,8 @@ export default {
         model: aliasModel(String(c.model ?? DEFAULT_MODEL).trim()),
         decide: c.decide === 'mention' ? 'mention' : 'ai',
         cooldownSec: num(c.cooldownSec, 20),
+        mergeWaitSec: num(c.mergeWaitSec, 1.5, 0),
+        mergeMaxSec: num(c.mergeMaxSec, 6, 1),
         maxRepliesPerMin: num(c.maxRepliesPerMin, 3),
         ignoreWords: Array.isArray(c.ignoreWords) ? c.ignoreWords.map(String).filter(Boolean) : DEFAULT_IGNORE,
         systemPrompt: String(c.systemPrompt ?? '').trim(),
@@ -326,6 +345,12 @@ export default {
       historyLimit: num(ctx.config.historyLimit, 10, 1),
       idleMs: num(ctx.config.idleTimeoutMin, 30, 1) * 60_000,
     });
+    /** 消息合并：连着发的几句话攒成一段再回 */
+    const merger = createMerger({
+      waitSec: num(ctx.config.mergeWaitSec, 1.5, 0),
+      maxSec: num(ctx.config.mergeMaxSec, 6, 1),
+    });
+
     const pace = new PaceStore({
       cooldownSec: num(ctx.config.cooldownSec, 20),
       maxRepliesPerMin: num(ctx.config.maxRepliesPerMin, 3),
@@ -342,7 +367,11 @@ export default {
       const r = bridge.handleReply(body ?? {});
       return json(r.code, r.body);
     });
-    ctx.onTeardown(() => bridge.dispose());
+    ctx.onTeardown(() => {
+      bridge.dispose();
+      // 卸载时把还在攒的消息放出去，别让等着的 handler 永远挂着
+      merger.flushAll();
+    });
 
     /* ---------------- 适配器 ---------------- */
 
@@ -517,12 +546,6 @@ export default {
         return;
       }
 
-      // 同一个群同时只跑一轮：群里刷屏时不要并发一堆请求
-      if (paceSt.busy) {
-        if (c.debug) ctx.logger.debug(`[ai-chat] ${msg.chatId} 上一轮还没完，跳过`);
-        return;
-      }
-
       // 没配 Key 只在被明确叫到时提醒一句，否则静默——群聊里不该刷这个
       if (c.adapter === 'openai' && !c.apiKey) {
         if (gate.force) {
@@ -532,6 +555,35 @@ export default {
             )
             .catch(() => {});
         }
+        return;
+      }
+
+      /**
+       * 合并窗口：连着发的几句话攒成一段再回。
+       *
+       * 被 @ 的不等——那是在明确叫你，再等 1.5 秒就是迟钝。
+       * 同一批里只有第一条会拿到 batch，其余返回 null 直接退出，
+       * 否则三条消息会各跑一轮模型，等于没合并。
+       */
+      const batch = await merger.add({
+        chatId: msg.chatId,
+        msg,
+        text: String(msg.content ?? ''),
+        name: msg.userName || '',
+        // mergeWaitSec = 0 表示关闭合并，直接放行
+        force: gate.force || c.mergeWaitSec === 0,
+      });
+      if (!batch) return;
+
+      // 之后一律用批次里最后那条消息（msg_id 最新，回复窗口最稳）
+      msg = batch.msg;
+
+      // 攒的这段时间里，别的插件可能已经回了
+      if (msg.claimedBy || msg.replied) return;
+
+      // 同一个会话同时只跑一轮：刷屏时不要并发一堆请求
+      if (paceSt.busy) {
+        if (c.debug) ctx.logger.debug(`[ai-chat] ${msg.chatId} 上一轮还没完，跳过`);
         return;
       }
 
@@ -559,7 +611,8 @@ export default {
         }
 
         // 入站整形：语音 ASR、引用原文、合并转发、卡片都并进来
-        s.messages.push({ role: 'user', content: buildUserContent(msg, msg.content) });
+        // 合并过的批次用 batch.text（已带发言人），单条时两者等价
+        s.messages.push({ role: 'user', content: buildUserContent(msg, batch.text) });
         store.trim(s);
 
         const { text, usage, model } = await callModel(s.messages, {
