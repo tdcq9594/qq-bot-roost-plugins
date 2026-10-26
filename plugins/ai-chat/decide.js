@@ -27,6 +27,26 @@ export const DEFAULT_IGNORE = ['/'];
  * @returns {{ go: boolean, force?: boolean, reason: string }}
  *   go=false 就别往下走了；force=true 表示「明确在叫我」，跳过模型判断
  */
+/**
+ * 这条消息「说了什么」。
+ *
+ * **官方接口里纯图片/纯语音消息的 content 是空串**，内容全在 attachments 里：
+ *   · 图片：attachments[].url
+ *   · 语音：attachments[].asrText（官方 ASR 白给的转写）
+ *
+ * 所以不能只看 content —— 只看它的话，用户发张图/说句话，
+ * 会被当成「空消息」直接跳过，表现就是「框架收不到」。
+ */
+export function textOf(msg) {
+  const said = String(msg?.content ?? '').trim();
+  if (said) return said;
+  return (msg?.attachments ?? [])
+    .filter((a) => a?.type === 'voice' && a.asrText)
+    .map((a) => String(a.asrText).trim())
+    .filter(Boolean)
+    .join(' ');
+}
+
 export function shouldConsider(msg, c, state = {}) {
   // 私聊一律理——用户专门点开来跟你说话，没有「打扰」的问题
   if (msg.kind === 'c2c') return { go: true, force: true, reason: '私聊' };
@@ -40,8 +60,10 @@ export function shouldConsider(msg, c, state = {}) {
   // 别的插件的指令到不了这里（框架在分派阶段就 return 了），
   // 但用户可能把前缀改成别的东西，所以再兜一道
   const ignore = Array.isArray(c.ignoreWords) ? c.ignoreWords : DEFAULT_IGNORE;
-  const text = String(msg.content ?? '').trim();
-  if (!text) return { go: false, reason: '空消息' };
+  const text = textOf(msg);
+  const atts = Array.isArray(msg.attachments) ? msg.attachments : [];
+  // 纯图片 / 纯语音：文本是空的，但 attachments 有东西 —— 不能算空消息
+  if (!text && !atts.length) return { go: false, reason: '空消息' };
   for (const w of ignore) {
     if (w && text.startsWith(w)) return { go: false, reason: `以「${w}」开头，像是别的插件的指令` };
   }

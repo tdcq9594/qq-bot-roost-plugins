@@ -30,7 +30,7 @@ import { createBridge } from './adapter/bridge.js';
 import { buildUserContent } from './inbound.js';
 import { sendReply, sendMedia, buildKeyboard } from './outbound.js';
 import { createProfile } from './profile.js';
-import { shouldConsider, isSkip, parseActions, parseButton, SKIP_MARK, DEFAULT_IGNORE } from './decide.js';
+import { shouldConsider, isSkip, parseActions, parseButton, textOf, SKIP_MARK, DEFAULT_IGNORE } from './decide.js';
 import { ChatStore, PaceStore } from './session.js';
 import { createMerger } from './merge.js';
 import { collectImages } from './vision.js';
@@ -58,7 +58,7 @@ function explainHttp(status, bodyText = '') {
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '3.6.0',
+  version: '3.7.0',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -626,7 +626,8 @@ export default {
       const batch = await merger.add({
         chatId: msg.chatId,
         msg,
-        text: String(msg.content ?? ''),
+        // 用 textOf：纯语音消息 content 是空的，ASR 结果在 attachments 里
+        text: textOf(msg),
         name: msg.userName || '',
         // mergeWaitSec = 0 表示关闭合并，直接放行
         force: gate.force || c.mergeWaitSec === 0,

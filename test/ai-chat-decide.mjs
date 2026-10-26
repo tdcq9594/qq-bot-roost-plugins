@@ -25,7 +25,7 @@ const ok = (name, cond, detail = '') => {
   }
 };
 
-const { shouldConsider, isSkip, parseActions, parseButton, SKIP_MARK } = await import(
+const { shouldConsider, isSkip, parseActions, parseButton, textOf, SKIP_MARK } = await import(
   pathToFileURL(path.join(PLUGIN, 'decide.js'))
 );
 
@@ -201,6 +201,24 @@ ok(
   ok('语音: 解析出 say', r.actions[0]?.type === 'say');
   ok('语音: 内容对', r.actions[0]?.value === '早点睡呀', r.actions[0]?.value);
   ok('语音: 正文不残留标记', r.text === '晚安', JSON.stringify(r.text));
+}
+
+/* ---------------- 空消息 / 纯媒体 ---------------- */
+
+{
+  const c = { decide: 'ai', cooldownSec: 0, ignoreWords: [] };
+
+  const img = { kind: 'group', content: '', attachments: [{ type: 'image', url: 'https://x/a.png' }] };
+  ok('空消息: 纯图片不算空消息', shouldConsider(img, c).reason !== '空消息');
+
+  const voice = { kind: 'group', content: '', attachments: [{ type: 'voice', asrText: '今天几号' }] };
+  ok('空消息: 纯语音不算空消息', shouldConsider(voice, c).reason !== '空消息');
+  ok('空消息: 语音 ASR 当文本', textOf(voice) === '今天几号', textOf(voice));
+
+  const blank = { kind: 'group', content: '', attachments: [] };
+  ok('空消息: 真空白仍然跳过', shouldConsider(blank, c).reason === '空消息');
+
+  ok('空消息: 有文本就用文本', textOf({ content: '你好', attachments: [] }) === '你好');
 }
 
 /* ---------------- 按钮 ---------------- */

@@ -29,6 +29,7 @@ const ok = (name, cond, detail = '') => {
 };
 
 const { buildUserContent, hostPayload } = await load('inbound.js');
+const { textOf } = await load('decide.js');
 const { splitText, planChunks, MAX_CHUNK, MAX_CHUNKS } = await load('outbound.js');
 const { createBridge } = await load('adapter/bridge.js');
 const { createAdapter } = await load('adapter/index.js');
@@ -58,7 +59,11 @@ const baseConf = (over = {}) => () => ({
     attachments: [{ type: 'voice', asrText: '今天几号' }],
     elements: [],
   };
-  ok('入站: 语音的官方 ASR 进了内容', buildUserContent(voice, '').includes('今天几号'));
+  // ASR 现在由 textOf 放进正文（以前是 describeAttachments 拼进去的），
+  // 两条路都要保证「模型能看到转写内容」
+  ok('入站: textOf 把语音 ASR 当成文本', textOf(voice) === '今天几号', textOf(voice));
+  ok('入站: 语音的官方 ASR 进了内容', buildUserContent(voice, textOf(voice)).includes('今天几号'));
+  ok('入站: 语音标记不重复 ASR', !buildUserContent(voice, textOf(voice)).includes('转成文字是'));
 
   const noAsr = { ...voice, attachments: [{ type: 'voice' }] };
   ok('入站: 语音没转出文字也要说清楚', /没能转成文字/.test(buildUserContent(noAsr, '')));

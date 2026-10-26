@@ -19,7 +19,8 @@ export function describeAttachments(msg) {
     switch (a?.type) {
       case 'voice':
         // 官方 ASR 是白给的，直接用；识别失败也要说清楚，别让模型以为是静音
-        out.push(a.asrText ? `（语音，转成文字是：${a.asrText}）` : '（发了一条语音，但没能转成文字）');
+        // 转写内容已经由 textOf 放进正文了，这里只说明「这是语音」，不重复文字
+        out.push(a.asrText ? '（发了一条语音）' : '（发了一条语音，但没能转成文字）');
         break;
       case 'image':
         out.push(a.url ? `（发了一张图：${a.url}）` : '（发了一张图）');
