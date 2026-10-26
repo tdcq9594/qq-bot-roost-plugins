@@ -14,6 +14,14 @@
 
 ---
 
+## 已发布
+
+```bash
+npx -y roost-mcp
+```
+
+包名 `roost-mcp`（npm，v0.1.0）。下面所有配置里的 `npx -y roost-mcp` 都是指这个。
+
 ## 前置
 
 Roost 要跑着，并且 ≥ 0.8.0（`POST /api/qq/call` 是这个版本加的）。
