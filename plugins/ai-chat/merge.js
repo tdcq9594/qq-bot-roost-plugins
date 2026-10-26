@@ -63,30 +63,40 @@ export function createMerger({ waitSec = 1.5, maxSec = 6, now = () => Date.now()
      * @param {boolean} [p.force] 被 @ 时不等待，立刻回
      * @returns {Promise<object|null>} 轮到你就拿到 batch，否则 null
      */
-    add({ chatId, msg, text, name = '', force = false }) {
+    add({ chatId, msg, text, name = '', force = false, delayMs = 0 }) {
       if (force) {
         return Promise.resolve({ text, count: 1, msg, senders: name ? [name] : [] });
       }
 
       let b = pending.get(chatId);
       if (!b) {
-        b = { items: [], waiters: [], waitTimer: null, maxTimer: null, firstAt: now() };
+        b = { items: [], waiters: [], waitTimer: null, maxTimer: null, firstAt: now(), notBefore: 0 };
         pending.set(chatId, b);
       }
+
+      /**
+       * 冷却期攒着的消息：别早于 `notBefore` 放行。
+       *
+       * 比如冷却还剩 12 秒，这三句就等到 12 秒后再一起交出去，
+       * 而不是丢掉、也不是立刻回（立刻回等于冷却没生效）。
+       */
+      if (delayMs > 0) b.notBefore = Math.max(b.notBefore || 0, now() + delayMs);
 
       b.items.push({ msg, text, name, at: now() });
 
       const p = new Promise((resolve) => b.waiters.push(resolve));
 
+      const untilNotBefore = Math.max(0, (b.notBefore || 0) - now());
+
       // 每来一条重新计时：说到一半就别急着回
       clearTimeout(b.waitTimer);
-      b.waitTimer = setTimeout(() => flush(chatId), waitSec * 1000);
+      b.waitTimer = setTimeout(() => flush(chatId), Math.max(waitSec * 1000, untilNotBefore));
       b.waitTimer.unref?.();
 
-      // 从第一条算的最长等待，只设一次
+      // 从第一条算的最长等待，只设一次（但也不能早于冷却结束）
       if (!b.maxTimer) {
         const left = Math.max(0, maxSec * 1000 - (now() - b.firstAt));
-        b.maxTimer = setTimeout(() => flush(chatId), left);
+        b.maxTimer = setTimeout(() => flush(chatId), Math.max(left, untilNotBefore));
         b.maxTimer.unref?.();
       }
 

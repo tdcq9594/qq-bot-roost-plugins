@@ -77,7 +77,20 @@ export function shouldConsider(msg, c, state = {}) {
   // 冷却：刚回过就别急着再回，否则一个人能跟它刷屏
   const now = Date.now();
   if (state.lastReplyAt && now - state.lastReplyAt < c.cooldownSec * 1000) {
-    return { go: false, reason: `冷却中（${c.cooldownSec} 秒）` };
+    /**
+     * 冷却期内**不丢消息**，攒着。
+     *
+     * 以前这里直接 `go: false`，用户在这 20 秒里说的话就凭空消失了——
+     * 他说了三句，机器人一句都没看见，体感极差。
+     * 现在放行，但带上「还剩多久」，由合并窗口压到冷却结束再一起交出去。
+     */
+    const left = c.cooldownSec * 1000 - (now - state.lastReplyAt);
+    return {
+      go: true,
+      cooling: true,
+      cooldownLeftMs: Math.max(0, left),
+      reason: `冷却中（还剩 ${Math.ceil(left / 1000)} 秒，攒着）`,
+    };
   }
 
   // 每分钟配额：防止群里聊得热火朝天时它跟着狂刷

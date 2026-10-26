@@ -58,7 +58,7 @@ function explainHttp(status, bodyText = '') {
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '3.7.0',
+  version: '3.8.0',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -631,6 +631,8 @@ export default {
         name: msg.userName || '',
         // mergeWaitSec = 0 表示关闭合并，直接放行
         force: gate.force || c.mergeWaitSec === 0,
+        // 冷却期攒着的消息，压到冷却结束再一起交
+        delayMs: gate.cooldownLeftMs || 0,
       });
       if (!batch) return;
 

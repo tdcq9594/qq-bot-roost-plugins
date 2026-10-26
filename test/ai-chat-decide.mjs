@@ -85,10 +85,17 @@ ok('普通消息交给模型判断（不强制）', (() => {
 
 /* ---------------- 冷却与配额 ---------------- */
 
-ok('刚回过就不接（冷却中）', (() => {
+ok('冷却期内不丢消息，攒着等冷却结束', (() => {
   const now = Date.now();
   const r = shouldConsider(group(), conf({ cooldownSec: 20 }), { lastReplyAt: now - 5_000 });
-  return r.go === false && /冷却/.test(r.reason);
+  // 以前这里是 go:false —— 用户说的话凭空消失。现在放行，带上剩余时间由合并窗口压住
+  return r.go === true && r.cooling === true && r.cooldownLeftMs > 10_000 && /冷却/.test(r.reason);
+})());
+
+ok('冷却剩余时间算得对', (() => {
+  const now = Date.now();
+  const r = shouldConsider(group(), conf({ cooldownSec: 20 }), { lastReplyAt: now - 19_000 });
+  return r.cooldownLeftMs > 0 && r.cooldownLeftMs <= 2_000;
 })());
 
 ok('冷却过了就能接', (() => {
