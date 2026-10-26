@@ -14,10 +14,10 @@
         "对话",
         "LLM"
       ],
-      "frameworkVersion": ">=0.7.0",
+      "frameworkVersion": ">=0.8.1",
       "runtime": "node",
       "path": "plugins/ai-chat",
-      "sha256": "afa91a513c991defc5aa097e0e513a0d23cf099084b91c538b13b12656d1a105",
+      "sha256": "7510a121ec15e5bcf75c845af99bf19694efeb3ee32500d7d84460d262bbd1d1",
       "author": "tdcq9594",
       "commands": [
         "ai",

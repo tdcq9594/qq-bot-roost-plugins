@@ -57,7 +57,16 @@ export default {
   name: 'AI 对话',
   version: '3.0.0',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
-  frameworkVersion: '>=0.7.0',
+  frameworkVersion: '>=0.8.1',
+
+  /**
+   * 监听器优先级：**排最后**。
+   *
+   * 框架按 priority 从高到低跑监听器。别的插件（回声、养鲲、群管）
+   * 先跑，命中关键词就 `msg.claim()` 认领这条消息，我就收不到了——
+   * 这样「别的插件的功能调用」天然不会被 AI 抢答，不用自己维护一份忽略词表。
+   */
+  priority: -100,
 
   /** 面板上的「快速填入」。地址都是实测过的（不带 Key 返回 401 说明接口真实存在） */
   configPresets: [
@@ -436,6 +445,22 @@ export default {
      */
     async function handle(msg) {
       const c = conf();
+
+      /**
+       * 这条已经被别的插件接了，别重复回答。
+       *
+       * 两种情况：
+       *   · `claimedBy` —— 别的插件明确认领了（`msg.claim()` 或返回 true）
+       *   · `replied`   —— 别的插件已经回过一句（我排最后，所以看得见）
+       *
+       * 第二道判断是必要的：有的老插件还没改造成认领模式，
+       * 但它回过之后我再去接一句，群里就是两个人同时说话。
+       */
+      if (msg.claimedBy || msg.replied) {
+        if (c.debug) ctx.logger.debug(`[ai-chat] 已被 ${msg.claimedBy || '别的插件'} 接过，不重复回答`);
+        return;
+      }
+
       const paceSt = pace.get(msg.chatId);
       const gate = shouldConsider(msg, c, paceSt);
 
