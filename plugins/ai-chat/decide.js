@@ -165,6 +165,8 @@ export function parseActions(text) {
     });
   };
 
+  // remember-here：只记在这个群（群内梗、绰号），不跨群
+  take(/<<remember-here:\s*([\s\S]*?)>>/gi, 'rememberHere');
   take(/<<remember:\s*([\s\S]*?)>>/gi, 'remember');
   take(/<<forget:\s*([\s\S]*?)>>/gi, 'forget');
   take(/<<persona:\s*([\s\S]*?)>>/gi, 'persona');

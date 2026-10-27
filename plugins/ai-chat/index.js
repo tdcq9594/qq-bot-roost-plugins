@@ -29,7 +29,6 @@ import { createAdapter } from './adapter/index.js';
 import { createBridge } from './adapter/bridge.js';
 import { buildUserContent } from './inbound.js';
 import { sendReply, sendMedia, buildKeyboard } from './outbound.js';
-import { createProfile } from './profile.js';
 import { shouldConsider, isSkip, parseActions, parseButton, textOf, SKIP_MARK, DEFAULT_IGNORE } from './decide.js';
 import { ChatStore, PaceStore } from './session.js';
 import { createMerger } from './merge.js';
@@ -42,7 +41,7 @@ const DEFAULT_TIMEOUT_SEC = 90;
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '4.0.0',
+  version: '4.1.0',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -286,7 +285,6 @@ export default {
      * 这条路由给宿主回调回话用，平时是空闲的。
      */
     const bridge = createBridge({ log: (m) => ctx.logger.warn(`[ai-chat] ${m}`) });
-    const profile = createProfile({ storage: ctx.storage });
 
     ctx.registerRoute('POST', '/reply', async ({ body, json }) => {
       const r = bridge.handleReply(body ?? {});
@@ -358,9 +356,8 @@ export default {
      */
     async function systemMessage(msg, c, force) {
       const extra = msg.kind === 'c2c' ? c.directPrompt : c.groupPrompt;
-      const mine = await profile.systemExtra(msg.chatId);
-
-      const parts = [c.systemPrompt, extra, mine].filter(Boolean);
+      // 人设和记忆都由 dsh-roost 注入，这里只拼场景规则
+      const parts = [c.systemPrompt, extra].filter(Boolean);
 
       if (!force) {
         parts.push(
@@ -393,7 +390,8 @@ export default {
       parts.push(
         [
           '【动作标记】',
-          '需要长期记住某件事：在回复里加 <<remember: 内容>>',
+          '需要长期记住某件事：在回复里加 <<remember: 内容>>（跨群都记得）',
+          '只想在这个群记住（梗、绰号）：加 <<remember-here: 内容>>',
           '要忘掉某件事：<<forget: 关键词>>',
           '要改这个会话的人设：<<persona: 内容>>',
           '要清空这个会话的上下文：<<clear>>',
@@ -418,16 +416,14 @@ export default {
 
       for (const a of actions) {
         try {
-          if (a.type === 'remember' && a.value) {
-            await profile.addFact(msg.chatId, a.value);
-            done.add('记住了');
-          } else if (a.type === 'forget' && a.value) {
-            await profile.removeFact(msg.chatId, a.value);
-            done.add('忘掉了');
-          } else if (a.type === 'persona' && a.value) {
-            await profile.setPersona(msg.chatId, a.value);
-            done.add('人设改了');
-          } else if (a.type === 'clear') {
+          /**
+           * 记忆和人设的标记**不在这里处理**——已经整体挪到 dsh-roost：
+           *   · 情绪要调制记忆，两者必须同处一地
+           *   · 抽取/摘要要调模型，ai-chat 4.0.0 之后调不了模型
+           * 宿主会先摘掉这些标记再把干净文本回给我们，所以正常看不到它们。
+           * 这里只留「清上下文」——那是纯本地的事。
+           */
+          if (a.type === 'clear') {
             store.reset(msg.chatId);
             done.add('上下文清了');
           }
