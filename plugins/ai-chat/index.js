@@ -41,7 +41,7 @@ const DEFAULT_TIMEOUT_SEC = 90;
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '4.1.0',
+  version: '4.2.0',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -105,26 +105,16 @@ export default {
       desc: '以这些字符开头的消息一律不理，填 JSON 数组。默认 ["/"]——别的插件的指令本来也到不了这里，这是第二道保险',
     },
 
-    systemPrompt: {
-      type: 'textarea',
-      default:
-        '你在一个 QQ 群里聊天。回答简短口语化，通常两三句话就够，别写长篇大论。' +
-        '可以用 Markdown 排版，但别为了排版而排版。不确定的事直说不确定，不要编。',
-      label: '人设',
-      desc: '所有会话共用的系统提示词',
-    },
-    groupPrompt: {
-      type: 'textarea',
-      default: '',
-      label: '群聊追加人设',
-      desc: '只在群里生效，叠加在「人设」后面',
-    },
-    directPrompt: {
-      type: 'textarea',
-      default: '',
-      label: '私聊追加人设',
-      desc: '只在私聊生效，叠加在「人设」后面',
-    },
+    /**
+     * 人设不在这里了。
+     *
+     * 以前有三个配置项：`systemPrompt`（人设）、`groupPrompt`（群聊追加）、
+     * `directPrompt`（私聊追加）。它们和 dsh-roost 的 `personas/*.md`
+     * 是两份人设，同时注入会打架。
+     *
+     * 现在人设只归 dsh-roost 一处：人格文件 + 按群覆盖。
+     * 这个插件只管收发和「该不该接」。
+     */
 
     historyLimit: {
       type: 'number',
@@ -223,9 +213,6 @@ export default {
         ttsVoice: String(c.ttsVoice || '').trim(),
         maxRepliesPerMin: num(c.maxRepliesPerMin, 3),
         ignoreWords: Array.isArray(c.ignoreWords) ? c.ignoreWords.map(String).filter(Boolean) : DEFAULT_IGNORE,
-        systemPrompt: String(c.systemPrompt ?? '').trim(),
-        groupPrompt: String(c.groupPrompt ?? '').trim(),
-        directPrompt: String(c.directPrompt ?? '').trim(),
         markdown: c.markdown !== false,
         timeoutSec: num(c.timeoutSec, DEFAULT_TIMEOUT_SEC, 5),
         dshUrl: String(c.dshUrl ?? 'http://127.0.0.1:17321').trim().replace(/\/+$/, ''),
@@ -233,6 +220,178 @@ export default {
         debug: Boolean(c.debug),
       };
     };
+
+    /**
+     * 每个会话最近发出去的那条消息 id。
+     *
+     * 用来支持 `<<retract>>`：模型说错了，把**上一条**收回来。
+     * 只留一条（撤回只针对刚发的那条），不存历史。
+     */
+    const lastSent = new Map();
+
+    /**
+     * 情绪低潮缓存。
+     *
+     * 为什么要缓存：每来一条消息都去问一次 dsh-roost 太浪费，
+     * 而情绪本来就是个慢变量（半衰期 4 小时），60 秒的陈旧完全可以接受。
+     *
+     * 拿到之后只做一件事：**社交意愿低的时候，只接明确叫它的**。
+     * 这是「情绪影响行为」的第一处耦合——不做的话情绪就只是个装饰。
+     */
+    let moodCache = { at: 0, low: false };
+    async function isLowMood() {
+      if (Date.now() - moodCache.at < 60_000) return moodCache.low;
+      const base = String(conf().dshUrl || '').replace(/\/+$/, '');
+      if (!base) return false;
+      try {
+        const res = await fetch(`${base}/roost/api/mood`);
+        const j = await res.json();
+        moodCache = { at: Date.now(), low: Number(j?.sociability ?? 1) < 0.3 };
+      } catch {
+        moodCache = { at: Date.now(), low: false }; // 问不到就当正常，别让它不说话
+      }
+      return moodCache.low;
+    }
+
+    /**
+     * 互动事件：面板 / 按钮点击。
+     *
+     * 分工：ai-chat 是通道层，负责**鉴权 + 转发**；真正的操作由 dsh-roost 执行。
+     * 为什么在这层鉴权：`sender` 和权限档位只有通道层拿得到。
+     *
+     * 鉴权规则：**主人(0) / 管理(1)** 才能改设置。
+     * 消息反馈（点赞点踩，type 13）谁都能做——那是表达态度，不是改配置。
+     *
+     * 失败处理：**群里绝不回「你没权限」**（当众打脸 + 刷屏），静默丢弃只记日志。
+     */
+    ctx.on?.('INTERACTION_CREATE', async (d) => {
+      const t = Number(d?.type ?? d?.data?.type ?? 0);
+
+      // 13 = 消息反馈（点赞/点踩）→ 喂情绪系统。
+      // **不鉴权**：这是表达态度，谁都能点。这是「被对待的反馈」最直接的来源。
+      if (t === 13) {
+        const opt = String(d?.data?.resolved?.feedback_opt ?? '');
+        const base13 = String(conf().dshUrl || '').replace(/\/+$/, '');
+        if (base13 && opt) {
+          try {
+            await fetch(`${base13}/roost/api/mood`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ feedback: opt }),
+            });
+            ctx.logger.info(`[ai-chat] 反馈 ${opt} 已记进情绪`);
+          } catch (e) {
+            ctx.logger.warn(`[ai-chat] 反馈转发失败：${e?.message ?? e}`);
+          }
+        }
+        return;
+      }
+
+      /**
+       * 18 / 19 = 用户 / 群授权。**不鉴权**——授权是用户处置自己的权利，
+       * 谁点都算数。但必须记下来：`group_push` 是群主动消息的硬前置，
+       * 没这条记录，C7 群聊主动根本发不出去。
+       */
+      if (t === 18 || t === 19) {
+        const authz = d?.data?.resolved?.authorize_data ?? {};
+        const base = String(conf().dshUrl || '').replace(/\/+$/, '');
+        if (!base) return;
+        try {
+          await fetch(`${base}/roost/api/authz`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              type: t,
+              scope: String(authz.scope ?? ''),
+              optScene: String(authz.opt_scene ?? ''),
+              chatId: d?.group_openid || d?.user_openid || '',
+            }),
+          });
+          ctx.logger.info(`[ai-chat] 授权记录 ${authz.scope ?? '?'}（type ${t}）`);
+        } catch (e) {
+          ctx.logger.warn(`[ai-chat] 授权记录失败：${e?.message ?? e}`);
+        }
+        return;
+      }
+
+      // 14 = 用户清空会话。等价于「清上下文」，但要鉴权（群级影响）
+      if (t === 14) {
+        const openid14 = d?.group_member_openid || d?.user_openid || '';
+        const ok14 = (() => {
+          try {
+            return Boolean(ctx.isOwner?.(openid14));
+          } catch {
+            return false;
+          }
+        })();
+        if (!ok14) {
+          ctx.logger.info('[ai-chat] 清空会话被拒（非主人）');
+          return;
+        }
+        const base14 = String(conf().dshUrl || '').replace(/\/+$/, '');
+        if (!base14) return;
+        try {
+          await fetch(`${base14}/roost/api/quick`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              op: 'context.clear',
+              chatId: d?.group_openid || d?.user_openid || '',
+              actor: { openid: openid14, bucket: 'owner' },
+            }),
+          });
+          ctx.logger.info('[ai-chat] 会话已清空');
+        } catch (e) {
+          ctx.logger.warn(`[ai-chat] 清空会话失败：${e?.message ?? e}`);
+        }
+        return;
+      }
+
+      // 只有 11（消息按钮）和 12（快捷菜单）走快捷操作
+      if (t !== 11 && t !== 12) return;
+
+      const raw = String(d?.data?.resolved?.button_data ?? '');
+      if (!raw) return;
+
+      // 约定格式：`op|arg`，比如 `persona.set|毒舌群友`、`memory.list|`
+      const [op, ...rest] = raw.split('|');
+      const arg = rest.join('|');
+
+      const openid = d?.group_member_openid || d?.user_openid || '';
+      const chatId = d?.group_openid || d?.user_openid || '';
+      const kind = d?.group_openid ? 'group' : 'c2c';
+
+      let bucket = 'unknown';
+      try {
+        if (ctx.isOwner?.(openid)) {
+          bucket = 'owner';
+        } else {
+          const lv = await ctx.levelOf?.({ userId: openid, kind, groupId: d?.group_openid || '', raw: d });
+          if (Number.isFinite(lv)) bucket = lv <= 1 ? 'admin' : 'member';
+        }
+      } catch {
+        /* 拿不到权限就按最严处理 */
+      }
+
+      if (bucket !== 'owner' && bucket !== 'admin') {
+        ctx.logger.info(`[ai-chat] 快捷操作被拒（${bucket}）：${op}`);
+        return;
+      }
+
+      const base = String(conf().dshUrl || '').replace(/\/+$/, '');
+      if (!base) return;
+      try {
+        const res = await fetch(`${base}/roost/api/quick`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ op, arg, chatId, actor: { openid, bucket } }),
+        });
+        const j = await res.json().catch(() => ({}));
+        ctx.logger.info(`[ai-chat] 快捷 ${op} → ${j.ok ? 'ok' : j.message || res.status}`);
+      } catch (e) {
+        ctx.logger.warn(`[ai-chat] 快捷转发失败：${e?.message ?? e}`);
+      }
+    });
 
     const store = new ChatStore({
       historyLimit: num(ctx.config.historyLimit, 10, 1),
@@ -355,9 +514,8 @@ export default {
      * 被 @ 时说这段反而会让它犹豫。
      */
     async function systemMessage(msg, c, force) {
-      const extra = msg.kind === 'c2c' ? c.directPrompt : c.groupPrompt;
-      // 人设和记忆都由 dsh-roost 注入，这里只拼场景规则
-      const parts = [c.systemPrompt, extra].filter(Boolean);
+      // 人设和记忆都由 dsh-roost 注入，这里只拼「动作标记」的契约
+      const parts = [];
 
       if (!force) {
         parts.push(
@@ -393,6 +551,23 @@ export default {
           '需要长期记住某件事：在回复里加 <<remember: 内容>>（跨群都记得）',
           '只想在这个群记住（梗、绰号）：加 <<remember-here: 内容>>',
           '要忘掉某件事：<<forget: 关键词>>',
+          /**
+           * Markdown 是**只有我们能做**的东西（OneBot 那边发不了真 Markdown），
+           * 但滥用会像客服。规则一句话：信息密度高才上结构，日常说话说人话。
+           */
+          '需要列清单、做对比、贴代码/命令时，可以用 Markdown（列表、表格、代码块）——这个渠道能真渲染',
+          '但日常聊天别用：一句话能说完的不要列表；表达情绪不要加粗，那看着像客服',
+          /**
+           * 文本链：官方支持的「嵌入交互」。**这是零指令的关键**——
+           * 不用教用户记指令，直接把话替用户打好，他点一下就能发。
+           */
+          '想让人接话又不知道怎么开口时，可以把话替对方打好：<qqbot-cmd-input text="想说的话" />（只能私聊，群里不生效）',
+          '想 @ 群里某个人时（markdown 消息里）：<qqbot-at-user id="他的 member_openid" />',
+          /**
+           * 情绪标记：让情绪从"被动衰减"变成"有原因"。
+           * 由宿主执行并摘掉，群里看不到这行标记。
+           */
+          '你自己的情绪有变化时标一下：<<mood: valence=-0.3, reason=被凶了>>（valence/energy/sociability 都是 -1~1 或 0~1，可以只写 reason）',
           '要改这个会话的人设：<<persona: 内容>>',
           '要清空这个会话的上下文：<<clear>>',
           '要发图片（表情包、画好的图）：<<image: 网址或本地路径>>',
@@ -465,6 +640,17 @@ export default {
 
       if (!gate.go) {
         if (c.debug) ctx.logger.debug(`[ai-chat] 不接（${gate.reason}）：${String(msg.content).slice(0, 30)}`);
+        return;
+      }
+
+      /**
+       * 情绪闸门：社交意愿低的时候只接明确叫它的。
+       *
+       * 这是"有不想说的时候"的实现——比任何短句技巧都管用。
+       * 被 @ / 被点名的（`gate.force`）不受影响：那是明确在叫它。
+       */
+      if (!gate.force && (await isLowMood())) {
+        if (c.debug) ctx.logger.debug('[ai-chat] 不接（社交意愿低）');
         return;
       }
 
@@ -598,12 +784,36 @@ export default {
         store.trim(s);
         s.rounds += 1;
 
+        /**
+         * `<<retract>>`：模型想把**上一条**收回来（说错了、语气不对）。
+         *
+         * 顺序很关键：先记住「上一条是谁」，再发这条，发完才撤。
+         * 群消息撤回窗口是 2 分钟，超了就不撤（撤了也白撤，还多一次请求）。
+         * 标记本身不能发出去，先摘掉。
+         */
+        const wantRetract = /<<retract>>/i.test(body);
+        if (wantRetract) body = body.replace(/<<retract>>/gi, '').trim();
+        const prevSent = lastSent.get(msg.chatId);
+
         if (body) {
           await sendReply(msg, body, {
             markdown: c.markdown,
             keyboard: buttons.length ? buildKeyboard(buttons) : null,
             log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
+            // 记住这次发出去的 id，下一轮要撤的就是它
+            onSent: (id) => {
+              if (id) lastSent.set(msg.chatId, { id, at: Date.now() });
+            },
           });
+        }
+
+        if (wantRetract && prevSent?.id && Date.now() - prevSent.at < 110_000) {
+          try {
+            await msg.retract?.(prevSent.id);
+            ctx.logger.info(`[ai-chat] 撤回了上一条（${prevSent.id}）`);
+          } catch (e) {
+            ctx.logger.warn(`[ai-chat] 撤回失败：${e?.message ?? e}`);
+          }
         }
 
         /**

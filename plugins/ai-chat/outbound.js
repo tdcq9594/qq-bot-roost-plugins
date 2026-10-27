@@ -80,6 +80,23 @@ export function splitText(text, max = MAX_CHUNK) {
  */
 export function planChunks(text, maxChunks = MAX_CHUNKS) {
   const all = splitText(text);
+
+  /**
+   * 别把文本链标签切断。
+   *
+   * `<qqbot-cmd-input text="…" />` 这种标签一旦被劈成两半，
+   * 用户看到的就是一段乱码，而且点不了。所以：
+   * 某段末尾有没闭合的 `<`，就把这段尾巴挪到下一段开头。
+   */
+  for (let i = 0; i < all.length - 1; i++) {
+    const t = all[i];
+    const lt = t.lastIndexOf('<');
+    if (lt > t.lastIndexOf('>')) {
+      all[i] = t.slice(0, lt);
+      all[i + 1] = t.slice(lt) + all[i + 1];
+    }
+  }
+
   if (all.length <= maxChunks) return all;
   const kept = all.slice(0, maxChunks);
   const dropped = all.slice(maxChunks).join('');
@@ -200,7 +217,23 @@ export function buildKeyboard(buttons, { max = 4, perRow = 2 } = {}) {
  * @param {object} [opts.keyboard] 按钮组，见 buildKeyboard
  * @param {(m:string)=>void} [opts.log]
  */
-export async function sendReply(msg, text, { markdown = false, keyboard = null, log = () => {} } = {}) {
+export async function sendReply(msg, text, { markdown = false, keyboard = null, log = () => {}, onSent = null } = {}) {
+  /**
+   * 发出去了就把 message id 报出去（`onSent`）。
+   *
+   * 为什么要 id：`<<retract>>` 要撤回「自己刚发的那条」，
+   * 而框架的 `send()` 本来就返回完整响应体（含 id），
+   * 只是这里以前把它丢成了 `1`。不报 id 就撤不回来。
+   */
+  const report = (r) => {
+    if (!onSent) return;
+    try {
+      onSent(String(r?.id ?? r?.message_id ?? ''));
+    } catch {
+      /* 记录失败不影响发送 */
+    }
+  };
+
   /**
    * 带按钮时必须一条发完——按钮只属于这一条消息，
    * 切段的话按钮会挂到第一段上，用户看着莫名其妙。
@@ -208,7 +241,10 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
   if (keyboard) {
     try {
       const r = await msg.replyMarkdown?.({ content: String(text) }, keyboard);
-      if (r) return 1;
+      if (r) {
+        report(r);
+        return 1;
+      }
       log('带按钮的 markdown 没发出去，降级纯文本（按钮会丢）');
     } catch (e) {
       log(`带按钮的 markdown 发送失败：${e?.message ?? e}`);
@@ -227,12 +263,15 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
       if (i === 0 && markdown) {
         const r = await msg.replyMarkdown({ content: body });
         if (r) {
+          report(r);
           sent++;
           continue;
         }
         log('markdown 发送失败，降级纯文本');
       }
-      await msg.reply(body);
+      const r2 = await msg.reply(body);
+      // 多段时只记最后一段的 id —— 撤回撤的是「最后发出去那条」
+      report(r2);
       sent++;
     } catch (e) {
       log(`第 ${i + 1} 段发送失败：${e?.message ?? e}`);
