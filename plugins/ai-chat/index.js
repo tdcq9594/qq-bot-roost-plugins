@@ -25,7 +25,7 @@
  * 插件解析执行后把标记摘掉。用户说「记住我住在杭州」就行。
  */
 
-import { createAdapter, ADAPTER_OPTIONS } from './adapter/index.js';
+import { createAdapter } from './adapter/index.js';
 import { createBridge } from './adapter/bridge.js';
 import { buildUserContent } from './inbound.js';
 import { sendReply, sendMedia, buildKeyboard } from './outbound.js';
@@ -38,27 +38,11 @@ import { synthesize, DEFAULT_VOICE } from './tts.js';
 
 /** 一次请求最多等多久 */
 const DEFAULT_TIMEOUT_SEC = 90;
-const DEFAULT_MODEL = 'deepseek-flash';
-
-/** 常用的模型别名，省得用户记全名 */
-const MODEL_ALIAS = { flash: 'deepseek-flash', pro: 'deepseek-v4-pro' };
-const aliasModel = (m) => MODEL_ALIAS[m] ?? m;
-
-/** HTTP 错误翻成人话 */
-function explainHttp(status, bodyText = '') {
-  const detail = String(bodyText).slice(0, 160);
-  if (status === 401 || status === 403) return 'API Key 不对或没有权限，去面板「插件 → AI 对话 → 设置」重新填';
-  if (status === 402) return '账户余额不足，去服务商充值';
-  if (status === 404) return '接口地址不对，检查 baseUrl 是不是漏了 /v1 或多写了路径';
-  if (status === 429) return '请求太频繁被限流了，等几秒再试';
-  if (status >= 500) return `服务商那边出错了（HTTP ${status}），稍后再试`;
-  return `请求失败（HTTP ${status}）${detail ? `：${detail}` : ''}`;
-}
 
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '3.8.0',
+  version: '4.0.0',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -71,74 +55,7 @@ export default {
    */
   priority: -100,
 
-  /** 面板上的「快速填入」。地址都是实测过的（不带 Key 返回 401 说明接口真实存在） */
-  configPresets: [
-    {
-      name: 'DeepSeek',
-      desc: '国内直连、便宜，日常聊天够用（deepseek-flash）',
-      values: { baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash' },
-    },
-    {
-      name: 'DeepSeek Pro',
-      desc: '能力更强、贵几倍，难一点的活用它（deepseek-v4-pro）',
-      values: { baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-pro' },
-    },
-    {
-      name: 'Kimi',
-      desc: '月之暗面，长文本强项',
-      values: { baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
-    },
-    {
-      name: '通义千问',
-      desc: '阿里云百炼，OpenAI 兼容模式',
-      values: { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
-    },
-    {
-      name: '智谱 GLM',
-      desc: '有免费额度，适合先试水',
-      values: { baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' },
-    },
-    {
-      name: '硅基流动',
-      desc: '一个 Key 调很多开源模型，如 Qwen / Llama',
-      values: { baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct' },
-    },
-    {
-      name: '本地 Ollama',
-      desc: '本机跑，不要钱也不要网（先在 Ollama 里 pull 好模型）',
-      values: { baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen2.5:7b' },
-    },
-  ],
-
   config: {
-    adapter: {
-      type: 'select',
-      default: 'openai',
-      options: ADAPTER_OPTIONS,
-      label: '适配器',
-      desc: '这一轮交给谁去想。openai = 直连兼容端点（默认，装上就能用）；dsh = 交给 DeepSeek Harness，能用它的工具和记忆（需另装 dsh-roost）；webhook = 自建服务',
-    },
-    apiKey: {
-      type: 'text',
-      default: '',
-      label: 'API 密钥',
-      desc: 'openai 适配器必填。在服务商控制台创建，通常以 sk- 开头',
-      placeholder: 'sk-...',
-    },
-    baseUrl: {
-      type: 'text',
-      default: 'https://api.deepseek.com',
-      label: '接口地址',
-      desc: 'OpenAI 兼容地址。不知道填什么就点上面的「快速填入」',
-      placeholder: 'https://api.deepseek.com',
-    },
-    model: {
-      type: 'text',
-      default: 'deepseek-flash',
-      label: '模型',
-      desc: '服务商提供的模型名，以官网文档为准',
-      placeholder: 'deepseek-flash',
-    },
 
     decide: {
       type: 'select',
@@ -227,39 +144,6 @@ export default {
       desc: '群里很久没人说话就把上下文回收，省内存也避免拿很久以前的话当上下文',
     },
 
-    maxTokens: {
-      type: 'number',
-      default: 1024,
-      min: 1,
-      max: 8192,
-      label: '单条回复上限（token）',
-      desc: '太小会被截断，太大会让它写长篇',
-    },
-    temperature: {
-      type: 'number',
-      default: 1,
-      min: 0,
-      max: 2,
-      label: '发散程度',
-      desc: '越小越稳，越大越活泼。开了「思考模式」时不生效',
-    },
-    thinking: {
-      type: 'boolean',
-      default: false,
-      label: '思考模式',
-      desc: '让模型先打草稿再回答，难题更准，但慢好几倍、还更费钱。群聊一般不用开',
-    },
-    reasoningEffort: {
-      type: 'select',
-      default: 'high',
-      options: [
-        { value: 'low', label: '低（快，省）' },
-        { value: 'high', label: '高（默认）' },
-        { value: 'max', label: '最高（最慢最贵）' },
-      ],
-      label: '思考强度',
-      desc: '只在「思考模式」开启时有意义',
-    },
 
     markdown: {
       type: 'boolean',
@@ -297,13 +181,6 @@ export default {
       desc: '模型这么久没回就放弃，别让用户干等',
     },
 
-    hostUrl: {
-      type: 'text',
-      default: '',
-      label: 'Webhook 地址',
-      desc: 'webhook 适配器用。插件把消息 POST 到这个地址的 /inbound，并等你回调 /reply',
-      placeholder: 'http://127.0.0.1:9000',
-    },
     dshUrl: {
       type: 'text',
       default: 'http://127.0.0.1:17321',
@@ -338,10 +215,6 @@ export default {
     const conf = () => {
       const c = ctx.config ?? {};
       return {
-        adapter: String(c.adapter ?? 'openai'),
-        apiKey: String(c.apiKey ?? '').trim(),
-        baseUrl: String(c.baseUrl ?? 'https://api.deepseek.com').trim().replace(/\/+$/, ''),
-        model: aliasModel(String(c.model ?? DEFAULT_MODEL).trim()),
         decide: c.decide === 'mention' ? 'mention' : 'ai',
         cooldownSec: num(c.cooldownSec, 20),
         mergeWaitSec: num(c.mergeWaitSec, 1.5, 0),
@@ -354,13 +227,8 @@ export default {
         systemPrompt: String(c.systemPrompt ?? '').trim(),
         groupPrompt: String(c.groupPrompt ?? '').trim(),
         directPrompt: String(c.directPrompt ?? '').trim(),
-        maxTokens: num(c.maxTokens, 1024, 1),
-        temperature: Number.isFinite(Number(c.temperature)) ? Number(c.temperature) : 1,
-        thinking: Boolean(c.thinking),
-        reasoningEffort: ['low', 'high', 'max'].includes(c.reasoningEffort) ? c.reasoningEffort : 'high',
         markdown: c.markdown !== false,
         timeoutSec: num(c.timeoutSec, DEFAULT_TIMEOUT_SEC, 5),
-        hostUrl: String(c.hostUrl ?? '').trim().replace(/\/+$/, ''),
         dshUrl: String(c.dshUrl ?? 'http://127.0.0.1:17321').trim().replace(/\/+$/, ''),
         publicUrl: String(c.publicUrl ?? 'http://127.0.0.1:8080').trim().replace(/\/+$/, ''),
         debug: Boolean(c.debug),
@@ -415,7 +283,7 @@ export default {
 
     /**
      * 宿主回话通道。webhook / dsh 适配器用它等宿主把话说完；
-     * openai 适配器不走这条路，这条路由平时是空闲的。
+     * 这条路由给宿主回调回话用，平时是空闲的。
      */
     const bridge = createBridge({ log: (m) => ctx.logger.warn(`[ai-chat] ${m}`) });
     const profile = createProfile({ storage: ctx.storage });
@@ -435,10 +303,10 @@ export default {
     let adapter = null;
     function getAdapter() {
       const c = conf();
-      if (!adapter || adapter.name !== c.adapter) {
+      // 只剩 dsh 一个适配器了，不用再比对名字
+      if (!adapter) {
         adapter = createAdapter({
           conf,
-          explainHttp,
           bridge,
           publicUrl: () => conf().publicUrl,
           log: (m) => ctx.logger.info(`[ai-chat] ${m}`),
@@ -454,7 +322,7 @@ export default {
     /* ---------------- 说话人的权限 ---------------- */
 
     /**
-     * 这一句是谁说的、什么权限。只给宿主用（openai 适配器会忽略）。
+     * 这一句是谁说的、什么权限。只给宿主用。
      *
      * **算不准就返回 null**——宿主拿不到权限信息时会按「身份不明」处理，
      * 只给聊天能力。错报成「普通成员」更危险：宿主可能因此放开工具。
@@ -604,13 +472,17 @@ export default {
         return;
       }
 
-      // 没配 Key 只在被明确叫到时提醒一句，否则静默——群聊里不该刷这个
-      if (c.adapter === 'openai' && !c.apiKey) {
+      /**
+       * 没连上 DSH 时只在被明确叫到时提醒一句，否则静默——
+       * 群聊里不该刷这个。
+       *
+       * 以前这里是「没配 API Key」，现在插件不直连模型了，
+       * 缺的是 DSH 那边的地址（dsh-roost 没装 / 没启动）。
+       */
+      if (!c.dshUrl) {
         if (gate.force) {
           await msg
-            .reply(
-              `还没配 API Key。\n去面板「插件 → ${ctx.name} → 设置」填上，DeepSeek 的 Key 在 platform.deepseek.com 申请。`,
-            )
+            .reply(`还没连上 DSH。\n装一下 dsh-roost 插件，或者在设置里填 DSH 地址（默认 http://127.0.0.1:17321）。`)
             .catch(() => {});
         }
         return;
@@ -683,8 +555,7 @@ export default {
 
         const { text, usage, model } = await callModel(s.messages, {
           signal: paceSt.controller.signal,
-          model: c.model,
-          // webhook / dsh 适配器要用原始消息整形，openai 适配器会忽略这几个
+          // 宿主要用原始消息整形
           msg,
           chat: { kind: msg.kind, chatId: msg.chatId },
           // 权限档位给宿主，它据此决定给不给本地工具
@@ -697,7 +568,7 @@ export default {
            * 模型根本不知道有这些标记可用。
            */
           system: sys?.content ?? '',
-          // 图片块：宿主拿去做 image 内容块，openai 适配器暂时忽略
+          // 图片块：宿主拿去做 image 内容块
           images,
         });
 

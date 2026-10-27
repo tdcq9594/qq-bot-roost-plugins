@@ -1,45 +1,37 @@
 /**
- * 适配器注册表。
+ * 适配器：只留 DSH。
  *
- * 插件本体只管「QQ 这边怎么收、怎么发、什么该理」，
- * 「这一轮交给谁去想」由适配器决定。换宿主 = 换一个适配器，插件本体不动。
+ * 这个插件现在的定位很单一——**只做「QQ ↔ DSH」的桥**：
+ * 收 QQ 消息、交给 DSH 那一轮、把结果发回 QQ。
+ * 模型是谁、怎么调、有没有 Key，全归 DSH 管，插件一概不碰。
  *
- * 每个适配器只要实现一个方法：
+ * 以前这里有三个适配器（openai 直连 / webhook / dsh）。
+ * 直连那套意味着插件自己维护 baseUrl、apiKey、model、maxTokens、
+ * temperature、thinking、reasoningEffort……等于在插件里养了半个客户端。
+ * 那些能力 DSH 本来就有，重复一份只会两边配置打架、行为对不上。
  *
- *   chat({ messages, signal, model, msg, chat }) → { text, usage?, model? }
- *
- * 以后加新宿主，就在这个目录里加一个文件、在下面注册一下，
- * **不用碰 index.js**，也就不会把已经在跑的旧分支改坏。
+ * 所以 4.0.0 起只保留 dsh：想换模型就在 DSH 里换，插件不用改一行。
  */
 
-import { createOpenAIAdapter } from './openai.js';
 import { createHostAdapter } from './host.js';
 
 /**
  * @param {object} deps
  * @param {() => object} deps.conf
- * @param {(status:number, body:string) => string} deps.explainHttp
- * @param {object} deps.bridge 回话通道（webhook/dsh 用）
+ * @param {object} deps.bridge 回话通道
  * @param {() => string} deps.publicUrl 面板对外地址
  * @param {(s:string)=>void} [deps.log]
  */
-export function createAdapter({ conf, explainHttp, bridge, publicUrl, log }) {
+export function createAdapter({ conf, bridge, publicUrl, log }) {
   const c = conf();
-  const wanted = String(c.adapter || 'openai');
-
-  switch (wanted) {
-    case 'openai':
-      return createOpenAIAdapter({ conf, explainHttp });
-
-    case 'webhook':
-      return createHostAdapter({ name: 'webhook', url: c.hostUrl, bridge, publicUrl, log, trimHistory });
-
-    case 'dsh':
-      return createHostAdapter({ name: 'dsh', url: c.dshUrl, bridge, publicUrl, log, trimHistory });
-
-    default:
-      throw new Error(`未知的适配器：${wanted}`);
-  }
+  return createHostAdapter({
+    name: 'dsh',
+    url: c.dshUrl,
+    bridge,
+    publicUrl,
+    log,
+    trimHistory,
+  });
 }
 
 /**
@@ -50,10 +42,3 @@ function trimHistory(messages, limit = 20) {
   const msgs = (messages ?? []).filter((m) => m?.role === 'user' || m?.role === 'assistant');
   return msgs.slice(-limit).map((m) => ({ role: m.role, content: String(m.content ?? '') }));
 }
-
-/** 面板上「适配器」这个下拉的选项，跟上面的 switch 保持一致 */
-export const ADAPTER_OPTIONS = [
-  { value: 'openai', label: 'OpenAI 兼容（默认，直连模型）' },
-  { value: 'dsh', label: 'DeepSeek Harness（需装 dsh-roost）' },
-  { value: 'webhook', label: 'Webhook（自建服务）' },
-];

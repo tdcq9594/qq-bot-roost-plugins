@@ -202,8 +202,7 @@ const baseConf = (over = {}) => () => ({
   };
 
   const a = createAdapter({
-    conf: baseConf({ adapter: 'webhook', hostUrl: 'http://host' }),
-    explainHttp: (s) => `HTTP_${s}`,
+    conf: baseConf({ dshUrl: 'http://host' }),
     bridge,
     publicUrl: () => 'http://127.0.0.1:8080',
     log: () => {},
@@ -233,14 +232,14 @@ const baseConf = (over = {}) => () => ({
   await new Promise((r) => setTimeout(r, 30));
   const sent = calls[0];
 
-  ok('webhook: 推到宿主的 /inbound', sent?.url === 'http://host/inbound', sent?.url ?? '没发出');
+  ok('dsh: 推到宿主的 /inbound', sent?.url === 'http://host/inbound', sent?.url ?? '没发出');
   ok(
-    'webhook: 带一次性令牌与回话地址',
+    'dsh: 带一次性令牌与回话地址',
     Boolean(sent?.body.reply?.token) && sent.body.reply.url.includes('/api/plugins/ai-chat/r/reply'),
   );
-  ok('webhook: 语音 ASR 传给了宿主', sent?.body.attachments?.[0]?.asrText === '嗨');
-  ok('webhook: history 里去掉了 system', (sent?.body.history ?? []).every((m) => m.role !== 'system'));
-  ok('webhook: 标注了是哪个适配器', sent?.body.adapter === 'webhook');
+  ok('dsh: 语音 ASR 传给了宿主', sent?.body.attachments?.[0]?.asrText === '嗨');
+  ok('dsh: history 里去掉了 system', (sent?.body.history ?? []).every((m) => m.role !== 'system'));
+  ok('dsh: 标注了适配器', sent?.body.adapter === 'dsh');
 
   const r = bridge.handleReply({ id: sent.body.id, token: sent.body.reply.token, text: '在呢' });
   const out = await pending;
@@ -279,8 +278,8 @@ const baseConf = (over = {}) => () => ({
   // 没填地址：早点说清楚
   const bridge = createBridge({ ttlMs: 500 });
   const a = createAdapter({
-    conf: baseConf({ adapter: 'webhook', hostUrl: '' }),
-    explainHttp: (s) => `HTTP_${s}`,
+    // 地址留空：应该立刻报错，而不是去连一个默认地址
+    conf: baseConf({ dshUrl: '' }),
     bridge,
     publicUrl: () => 'http://127.0.0.1:8080',
   });
@@ -291,7 +290,7 @@ const baseConf = (over = {}) => () => ({
     err = e;
   }
   bridge.dispose();
-  ok('webhook: 没填地址时提示清楚', /还没填宿主的接收地址/.test(err?.message ?? ''), err?.message ?? '');
+  ok('dsh: 没填地址时提示清楚', /还没填宿主的接收地址/.test(err?.message ?? ''), err?.message ?? '');
 }
 
 /* ---------------- 富媒体 ---------------- */
