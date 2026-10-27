@@ -77,20 +77,10 @@ export function createProviders({ conf, log = () => {} }) {
   }
 
   /**
-   * 调一轮（非流式）。
+   * 用某个服务商调一轮（非流式）。
    * QQ 群聊不支持流式，用户只看最终消息，所以 `stream: false`。
-   *
-   * @param {object} p
-   * @param {Array<{role:string, content:any}>} p.messages
-   * @param {AbortSignal} [p.signal]
-   * @param {string} [p.providerId]
-   * @returns {Promise<{text:string, usage:object|null, model:string, ms:number, provider:object}>}
    */
-  async function chat({ messages, signal, providerId }) {
-    const p = resolve(providerId);
-    if (!p) {
-      throw new Error('还没有配置任何模型服务商，去面板「插件 → ai-native → 配置」里填一个');
-    }
+  async function chatOnce(p, messages, signal) {
     if (!p.baseUrl) throw new Error(`服务商「${p.name}」缺少 baseUrl`);
     if (!p.model) throw new Error(`服务商「${p.name}」缺少 model`);
     if (!p.apiKey) throw new Error(`服务商「${p.name}」还没填 API Key`);
@@ -140,6 +130,44 @@ export function createProviders({ conf, log = () => {} }) {
       ms: Date.now() - started,
       provider: p,
     };
+  }
+
+  /**
+   * 调一轮：主服务商失败时**自动换下一个**（对应 AstrBot 的多 provider 容错）。
+   * 顺序 = 指定的/默认的优先，其余按配置顺序兜底。
+   * `fallback: false` 时只试主服务商，失败直接抛。
+   *
+   * @param {object} p
+   * @param {Array<{role:string, content:any}>} p.messages
+   * @param {AbortSignal} [p.signal]
+   * @param {string} [p.providerId]
+   * @returns {Promise<{text:string, usage:object|null, model:string, ms:number, provider:object}>}
+   */
+  async function chat({ messages, signal, providerId }) {
+    const all = list();
+    if (!all.length) {
+      throw new Error('还没有配置任何模型服务商，去面板「插件 → ai-native → 配置」里填一个');
+    }
+    // 注意：必须在同一个 all 数组里按 id 找主服务商。
+    // 不能调 resolve()——它内部会重新 list()，生成的是新对象，
+    // 后面的 `p !== primary` 就永远成立，主服务商会被试两次。
+    const want = String(providerId || conf().defaultProvider || '').trim();
+    const primary = all.find((p) => p.id === want) || all[0];
+    const useFallback = conf().fallback !== false;
+    const order = useFallback ? [primary, ...all.filter((p) => p !== primary)] : [primary];
+
+    let lastErr = null;
+    for (const p of order) {
+      if (!p) continue;
+      try {
+        return await chatOnce(p, messages, signal);
+      } catch (e) {
+        lastErr = e;
+        if (!useFallback) throw e;
+        log(`服务商「${p.name}」失败，换下一个：${e.message}`);
+      }
+    }
+    throw lastErr || new Error('没有可用的模型服务商');
   }
 
   return { list, resolve, chat };

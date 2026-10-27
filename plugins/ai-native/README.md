@@ -44,7 +44,8 @@
 | `minChars` | `1` | 太短的消息不接 |
 | `historyTurns` | `12` | 带多少轮上下文 |
 | `compressAfterTurns` | `24` | 超过多少轮后压缩旧对话 |
-| `vision` | `false` | 是否把图片 URL 直接发给模型（需多模态模型） |
+| `vision` | `false` | 是否下载图片转 base64 发给多模态模型 |
+| `fallback` | `true` | 主服务商失败时按列表顺序自动换下一个 |
 | `providers` | 见下 | 服务商列表（JSON 数组） |
 | `defaultProvider` | `default` | 默认服务商 id |
 | `personas` | 见下 | 人格库（JSON 对象） |
@@ -111,5 +112,6 @@
 
 - 不引任何第三方依赖，`fetch` 是 Node 自带的。
 - 语音消息直接用官方 ASR 结果（`msg.voices[].asrText`），不用自己识别。
-- 图片默认只标注「[图片×N]」；开了 `vision` 才把 URL 发给模型（部分服务商需要 base64，届时再扩展）。
+- 图片默认只标注「[图片×N]」；开了 `vision` 会下载转 base64（>5MB 或下载失败回退 URL）。
+- 主服务商失败（限流/超时/欠费）会按列表顺序自动试下一个；`fallback: false` 可关掉。
 - 长任务不会超过 5 分钟被动回复窗口；超时会由框架自动降级为主动消息。

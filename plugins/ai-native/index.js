@@ -23,7 +23,7 @@ const stats = { replied: 0, errors: 0, totalMs: 0, count: 0, lastModel: '' };
 export default {
   id: 'ai-native',
   name: 'AI 原生对话',
-  version: '0.1.0',
+  version: '0.2.0',
   description: '直连模型（OpenAI 兼容），带人格、短期上下文与长期记忆；不依赖 DSH',
   shortDesc: '直连模型的群聊 AI：人格 + 记忆',
   frameworkVersion: '>=0.8.1',
@@ -82,7 +82,13 @@ export default {
       type: 'boolean',
       default: false,
       label: '图片交给模型',
-      desc: '开启后把图片 URL 直接发给模型（需多模态模型，如 gpt-4o / qwen-vl）',
+      desc: '开启后下载图片转 base64 发给多模态模型（gpt-4o / qwen-vl 等）',
+    },
+    fallback: {
+      type: 'boolean',
+      default: true,
+      label: '失败自动换服务商',
+      desc: '主服务商出错（限流/超时/欠费）时，按列表顺序自动试下一个',
     },
     providers: {
       type: 'json',
@@ -343,7 +349,7 @@ export default {
         const history = memory
           .history(msg.chatId)
           .slice(-((Number(c.historyTurns) || 12) * 2));
-        const userContent = buildUserContent(fullText, images, c);
+        const userContent = await buildUserContent(fullText, images, c, ctx.logger);
 
         const messages = [
           { role: 'system', content: system },
@@ -404,16 +410,37 @@ export default {
 
 /**
  * 拼一条 user 消息的内容。
- * 没有图片 → 纯文本；有图片且开了 vision → OpenAI 多模态格式；否则只标注数量。
+ * 没有图片 → 纯文本；有图片且开了 vision → 下载转 base64 的多模态格式；
+ * 否则只标注数量。
+ *
+ * 为什么转 base64 而不是直接给 URL：QQ 的图片 CDN 地址很多服务商抓不到
+ * （防盗链/内网），base64 最稳。太大（>5MB）或下载失败时回退成 URL。
  */
-function buildUserContent(text, images, c) {
+async function buildUserContent(text, images, c, log) {
   if (!images.length) return text;
   if (!c.vision) return `${text}\n[图片×${images.length}]`.trim();
-  return [
-    { type: 'text', text: text || '（请看图）' },
-    ...images.slice(0, 4).map((img) => ({
-      type: 'image_url',
-      image_url: { url: img.url },
-    })),
-  ];
+  const parts = [{ type: 'text', text: text || '（请看图）' }];
+  for (const img of images.slice(0, 4)) {
+    const url = await toImageUrl(img, log);
+    if (url) parts.push({ type: 'image_url', image_url: { url } });
+  }
+  return parts;
+}
+
+/** 把一张附件转成 data URI；失败或过大就退回原始 URL */
+async function toImageUrl(img, log) {
+  const src = String(img?.url || '').trim();
+  if (!src) return null;
+  if (src.startsWith('data:')) return src;
+  try {
+    const res = await fetch(src, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return src;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > 5 * 1024 * 1024) return src; // 太大就别塞请求体，交给模型自己抓
+    const ct = img.contentType || res.headers.get('content-type') || 'image/jpeg';
+    return `data:${ct};base64,${buf.toString('base64')}`;
+  } catch (e) {
+    log?.debug?.(`图片转 base64 失败，回退 URL：${e.message}`);
+    return src;
+  }
 }
