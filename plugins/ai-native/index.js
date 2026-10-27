@@ -24,7 +24,7 @@ const stats = { replied: 0, errors: 0, totalMs: 0, count: 0, lastModel: '' };
 export default {
   id: 'ai-native',
   name: 'AI 原生对话',
-  version: '0.6.0',
+  version: '0.7.0',
   description: '直连模型（OpenAI 兼容），带人格、多话题、记忆检索、知识库与工具调用；不依赖 DSH',
   shortDesc: '直连模型的群聊 AI：人格 + 记忆',
   frameworkVersion: '>=0.8.1',
@@ -54,6 +54,22 @@ export default {
       max: 600,
       label: '冷却（秒）',
       desc: '同一会话两次回复的最小间隔',
+    },
+    timeoutSec: {
+      type: 'number',
+      default: 90,
+      min: 10,
+      max: 600,
+      label: '一次回复的总时限（秒）',
+      desc: '含工具调用的所有轮次。超时就放弃这一轮并释放会话，避免模型卡住后这个群再也不回',
+    },
+    maxQueue: {
+      type: 'number',
+      default: 3,
+      min: 1,
+      max: 20,
+      label: '同一会话最多同时挂几条',
+      desc: '含正在回复的那条。比如 3 = 1 条在回、2 条排队；再多就丢弃，避免刷屏时越排越久',
     },
     minChars: {
       type: 'number',
@@ -229,12 +245,31 @@ export default {
       log: ctx.logger,
     });
 
-    // 按会话的临时选择（内存：重载保留、重启丢；要长期就改默认配置）
-    ctx.state.providerOverride ??= new Map();
-    ctx.state.personaOverride ??= new Map();
     ctx.state.lastReply ??= new Map();
-    ctx.state.busy ??= new Set();
+    ctx.state.queues ??= new Map();
     ctx.state.errHintAt ??= new Map();
+    ctx.state.ovCache ??= new Map();
+
+    /**
+     * 会话级选择（用哪个模型 / 哪个人格）要**落盘**：
+     * 存 ctx.state 的话热重载还在、重启就丢，管理员切过的全回落默认值，
+     * 群里看着像「设置自己失效了」。加一层内存缓存，别每条消息都读盘。
+     */
+    async function overrideOf(chatId) {
+      let ov = ctx.state.ovCache.get(chatId);
+      if (!ov) {
+        ov = (await ctx.storage.get(`ov:${chatId}`, null)) || {};
+        ctx.state.ovCache.set(chatId, ov);
+      }
+      return ov;
+    }
+
+    async function setOverride(chatId, patch) {
+      const ov = { ...(await overrideOf(chatId)), ...patch };
+      ctx.state.ovCache.set(chatId, ov);
+      await ctx.storage.set(`ov:${chatId}`, ov);
+      return ov;
+    }
 
     const personaList = () => {
       const raw = conf().personas;
@@ -249,10 +284,10 @@ export default {
       return obj && typeof obj === 'object' ? obj : {};
     };
 
-    const personaFor = (chatId) => {
+    const personaFor = async (chatId) => {
       const list = personaList();
-      const override = ctx.state.personaOverride.get(chatId) || '';
-      const name = override || conf().defaultPersona || Object.keys(list)[0] || '默认';
+      const ov = await overrideOf(chatId);
+      const name = ov.persona || conf().defaultPersona || Object.keys(list)[0] || '默认';
       const p = list[name] || list[conf().defaultPersona] || Object.values(list)[0] || {};
       return {
         name,
@@ -261,8 +296,10 @@ export default {
       };
     };
 
-    const providerFor = (chatId) =>
-      ctx.state.providerOverride.get(chatId) || conf().defaultProvider;
+    const providerFor = async (chatId) => {
+      const ov = await overrideOf(chatId);
+      return ov.provider || conf().defaultProvider;
+    };
 
     // ---------------- /ai 管理命令 ----------------
     ctx.command(
@@ -284,7 +321,7 @@ export default {
         if (sub === '模型' || sub === 'model') {
           const all = providers.list();
           if (!rest) {
-            const cur = providerFor(msg.chatId);
+            const cur = await providerFor(msg.chatId);
             const lines = all.map(
               (p) => `${p.id === cur ? '▶ ' : '· '}${p.id}（${p.name} / ${p.model}）`,
             );
@@ -297,7 +334,7 @@ export default {
           if (!(await isAdmin())) return msg.reply('切换模型需要管理员权限');
           const p = all.find((x) => x.id === rest);
           if (!p) return msg.reply(`没有「${rest}」这个服务商，用 /ai 模型 查看列表`);
-          ctx.state.providerOverride.set(msg.chatId, p.id);
+          await setOverride(msg.chatId, { provider: p.id });
           return msg.reply(`本会话已切到：${p.id}（${p.name} / ${p.model}）`);
         }
 
@@ -305,7 +342,7 @@ export default {
           const list = personaList();
           const names = Object.keys(list);
           if (!rest) {
-            const cur = personaFor(msg.chatId).name;
+            const cur = (await personaFor(msg.chatId)).name;
             return msg.reply(
               names.length
                 ? `可用人格：\n${names
@@ -316,7 +353,7 @@ export default {
           }
           if (!(await isAdmin())) return msg.reply('切换人格需要管理员权限');
           if (!list[rest]) return msg.reply(`没有「${rest}」这个人格，用 /ai 人格 查看列表`);
-          ctx.state.personaOverride.set(msg.chatId, rest);
+          await setOverride(msg.chatId, { persona: rest });
           return msg.reply(`本会话人格已切到：${rest}`);
         }
 
@@ -365,7 +402,7 @@ export default {
 
         if (sub === '记住' || sub === 'remember') {
           if (!rest) return msg.reply('用法：/ai 记住 我喜欢猫');
-          const arr = await memory.addFact(msg.chatId, rest);
+          const arr = await memory.addFact(msg.chatId, rest, speakerOf(msg));
           return msg.reply(`记住了（现在共 ${arr.length} 条）`);
         }
 
@@ -461,11 +498,51 @@ export default {
       const now = Date.now();
       const last = ctx.state.lastReply.get(msg.chatId) || 0;
       if (now - last < (Number(c.cooldownSec) || 0) * 1000) return;
-      if (ctx.state.busy.has(msg.chatId)) return;
 
-      ctx.state.busy.add(msg.chatId);
+      /**
+       * 同一会话串行处理：先到的先回，后来的排队。
+       *
+       * 以前是「忙就直接 return」——用户连发两句，第二句静默消失，
+       * 模型永远不知道有这句，用户以为机器人装死。排队才是对的，
+       * 但要有上限，否则刷屏时队列越排越长、回复越来越离谱。
+       */
+      const maxQueue = Math.max(1, Number(c.maxQueue) || 3);
+      const q = ctx.state.queues.get(msg.chatId) || { chain: Promise.resolve(), pending: 0 };
+      ctx.state.queues.set(msg.chatId, q);
+      if (q.pending >= maxQueue) {
+        ctx.logger.debug(`队列已满（${q.pending} 条挂着），丢弃 ${String(msg.chatId).slice(0, 8)} 的一条`);
+        return;
+      }
+
+      q.pending += 1;
+      /**
+       * 必须 await 自己这一轮：框架的 `msg.reply()` 只是往缓冲区里塞，
+       * 真正发送发生在监听器返回之后的 `flushReplies()`。这里要是 fire-and-forget，
+       * 迟到的回复就永远躺在缓冲区里发不出去。
+       *
+       * await 的副作用正好是我们想要的：后面的消息排在队里等前一条回复完，
+       * 不会三条消息同时打三次模型、也不会把上下文写乱。
+       */
+      const run = q.chain
+        .then(() => {
+          q.pending -= 1; // 开始跑了就交还名额
+          return handle(msg, fullText, images, c, aiMode);
+        })
+        .catch(() => {});
+      q.chain = run.finally(() => {
+        if (q.pending <= 0) ctx.state.queues.delete(msg.chatId);
+      });
+      await q.chain;
+    });
+
+    /** 真正干活的那一轮（已在会话队列里，串行执行） */
+    async function handle(msg, fullText, images, c, aiMode) {
+      const pid = await providerFor(msg.chatId);
+      // 一次回复的总时限：模型卡住时能主动放弃，别让这个群永久占着队列
+      const timeoutMs = Math.max(10, Number(c.timeoutSec) || 90) * 1000;
+      const signal = AbortSignal.timeout(timeoutMs);
       try {
-        const persona = personaFor(msg.chatId);
+        const persona = await personaFor(msg.chatId);
         // 会话（群/私聊）→ 对话（话题）：上下文和摘要按对话隔离，人格与长期记忆按会话共享
         const scope = await memory.scopeOf(msg.chatId);
         const [recalled, summaryText, kbList] = await Promise.all([
@@ -480,24 +557,30 @@ export default {
                 .search(fullText, Math.max(1, Number(c.knowledgeTop) || 3))
                 .catch(() => []),
         ]);
+        const groupChat = msg.kind === 'group';
+        const speaker = speakerOf(msg);
         const system = memory.buildSystem({
           persona,
           factList: recalled.list,
           factTotal: recalled.total,
           summaryText,
           kbList,
+          groupChat,
           aiMode,
         });
-        const history = memory
-          .history(scope)
-          .slice(-((Number(c.historyTurns) || 12) * 2));
+        const history = memory.historyForModel(scope, Number(c.historyTurns) || 12);
         const userContent = await buildUserContent(fullText, images, c, ctx.logger);
+        // 当前这条也要带名字，否则历史里都带、只有最新一条不带，模型容易对错人
+        const lastUser =
+          speaker && typeof userContent === 'string'
+            ? { role: 'user', content: `${speaker}：${userContent}` }
+            : { role: 'user', content: userContent };
 
         const messages = [
           { role: 'system', content: system },
           ...persona.beginDialogs,
           ...history,
-          { role: 'user', content: userContent },
+          lastUser,
         ];
 
         // 工具调用循环：模型要工具就执行，把结果喂回去，直到它给最终回复
@@ -506,7 +589,7 @@ export default {
         const maxRounds = Math.max(1, Number(c.maxToolRounds) || 4);
         let r = null;
         for (let round = 0; round < maxRounds; round++) {
-          r = await providers.chat({ messages, tools, providerId: providerFor(msg.chatId) });
+          r = await providers.chat({ messages, tools, providerId: pid, signal });
           if (!r.toolCalls?.length) break;
 
           // 把 assistant 的 tool_calls 消息原样加回去（content 为空是正常的）
@@ -519,7 +602,13 @@ export default {
             let out;
             try {
               const args = JSON.parse(tc.function?.arguments || '{}');
-              out = await runTool(tc.function?.name, args, { memory, knowledge, chatId: msg.chatId });
+              out = await runTool(tc.function?.name, args, {
+                memory,
+                knowledge,
+                chatId: msg.chatId,
+                userId: msg.userId,
+                userName: msg.userName,
+              });
             } catch (e) {
               out = `工具执行失败：${e.message}`;
             }
@@ -528,7 +617,7 @@ export default {
 
           // 轮数用尽还没给最终回复：不带工具再要一次，逼它总结
           if (round === maxRounds - 1) {
-            r = await providers.chat({ messages, providerId: providerFor(msg.chatId) });
+            r = await providers.chat({ messages, providerId: pid, signal });
           }
         }
 
@@ -545,7 +634,7 @@ export default {
         }
 
         await msg.reply(answer);
-        memory.addTurn(scope, fullText || '[图片]', answer);
+        memory.addTurn(scope, fullText || '[图片]', answer, { name: speaker });
         ctx.state.lastReply.set(msg.chatId, Date.now());
 
         stats.replied += 1;
@@ -555,20 +644,22 @@ export default {
         ctx.logger.info(`${String(msg.chatId).slice(0, 8)} ${r.model} ${r.ms}ms`);
 
         // 后台压缩，不阻塞回复（reply 是攒着发的，等压缩会拖慢发送）
-        memory.maybeCompress(scope, providerFor(msg.chatId)).catch(() => {});
+        memory.maybeCompress(scope, pid).catch(() => {});
       } catch (e) {
         stats.errors += 1;
-        ctx.logger.error('AI 回复失败：', e.message);
+        const timeout = e.name === 'TimeoutError' || /abort/i.test(e.message || '');
+        const why = timeout
+          ? `模型 ${Math.round(timeoutMs / 1000)} 秒没回（可在配置里调 timeoutSec）`
+          : e.message;
+        ctx.logger.error('AI 回复失败：', why);
         // 一分钟内只提示一次，别因为模型挂了刷屏
         const lastHint = ctx.state.errHintAt.get(msg.chatId) || 0;
         if (Date.now() - lastHint > 60_000) {
           ctx.state.errHintAt.set(msg.chatId, Date.now());
-          await msg.reply(`AI 暂时不可用：${e.message}`).catch(() => {});
+          await msg.reply(`AI 暂时不可用：${why}`).catch(() => {});
         }
-      } finally {
-        ctx.state.busy.delete(msg.chatId);
       }
-    });
+    }
 
     ctx.menu('说明', [
       '直连模型，不依赖 DSH；每个会话独立的上下文与人格',
@@ -580,10 +671,15 @@ export default {
   },
 
   teardown(ctx) {
-    ctx.state.busy?.clear();
+    ctx.state.queues?.clear();
     ctx.state.lastReply?.clear();
   },
 };
+
+/** 群聊里的说话人昵称；私聊没必要标（就一个人） */
+function speakerOf(msg) {
+  return msg?.kind === 'group' ? String(msg.userName || msg.userId || '').slice(0, 20) : '';
+}
 
 /**
  * 拼一条 user 消息的内容。
@@ -707,13 +803,13 @@ const TOOLS = [
   },
 ];
 
-async function runTool(name, args, { memory, knowledge, chatId }) {
+async function runTool(name, args, { memory, knowledge, chatId, userName }) {
   switch (name) {
     case 'get_time':
       return new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
     case 'remember': {
       if (!args?.text) return '缺少要记住的内容';
-      const arr = await memory.addFact(chatId, args.text);
+      const arr = await memory.addFact(chatId, args.text, userName);
       return `已记住（现在共 ${arr.length} 条）`;
     }
     case 'forget': {

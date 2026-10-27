@@ -173,6 +173,14 @@ export function createProviders({ conf, log = () => {} }) {
       } catch (e) {
         lastErr = e;
         if (!useFallback) throw e;
+        /**
+         * 超时不算「这个服务商不行」，是**这一轮的预算用完了**。
+         * 换下一个服务商也是拿同一个已过期的 signal 去请求，
+         * 立刻失败、白等一轮，还会让用户多等几秒才看到错误。
+         */
+        if (e.name === 'TimeoutError' || e.name === 'AbortError' || /abort/i.test(e.message || '')) {
+          throw e;
+        }
         log(`服务商「${p.name}」失败，换下一个：${e.message}`);
       }
     }
