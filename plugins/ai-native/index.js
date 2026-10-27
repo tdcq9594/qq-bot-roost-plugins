@@ -17,14 +17,15 @@
 
 import { createProviders } from './provider.js';
 import { createMemory } from './memory.js';
+import { createKnowledge } from './knowledge.js';
 
 const stats = { replied: 0, errors: 0, totalMs: 0, count: 0, lastModel: '' };
 
 export default {
   id: 'ai-native',
   name: 'AI 原生对话',
-  version: '0.5.0',
-  description: '直连模型（OpenAI 兼容），带人格、多话题、长期记忆检索与工具调用；不依赖 DSH',
+  version: '0.6.0',
+  description: '直连模型（OpenAI 兼容），带人格、多话题、记忆检索、知识库与工具调用；不依赖 DSH',
   shortDesc: '直连模型的群聊 AI：人格 + 记忆',
   frameworkVersion: '>=0.8.1',
 
@@ -118,6 +119,20 @@ export default {
       label: '每轮最多带几条记忆',
       desc: '按相关度取前 N 条；记忆没超过这个数就全给',
     },
+    knowledge: {
+      type: 'boolean',
+      default: true,
+      label: '启用知识库',
+      desc: '自动检索数据目录下 knowledge/ 里的文档，命中片段随问题一起给模型',
+    },
+    knowledgeTop: {
+      type: 'number',
+      default: 3,
+      min: 1,
+      max: 8,
+      label: '每轮最多带几段资料',
+      desc: '命中的片段越多，提示词越长、越贵',
+    },
     providers: {
       type: 'json',
       default: [
@@ -206,6 +221,11 @@ export default {
       storage: ctx.storage,
       state: ctx.state,
       providers,
+      log: ctx.logger,
+    });
+    const knowledge = createKnowledge({
+      conf,
+      dataDir: ctx.dataDir,
       log: ctx.logger,
     });
 
@@ -384,6 +404,25 @@ export default {
           );
         }
 
+        if (sub === '知识' || sub === 'kb' || sub === 'knowledge') {
+          if (rest === '重建' || rest === 'reload' || rest === 'refresh') {
+            const i = await knowledge.reload();
+            return msg.reply(`知识库已重建：${i.docs.length} 个文件 / ${i.chunks.length} 块`);
+          }
+          const st = await knowledge.stats();
+          if (!st.docs.length) {
+            return msg.reply(
+              `知识库是空的。把 .md / .txt 文件放进这个目录：\n${st.dir}\n` +
+                '然后发 /ai 知识 重建 重新索引。',
+            );
+          }
+          const lines = st.docs.map((d) => `· ${d.name}（${d.chunks} 块 / ${d.chars} 字）`);
+          return msg.reply(
+            `知识库：${st.docs.length} 个文件，${st.chunks} 块\n${lines.join('\n')}\n\n` +
+              `目录：${st.dir}\n发 /ai 知识 重建 重新索引`,
+          );
+        }
+
         return msg.reply(
           'AI 助手用法：\n' +
             '/ai 模型 —— 查看 / 切换模型（管理员）\n' +
@@ -393,7 +432,8 @@ export default {
             '/ai 重置 —— 清空当前话题的上下文\n' +
             '/ai 记住 <内容> —— 让它记住\n' +
             '/ai 忘记 <关键词> —— 忘掉\n' +
-            '/ai 记忆 [关键词] —— 看它记得什么 / 搜记忆',
+            '/ai 记忆 [关键词] —— 看它记得什么 / 搜记忆\n' +
+            '/ai 知识 [重建] —— 知识库状态 / 重新索引',
         );
       },
     );
@@ -428,17 +468,24 @@ export default {
         const persona = personaFor(msg.chatId);
         // 会话（群/私聊）→ 对话（话题）：上下文和摘要按对话隔离，人格与长期记忆按会话共享
         const scope = await memory.scopeOf(msg.chatId);
-        const [recalled, summaryText] = await Promise.all([
+        const [recalled, summaryText, kbList] = await Promise.all([
           c.recall === false
             ? memory.facts(msg.chatId).then((list) => ({ list, total: list.length, truncated: false }))
             : memory.recall(msg.chatId, fullText),
           memory.summary(scope),
+          // 知识库检索失败不能拖垮回复：它只是加分项
+          c.knowledge === false
+            ? []
+            : knowledge
+                .search(fullText, Math.max(1, Number(c.knowledgeTop) || 3))
+                .catch(() => []),
         ]);
         const system = memory.buildSystem({
           persona,
           factList: recalled.list,
           factTotal: recalled.total,
           summaryText,
+          kbList,
           aiMode,
         });
         const history = memory
@@ -472,7 +519,7 @@ export default {
             let out;
             try {
               const args = JSON.parse(tc.function?.arguments || '{}');
-              out = await runTool(tc.function?.name, args, { memory, chatId: msg.chatId });
+              out = await runTool(tc.function?.name, args, { memory, knowledge, chatId: msg.chatId });
             } catch (e) {
               out = `工具执行失败：${e.message}`;
             }
@@ -526,6 +573,7 @@ export default {
     ctx.menu('说明', [
       '直连模型，不依赖 DSH；每个会话独立的上下文与人格',
       '一个会话里可以开多个「对话」（话题），上下文互不干扰，长期记忆共用',
+      '把说明文档丢进 dataDir/knowledge/，它就能照着文档回答（/ai 知识 看状态）',
       '默认被 @ / 回复时说话，可在配置里改成「AI 自己判断」',
       '用 /ai 帮助 查看管理命令',
     ]);
@@ -624,6 +672,18 @@ const TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'search_knowledge',
+      description: '在知识库（群里的说明文档）里查资料，回答规则、玩法、指令这类问题前先查',
+      parameters: {
+        type: 'object',
+        properties: { query: { type: 'string', description: '查什么' } },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'calc',
       description: '计算一个算术表达式（只支持数字和 + - * / ( ) %）',
       parameters: {
@@ -647,7 +707,7 @@ const TOOLS = [
   },
 ];
 
-async function runTool(name, args, { memory, chatId }) {
+async function runTool(name, args, { memory, knowledge, chatId }) {
   switch (name) {
     case 'get_time':
       return new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
@@ -666,6 +726,13 @@ async function runTool(name, args, { memory, chatId }) {
       if (!q) return '缺少搜索词';
       const hits = await memory.search(chatId, q, 5);
       return hits.length ? hits.map((h) => `· ${h.text}`).join('\n') : '没找到相关记忆';
+    }
+    case 'search_knowledge': {
+      const q = String(args?.query || '').trim();
+      if (!q) return '缺少查询内容';
+      const hits = await knowledge.search(q, 3);
+      if (!hits.length) return '知识库里没有相关内容';
+      return hits.map((h) => `〔${h.doc}〕\n${h.text}`).join('\n\n');
     }
     case 'calc': {
       const expr = String(args?.expression || '').trim();

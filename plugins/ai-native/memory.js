@@ -13,44 +13,11 @@
  * 宁可少记，也不要记一堆猜出来的东西污染上下文。
  */
 
+import { queryTerms } from './text.js';
+
 const MAX_FACTS = 50;
 /** 每个会话最多留几个对话（话题），超了淘汰最旧的非当前对话 */
 const MAX_CONVS = 10;
-
-/**
- * 查询分词。
- *
- * 为什么不引分词库：中文没有空格，正经分词要么带词典（体积大）、要么上模型
- * （慢且要 Key）。群聊里的查询都很短（「他喜欢吃啥」「我叫什么」），
- * **双字组合 + 单字兜底**已经够用——比整串子串匹配强得多，又不用养一个 jieba。
- *
- * 权重：整段命中 > 拉丁词 > 中文双字 > 单字。
- * 单字必须留：「我的猫叫什么」里的「猫」两边都没有相同邻字，纯双字匹配会漏。
- * 代价是「我」「的」这类虚词会命中一切，所以配一张小停用词表压掉。
- */
-const STOP_CHARS = new Set('我你他她它们的了是在有和就不也都这那什么吗呢啊吧着过很还个'.split(''));
-
-function queryTokens(s) {
-  const text = String(s || '').toLowerCase();
-  const map = new Map();
-  const bump = (t, w) => {
-    if (!t) return;
-    map.set(t, Math.max(map.get(t) ?? 0, w));
-  };
-
-  for (const w of text.match(/[a-z0-9_]{2,}/g) || []) bump(w, 1.5);
-
-  const cjkSegs = text.replace(/[^\u4e00-\u9fa5]+/g, ' ').trim().split(/\s+/).filter(Boolean);
-  for (const seg of cjkSegs) {
-    bump(seg, 2); // 整段连续命中，最强信号
-    for (let i = 0; i < seg.length; i++) {
-      const ch = seg[i];
-      if (!STOP_CHARS.has(ch)) bump(ch, 0.4);
-      if (i + 1 < seg.length) bump(seg.slice(i, i + 2), 1);
-    }
-  }
-  return map;
-}
 
 /**
  * 给一条记忆打分。`recency` 是 0..1 的新旧程度（1 = 最新）。
@@ -234,7 +201,7 @@ export function createMemory({ conf, storage, state, providers, log = () => {} }
     const all = await facts(chatId);
     const q = String(query || '').trim().toLowerCase();
     if (!q || !all.length) return [];
-    const tokens = queryTokens(q);
+    const tokens = queryTerms(q);
     const n = all.length;
     const scored = [];
     for (let i = 0; i < n; i++) {
@@ -315,7 +282,7 @@ export function createMemory({ conf, storage, state, providers, log = () => {} }
    * `factTotal > factList.length` 说明记忆被检索筛过一轮，要告诉模型
    * 「还有别的没列出来」，免得它以为这就是全部、硬编一个答案。
    */
-  function buildSystem({ persona, factList, factTotal, summaryText, aiMode }) {
+  function buildSystem({ persona, factList, factTotal, summaryText, kbList, aiMode }) {
     const parts = [];
     if (persona?.prompt) parts.push(persona.prompt);
     if (summaryText) parts.push(`【之前聊过的事（摘要）】\n${summaryText}`);
@@ -330,6 +297,15 @@ export function createMemory({ conf, storage, state, providers, log = () => {} }
       parts.push(
         `【你记得的事】这个会话里有 ${factTotal} 条记忆，但都和当前这条消息不直接相关。` +
           '涉及具体事实不确定就说不记得，不要编。',
+      );
+    }
+    if (kbList?.length) {
+      const body = kbList
+        .map((h, i) => `〔${i + 1}〕（来自《${h.doc}》）\n${h.text}`)
+        .join('\n\n');
+      parts.push(
+        `【参考资料】以下是知识库里和这条消息相关的片段，优先依据它们回答；` +
+          `资料里没有的就别硬编。\n\n${body}`,
       );
     }
     parts.push('用中文回答，简短自然，像群友聊天；不要长篇大论，也不要解释自己是 AI。');
