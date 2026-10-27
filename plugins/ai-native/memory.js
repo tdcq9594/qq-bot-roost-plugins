@@ -14,6 +14,8 @@
  */
 
 const MAX_FACTS = 50;
+/** 每个会话最多留几个对话（话题），超了淘汰最旧的非当前对话 */
+const MAX_CONVS = 10;
 
 /**
  * 查询分词。
@@ -71,19 +73,103 @@ export function createMemory({ conf, storage, state, providers, log = () => {} }
   // ctx.state 跨热重载保留（重启丢），正好放易失的上下文
   state.histories ??= new Map();
 
-  const key = (prefix, chatId) => `${prefix}:${chatId}`;
+  const key = (prefix, id) => `${prefix}:${id}`;
 
-  function history(chatId) {
-    let h = state.histories.get(chatId);
+  /* ---------------- 对话（话题）管理 ---------------- */
+  /**
+   * 「会话」和「对话」是两层：
+   *   会话 = 一个群 / 一个私聊（chatId），有自己的人格、模型、长期记忆；
+   *   对话 = 会话里的一个话题（convId），有自己的上下文和摘要。
+   *
+   * 为什么要分：群里同时聊两件事时，一个上下文会把两件事搅在一起——
+   * 切到新话题就该从干净上下文开始，但人格和长期记忆不该丢。
+   *
+   * 对话列表落盘（storage），上下文本身仍在内存（state）——重启丢上下文
+   * 可以接受，丢「有哪些话题」不行。
+   */
+  async function convs(chatId) {
+    const raw = await storage.get(key('convs', chatId), null);
+    if (raw && Array.isArray(raw.list) && raw.list.length) {
+      const cur = raw.list.some((c) => c.id === raw.current) ? raw.current : raw.list[0].id;
+      return { ...raw, current: cur };
+    }
+    const init = { list: [{ id: '1', title: '默认', at: Date.now() }], current: '1' };
+    await storage.set(key('convs', chatId), init);
+    return init;
+  }
+
+  /** 当前对话的存储作用域：`<chatId>#<convId>` */
+  async function scopeOf(chatId) {
+    const c = await convs(chatId);
+    const scope = `${chatId}#${c.current}`;
+    // 0.4.x 之前摘要是按 chatId 存的，搬到 1 号对话，别让老用户觉得记忆没了
+    const legacyKey = key('summary', chatId);
+    const legacy = await storage.get(legacyKey, null);
+    if (legacy) {
+      const target = key('summary', `${chatId}#1`);
+      if (!(await storage.get(target, null))) await storage.set(target, legacy);
+      await storage.delete(legacyKey);
+    }
+    return scope;
+  }
+
+  async function newConv(chatId, title) {
+    const c = await convs(chatId);
+    const nextId = String(Math.max(0, ...c.list.map((x) => Number(x.id) || 0)) + 1);
+    const item = { id: nextId, title: String(title || `对话 ${nextId}`).slice(0, 20), at: Date.now() };
+    const list = [...c.list, item];
+    // 超上限就淘汰最旧的非当前对话（当前刚建的一定保留）
+    while (list.length > MAX_CONVS) {
+      const idx = list.findIndex((x) => x.id !== item.id);
+      if (idx < 0) break;
+      const [gone] = list.splice(idx, 1);
+      state.histories.delete(`${chatId}#${gone.id}`);
+      await storage.delete(key('summary', `${chatId}#${gone.id}`));
+    }
+    await storage.set(key('convs', chatId), { list, current: item.id });
+    return item;
+  }
+
+  /** 按 id 或序号（1 起）切换；返回切换到的对话，找不到返回 null */
+  async function switchConv(chatId, which) {
+    const c = await convs(chatId);
+    const w = String(which || '').trim();
+    const hit =
+      c.list.find((x) => x.id === w) ||
+      c.list.find((x) => x.title === w) ||
+      c.list[Number(w) - 1];
+    if (!hit) return null;
+    await storage.set(key('convs', chatId), { ...c, current: hit.id });
+    return hit;
+  }
+
+  async function dropConv(chatId, which) {
+    const c = await convs(chatId);
+    const w = String(which || '').trim();
+    const hit = c.list.find((x) => x.id === w) || c.list[Number(w) - 1];
+    if (!hit) return null;
+    if (c.list.length === 1) return { error: '只剩一个对话了，删掉就没得聊了；要清上下文用 /ai 重置' };
+    const list = c.list.filter((x) => x.id !== hit.id);
+    const current = c.current === hit.id ? list[list.length - 1].id : c.current;
+    state.histories.delete(`${chatId}#${hit.id}`);
+    await storage.delete(key('summary', `${chatId}#${hit.id}`));
+    await storage.set(key('convs', chatId), { list, current });
+    return { removed: hit, current };
+  }
+
+  /* ---------------- 上下文 ---------------- */
+
+  function history(scope) {
+    let h = state.histories.get(scope);
     if (!h) {
       h = [];
-      state.histories.set(chatId, h);
+      state.histories.set(scope, h);
     }
     return h;
   }
 
-  function addTurn(chatId, user, assistant) {
-    const h = history(chatId);
+  function addTurn(scope, user, assistant) {
+    const h = history(scope);
     h.push({ role: 'user', content: String(user) });
     h.push({ role: 'assistant', content: String(assistant) });
     // 兜底：就算压缩没跟上，也别让数组无限长
@@ -91,8 +177,8 @@ export function createMemory({ conf, storage, state, providers, log = () => {} }
     if (h.length > keep * 4) h.splice(0, h.length - keep);
   }
 
-  function reset(chatId) {
-    state.histories.delete(chatId);
+  function reset(scope) {
+    state.histories.delete(scope);
   }
 
   async function facts(chatId) {
@@ -178,20 +264,20 @@ export function createMemory({ conf, storage, state, providers, log = () => {} }
     return { list: hits.map((h) => h.text), total: all.length, truncated: true };
   }
 
-  async function summary(chatId) {
-    return String((await storage.get(key('summary', chatId), '')) || '');
+  async function summary(scope) {
+    return String((await storage.get(key('summary', scope), '')) || '');
   }
 
-  async function clearSummary(chatId) {
-    await storage.delete(key('summary', chatId));
+  async function clearSummary(scope) {
+    await storage.delete(key('summary', scope));
   }
 
   /**
    * 超过阈值就把最旧的一段对话压成摘要。
    * 失败只记日志、不抛——压缩是锦上添花，不能因为它让回复挂掉。
    */
-  async function maybeCompress(chatId, providerId) {
-    const h = history(chatId);
+  async function maybeCompress(scope, providerId) {
+    const h = history(scope);
     const keep = Math.max(2, (Number(conf().historyTurns) || 12) * 2);
     const trigger = Math.max(keep * 2, (Number(conf().compressAfterTurns) || 24) * 2);
     if (h.length <= trigger) return false;
@@ -200,7 +286,7 @@ export function createMemory({ conf, storage, state, providers, log = () => {} }
     if (!oldMsgs.length) return false;
 
     try {
-      const prev = await summary(chatId);
+      const prev = await summary(scope);
       const dialog = oldMsgs
         .map((m) => `${m.role === 'user' ? '用户' : 'AI'}：${String(m.content).slice(0, 500)}`)
         .join('\n');
@@ -212,9 +298,9 @@ export function createMemory({ conf, storage, state, providers, log = () => {} }
         messages: [{ role: 'user', content: prompt }],
         providerId,
       });
-      await storage.set(key('summary', chatId), text.trim().slice(0, 800));
+      await storage.set(key('summary', scope), text.trim().slice(0, 800));
       h.splice(0, oldMsgs.length);
-      log.info(`压缩了 ${String(chatId).slice(0, 8)} 的 ${oldMsgs.length} 条旧对话`);
+      log.info(`压缩了 ${String(scope).slice(0, 12)} 的 ${oldMsgs.length} 条旧对话`);
       return true;
     } catch (e) {
       log.warn('压缩失败，跳过这一轮', e.message);
@@ -257,6 +343,11 @@ export function createMemory({ conf, storage, state, providers, log = () => {} }
   }
 
   return {
+    scopeOf,
+    convs,
+    newConv,
+    switchConv,
+    dropConv,
     history,
     addTurn,
     reset,

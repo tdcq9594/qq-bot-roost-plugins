@@ -23,8 +23,8 @@ const stats = { replied: 0, errors: 0, totalMs: 0, count: 0, lastModel: '' };
 export default {
   id: 'ai-native',
   name: 'AI 原生对话',
-  version: '0.4.0',
-  description: '直连模型（OpenAI 兼容），带人格、上下文、长期记忆检索与工具调用；不依赖 DSH',
+  version: '0.5.0',
+  description: '直连模型（OpenAI 兼容），带人格、多话题、长期记忆检索与工具调用；不依赖 DSH',
   shortDesc: '直连模型的群聊 AI：人格 + 记忆',
   frameworkVersion: '>=0.8.1',
 
@@ -300,10 +300,47 @@ export default {
           return msg.reply(`本会话人格已切到：${rest}`);
         }
 
-        if (sub === '新对话' || sub === 'new' || sub === '重置') {
-          memory.reset(msg.chatId);
-          await memory.clearSummary(msg.chatId);
-          return msg.reply('上下文已清空，我们重新开始～（长期记忆还在，要清用 /ai 记忆）');
+        if (sub === '对话' || sub === 'convs' || sub === 'conversations') {
+          const c = await memory.convs(msg.chatId);
+          const lines = [];
+          for (const it of c.list) {
+            const rounds = Math.ceil(memory.history(`${msg.chatId}#${it.id}`).length / 2);
+            lines.push(`${it.id === c.current ? '▶ ' : '· '}${it.id}. ${it.title}（${rounds} 轮）`);
+          }
+          return msg.reply(
+            `对话列表：\n${lines.join('\n')}\n\n` +
+              '/ai 切换 <编号> 切过去\n/ai 新对话 [标题] 开一个\n/ai 删对话 <编号> 删掉',
+          );
+        }
+
+        if (sub === '新对话' || sub === 'new') {
+          const it = await memory.newConv(msg.chatId, rest);
+          return msg.reply(
+            `开了一个新对话：${it.id}. ${it.title}\n之前的对话还在，用 /ai 对话 能切回去。` +
+              '（长期记忆是所有对话共用的）',
+          );
+        }
+
+        if (sub === '切换' || sub === 'switch' || sub === 'use') {
+          if (!rest) return msg.reply('用法：/ai 切换 <编号>，编号用 /ai 对话 看');
+          const it = await memory.switchConv(msg.chatId, rest);
+          if (!it) return msg.reply(`没有「${rest}」这个对话，用 /ai 对话 看看有哪些`);
+          return msg.reply(`已切到：${it.id}. ${it.title}`);
+        }
+
+        if (sub === '删对话' || sub === 'delconv') {
+          if (!rest) return msg.reply('用法：/ai 删对话 <编号>');
+          const r = await memory.dropConv(msg.chatId, rest);
+          if (!r) return msg.reply(`没有「${rest}」这个对话`);
+          if (r.error) return msg.reply(r.error);
+          return msg.reply(`删掉了「${r.removed.title}」，现在在 ${r.current} 号对话`);
+        }
+
+        if (sub === '重置') {
+          const scope = await memory.scopeOf(msg.chatId);
+          memory.reset(scope);
+          await memory.clearSummary(scope);
+          return msg.reply('这个对话的上下文已清空（长期记忆还在，要清用 /ai 记忆）');
         }
 
         if (sub === '记住' || sub === 'remember') {
@@ -321,7 +358,7 @@ export default {
         }
 
         if (sub === '记忆' || sub === 'memory' || sub === '搜' || sub === 'search') {
-          const sm = await memory.summary(msg.chatId);
+          const sm = await memory.summary(await memory.scopeOf(msg.chatId));
 
           // 带关键词 → 检索；不带 → 全量列（太多就截断，免得刷屏）
           if (rest) {
@@ -351,7 +388,9 @@ export default {
           'AI 助手用法：\n' +
             '/ai 模型 —— 查看 / 切换模型（管理员）\n' +
             '/ai 人格 —— 查看 / 切换人格（管理员）\n' +
-            '/ai 新对话 —— 清空上下文\n' +
+            '/ai 对话 —— 话题列表 / 切换 / 新建\n' +
+            '/ai 新对话 [标题] —— 开一个新话题\n' +
+            '/ai 重置 —— 清空当前话题的上下文\n' +
             '/ai 记住 <内容> —— 让它记住\n' +
             '/ai 忘记 <关键词> —— 忘掉\n' +
             '/ai 记忆 [关键词] —— 看它记得什么 / 搜记忆',
@@ -387,11 +426,13 @@ export default {
       ctx.state.busy.add(msg.chatId);
       try {
         const persona = personaFor(msg.chatId);
+        // 会话（群/私聊）→ 对话（话题）：上下文和摘要按对话隔离，人格与长期记忆按会话共享
+        const scope = await memory.scopeOf(msg.chatId);
         const [recalled, summaryText] = await Promise.all([
           c.recall === false
             ? memory.facts(msg.chatId).then((list) => ({ list, total: list.length, truncated: false }))
             : memory.recall(msg.chatId, fullText),
-          memory.summary(msg.chatId),
+          memory.summary(scope),
         ]);
         const system = memory.buildSystem({
           persona,
@@ -401,7 +442,7 @@ export default {
           aiMode,
         });
         const history = memory
-          .history(msg.chatId)
+          .history(scope)
           .slice(-((Number(c.historyTurns) || 12) * 2));
         const userContent = await buildUserContent(fullText, images, c, ctx.logger);
 
@@ -457,7 +498,7 @@ export default {
         }
 
         await msg.reply(answer);
-        memory.addTurn(msg.chatId, fullText || '[图片]', answer);
+        memory.addTurn(scope, fullText || '[图片]', answer);
         ctx.state.lastReply.set(msg.chatId, Date.now());
 
         stats.replied += 1;
@@ -467,7 +508,7 @@ export default {
         ctx.logger.info(`${String(msg.chatId).slice(0, 8)} ${r.model} ${r.ms}ms`);
 
         // 后台压缩，不阻塞回复（reply 是攒着发的，等压缩会拖慢发送）
-        memory.maybeCompress(msg.chatId, providerFor(msg.chatId)).catch(() => {});
+        memory.maybeCompress(scope, providerFor(msg.chatId)).catch(() => {});
       } catch (e) {
         stats.errors += 1;
         ctx.logger.error('AI 回复失败：', e.message);
@@ -484,6 +525,7 @@ export default {
 
     ctx.menu('说明', [
       '直连模型，不依赖 DSH；每个会话独立的上下文与人格',
+      '一个会话里可以开多个「对话」（话题），上下文互不干扰，长期记忆共用',
       '默认被 @ / 回复时说话，可在配置里改成「AI 自己判断」',
       '用 /ai 帮助 查看管理命令',
     ]);

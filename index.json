@@ -34,8 +34,8 @@
     {
       "id": "ai-native",
       "name": "AI 原生对话",
-      "version": "0.4.0",
-      "description": "直连模型（OpenAI 兼容），带人格、上下文、长期记忆检索与工具调用；不依赖 DSH",
+      "version": "0.5.0",
+      "description": "直连模型（OpenAI 兼容），带人格、多话题、长期记忆检索与工具调用；不依赖 DSH",
       "tags": [
         "AI",
         "对话",
@@ -44,7 +44,7 @@
       "frameworkVersion": ">=0.8.1",
       "runtime": "node",
       "path": "plugins/ai-native",
-      "sha256": "2d9cecd7373be8c0ca386dd60a5e6fdd48c35039c5fb87f19b079d802195411d",
+      "sha256": "d4da9c22b90f2ee4afd80d2bc0f0974bd235975e41eefefa866d14bca86f6980",
       "author": "tdcq9594",
       "commands": [
         "ai"
