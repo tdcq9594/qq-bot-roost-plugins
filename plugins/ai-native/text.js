@@ -39,6 +39,27 @@ function rawTerms(s) {
   return out;
 }
 
+/**
+ * 疑问词和客套话，只在**查询侧**剥掉。
+ *
+ * 为什么不剥文档：文档是陈述句，不会写「怎么」；而群里提问几乎都带
+ * 「怎么 / 什么 / 多少 / 吗」。不剥的话这些词会占掉查询权重的一大半，
+ * 把真正的主语稀释到覆盖率门槛以下——「魂骨怎么获得」就搜不到「魂骨规则」，
+ * 而「今天股市怎么样」误命中「魂环怎么升」又必须被挡住。
+ * 剥完两边才对得上：前者变成「魂骨 获得」直接命中，后者只剩「今天股市」完全落空。
+ */
+const ASK_WORDS =
+  '为什么|为啥|怎么样|怎么办|怎么|怎样|如何|什么|啥|多少|哪些|哪个|哪里|哪儿|' +
+  '有没有|是不是|能不能|可不可以|会不会|要不要|行不行|对不对|' +
+  '请问|想问问|问一下|告诉我|一下';
+const ASK_RE = new RegExp(ASK_WORDS, 'g');
+/** 句末语气词，出现在查询里一律没有信息量 */
+const PARTICLE_RE = /[吗呢吧啊呀哦嘛]+/g;
+
+function stripAsk(s) {
+  return String(s).replace(ASK_RE, ' ').replace(PARTICLE_RE, ' ');
+}
+
 /** 文档侧：每个词出现几次（忽略权重，权重只作用在查询侧） */
 export function termCounts(s) {
   const m = new Map();
@@ -46,9 +67,32 @@ export function termCounts(s) {
   return m;
 }
 
-/** 查询侧：词 → 权重（同一词取最大权重） */
+/** 查询侧：词 → 权重（同一词取最大权重）。先剥疑问词，否则主语被稀释 */
 export function queryTerms(s) {
   const m = new Map();
-  for (const { t, w } of rawTerms(s)) m.set(t, Math.max(m.get(t) ?? 0, w));
+  for (const { t, w } of rawTerms(stripAsk(s))) m.set(t, Math.max(m.get(t) ?? 0, w));
   return m;
 }
+
+/**
+ * 粗估 token 数。
+ *
+ * 为什么不装 tiktoken：它是 WASM 包（几 MB）+ 每种模型一套词表，而我们只需要
+ * 「别把窗口撑爆」这个量级判断，差 20% 完全无所谓。经验值：中文 1 字≈1 token，
+ * 英文/数字约 4 字符≈1 token，代码和 JSON 比自然语言费一点，所以给 3.6。
+ *
+ * 想更准的话：把这里的系数按自己主用模型的实际 usage 标定一次即可。
+ */
+export function estimateTokens(s) {
+  const text = typeof s === 'string' ? s : JSON.stringify(s ?? '');
+  if (!text) return 0;
+  let cjk = 0;
+  let other = 0;
+  for (const ch of text) {
+    // 中日韩统一表意文字 + 全角标点，按字算
+    if (/[\u3000-\u9fff\uff00-\uffef]/.test(ch)) cjk += 1;
+    else other += 1;
+  }
+  return Math.ceil(cjk + other / 3.6);
+}
+

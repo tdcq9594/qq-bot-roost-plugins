@@ -187,5 +187,86 @@ export function createProviders({ conf, log = () => {} }) {
     throw lastErr || new Error('没有可用的模型服务商');
   }
 
-  return { list, resolve, chat };
+  /**
+   * embedding 服务商配置，**没配就返回 null**（上层据此回落到关键词检索）。
+   *
+   * 为什么不复用 providers 里的条目：对话模型和向量模型通常不是同一个
+   * （`deepseek-chat` 对 `bge-m3`），而且向量接口不产生对话成本，混在一起
+   * 反而要用户复制一份 baseUrl / apiKey。这里只要求填 model，地址和 Key
+   * 默认继承主服务商——同一家厂商的两类模型共用一套凭证是常态。
+   *
+   *   embedding: { model: 'text-embedding-3-small' }              // 最省事
+   *   embedding: { model: 'bge-m3', baseUrl: 'http://x/v1', apiKey: 'k' }
+   */
+  function embeddingConf() {
+    let e = conf().embedding;
+    if (typeof e === 'string') {
+      try {
+        e = JSON.parse(e);
+      } catch {
+        e = null;
+      }
+    }
+    if (!e || typeof e !== 'object') return null;
+    const model = String(e.model || '').trim();
+    if (!model) return null;
+    const base = resolve(null);
+    const baseUrl = trimSlash(e.baseUrl) || base?.baseUrl || '';
+    const apiKey = String(e.apiKey || '').trim() || base?.apiKey || '';
+    if (!baseUrl) return null;
+    return {
+      model,
+      baseUrl,
+      apiKey,
+      // 有些服务商单次上限很小（如 10 条），默认 16 并允许调
+      batch: Math.min(64, Math.max(1, Number(e.batch) || 16)),
+      minScore: Number(e.minScore) > 0 ? Number(e.minScore) : 0.35,
+    };
+  }
+
+  /**
+   * 批量算向量。没配 embedding 返回 null，让调用方走关键词分支。
+   *
+   * 为什么不让调用方自己拼请求：/embeddings 和 /chat/completions 的错误码、
+   * 分批、乱序返回这些坑是一样的，集中在一处修一次就够。
+   */
+  async function embed(texts, { signal } = {}) {
+    const e = embeddingConf();
+    if (!e) return null;
+    const inputs = (texts || []).map((t) => String(t ?? '').slice(0, 6000));
+    if (!inputs.length) return [];
+
+    const out = [];
+    for (let i = 0; i < inputs.length; i += e.batch) {
+      const slice = inputs.slice(i, i + e.batch);
+      const res = await fetch(`${e.baseUrl}/embeddings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${e.apiKey}`,
+        },
+        body: JSON.stringify({ model: e.model, input: slice }),
+        signal,
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(explainHttp(res.status, body));
+      }
+      const data = await res.json().catch(() => null);
+      const arr = Array.isArray(data?.data) ? data.data.slice() : [];
+      if (arr.length !== slice.length) {
+        throw new Error(`向量接口返回条数不对（要 ${slice.length} 条，给了 ${arr.length} 条）`);
+      }
+      // 有的服务商不保证顺序，按 index 排回来
+      arr.sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+      for (const d of arr) {
+        const v = d?.embedding;
+        if (!Array.isArray(v) || !v.length) throw new Error('向量接口返回了空向量');
+        out.push(v);
+      }
+    }
+    return out;
+  }
+
+  return { list, resolve, chat, embed, embeddingConf };
 }

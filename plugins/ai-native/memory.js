@@ -13,7 +13,7 @@
  * 宁可少记，也不要记一堆猜出来的东西污染上下文。
  */
 
-import { queryTerms } from './text.js';
+import { queryTerms, estimateTokens } from './text.js';
 
 const MAX_FACTS = 50;
 /** 每个会话最多留几个对话（话题），超了淘汰最旧的非当前对话 */
@@ -155,13 +155,30 @@ export function createMemory({ conf, storage, state, providers, log = () => {} }
    * 把历史整理成请求用的消息：群聊里给每条用户消息加上「说话人：」前缀。
    * 多人群聊不加这个，模型分不清「A 说喜欢猫」还是「B 说喜欢猫」，
    * 会把一个人的偏好当成所有人的。
+   *
+   * `budget` 是给历史留的 token 预算（0 = 不限，只按轮数）。按**成对**裁剪，
+   * 别把「问」和「答」拆开——只剩半轮的话模型会看到一句没头没尾的回复。
    */
-  function historyForModel(scope, turns) {
-    return history(scope)
+  function historyForModel(scope, turns, budget = 0) {
+    const all = history(scope)
       .slice(-Math.max(2, turns * 2))
       .map((m) =>
-        m.name ? { role: m.role, content: `${m.name}：${m.content}` } : { role: m.role, content: m.content },
+        m.name
+          ? { role: m.role, content: `${m.name}：${m.content}` }
+          : { role: m.role, content: m.content },
       );
+    if (!budget) return all;
+
+    const out = [];
+    let used = 0;
+    for (let i = all.length; i > 0; i -= 2) {
+      const pair = all.slice(Math.max(0, i - 2), i);
+      const cost = pair.reduce((a, m) => a + estimateTokens(m.content), 0);
+      if (used + cost > budget && out.length) break;
+      used += cost;
+      out.unshift(...pair);
+    }
+    return out;
   }
 
   function reset(scope) {
@@ -277,6 +294,38 @@ export function createMemory({ conf, storage, state, providers, log = () => {} }
     await storage.delete(key('summary', scope));
   }
 
+  /* ---------------- 情绪：存的是语气，不是数值 ---------------- */
+  /**
+   * 大肥鱼那套上线半年的实证结论很明确：**数值本身对模型没作用，起作用的是
+   * 「根据它调整语气」这条指令**，而且带数字反而「像在演」。所以这里不维护
+   * valence/energy 三元组，只存一句人话语气（「有点烦躁，话短」「心情不错，
+   * 愿意多聊两句」），注入 prompt 时也明确写「别把这句话说出来」。
+   *
+   * 衰减：超过 moodDecayHours 自动清掉，回到人格默认语气。
+   * 不衰减的话模型会「一直生气」——这是原方案里点名的风险。
+   */
+  async function mood(chatId) {
+    const raw = await storage.get(key('mood', chatId), null);
+    if (!raw?.tone) return '';
+    const hours = Number(conf().moodDecayHours);
+    const ttl = (Number.isFinite(hours) ? hours : 6) * 3600_000;
+    if (ttl > 0 && Date.now() - (raw.at || 0) > ttl) {
+      await storage.delete(key('mood', chatId));
+      return '';
+    }
+    return String(raw.tone).slice(0, 60);
+  }
+
+  async function setMood(chatId, tone) {
+    const t = String(tone || '').trim().slice(0, 60);
+    if (!t) {
+      await storage.delete(key('mood', chatId));
+      return '';
+    }
+    await storage.set(key('mood', chatId), { tone: t, at: Date.now() });
+    return t;
+  }
+
   /**
    * 超过阈值就把最旧的一段对话压成摘要。
    * 失败只记日志、不抛——压缩是锦上添花，不能因为它让回复挂掉。
@@ -324,9 +373,16 @@ export function createMemory({ conf, storage, state, providers, log = () => {} }
    * `factTotal > factList.length` 说明记忆被检索筛过一轮，要告诉模型
    * 「还有别的没列出来」，免得它以为这就是全部、硬编一个答案。
    */
-  function buildSystem({ persona, factList, factTotal, summaryText, kbList, groupChat, aiMode }) {
+  function buildSystem({ persona, factList, factTotal, summaryText, kbList, groupChat, moodTone, aiMode }) {
     const parts = [];
     if (persona?.prompt) parts.push(persona.prompt);
+    if (moodTone) {
+      parts.push(
+        `【此刻的状态】${moodTone}\n` +
+          '（这是给你的语气提示，用它决定句子长短和态度，**不要把它说出来**，' +
+          '也不要解释自己现在什么心情。）',
+      );
+    }
     if (summaryText) parts.push(`【之前聊过的事（摘要）】\n${summaryText}`);
     if (factList?.length) {
       const tail =
@@ -395,6 +451,8 @@ export function createMemory({ conf, storage, state, providers, log = () => {} }
     removeFacts,
     search,
     recall,
+    mood,
+    setMood,
     summary,
     clearSummary,
     maybeCompress,
