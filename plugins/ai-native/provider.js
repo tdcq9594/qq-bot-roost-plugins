@@ -80,7 +80,7 @@ export function createProviders({ conf, log = () => {} }) {
    * 用某个服务商调一轮（非流式）。
    * QQ 群聊不支持流式，用户只看最终消息，所以 `stream: false`。
    */
-  async function chatOnce(p, messages, signal) {
+  async function chatOnce(p, messages, signal, tools) {
     if (!p.baseUrl) throw new Error(`服务商「${p.name}」缺少 baseUrl`);
     if (!p.model) throw new Error(`服务商「${p.name}」缺少 model`);
     if (!p.apiKey) throw new Error(`服务商「${p.name}」还没填 API Key`);
@@ -91,6 +91,10 @@ export function createProviders({ conf, log = () => {} }) {
      */
     const isDeepSeek = /deepseek/i.test(p.baseUrl);
     const body = { model: p.model, messages, stream: false };
+    if (tools?.length) {
+      body.tools = tools;
+      body.tool_choice = 'auto';
+    }
     if (p.maxTokens) body.max_tokens = p.maxTokens;
     if (p.temperature !== undefined) body.temperature = p.temperature;
     if (isDeepSeek) {
@@ -115,8 +119,11 @@ export function createProviders({ conf, log = () => {} }) {
     }
 
     const data = await res.json().catch(() => null);
-    const text = data?.choices?.[0]?.message?.content;
-    if (typeof text !== 'string' || !text.trim()) {
+    const msg = data?.choices?.[0]?.message;
+    const text = msg?.content;
+    const toolCalls = Array.isArray(msg?.tool_calls) ? msg.tool_calls : [];
+    // 有工具调用时 content 通常是空的，不能当「空回复」处理
+    if ((typeof text !== 'string' || !text.trim()) && !toolCalls.length) {
       const reason = data?.choices?.[0]?.finish_reason;
       throw new Error(
         reason === 'content_filter' ? '回复被服务商的内容审核拦了' : '模型返回了空内容',
@@ -124,7 +131,9 @@ export function createProviders({ conf, log = () => {} }) {
     }
 
     return {
-      text: text.trim(),
+      message: msg,
+      text: typeof text === 'string' ? text.trim() : '',
+      toolCalls,
       usage: data?.usage ?? null,
       model: data?.model || p.model,
       ms: Date.now() - started,
@@ -143,7 +152,7 @@ export function createProviders({ conf, log = () => {} }) {
    * @param {string} [p.providerId]
    * @returns {Promise<{text:string, usage:object|null, model:string, ms:number, provider:object}>}
    */
-  async function chat({ messages, signal, providerId }) {
+  async function chat({ messages, tools, signal, providerId }) {
     const all = list();
     if (!all.length) {
       throw new Error('还没有配置任何模型服务商，去面板「插件 → ai-native → 配置」里填一个');
@@ -160,7 +169,7 @@ export function createProviders({ conf, log = () => {} }) {
     for (const p of order) {
       if (!p) continue;
       try {
-        return await chatOnce(p, messages, signal);
+        return await chatOnce(p, messages, signal, tools);
       } catch (e) {
         lastErr = e;
         if (!useFallback) throw e;

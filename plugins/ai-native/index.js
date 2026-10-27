@@ -23,8 +23,8 @@ const stats = { replied: 0, errors: 0, totalMs: 0, count: 0, lastModel: '' };
 export default {
   id: 'ai-native',
   name: 'AI 原生对话',
-  version: '0.2.0',
-  description: '直连模型（OpenAI 兼容），带人格、短期上下文与长期记忆；不依赖 DSH',
+  version: '0.3.0',
+  description: '直连模型（OpenAI 兼容），带人格、短期上下文、长期记忆与工具调用；不依赖 DSH',
   shortDesc: '直连模型的群聊 AI：人格 + 记忆',
   frameworkVersion: '>=0.8.1',
 
@@ -89,6 +89,20 @@ export default {
       default: true,
       label: '失败自动换服务商',
       desc: '主服务商出错（限流/超时/欠费）时，按列表顺序自动试下一个',
+    },
+    tools: {
+      type: 'boolean',
+      default: true,
+      label: '允许模型调用工具',
+      desc: '让模型能查时间、记事情、搜记忆、算数、随机抽（OpenAI function calling）',
+    },
+    maxToolRounds: {
+      type: 'number',
+      default: 4,
+      min: 1,
+      max: 8,
+      label: '最多工具轮数',
+      desc: '一次回复里最多连续调用几轮工具，防止死循环',
     },
     providers: {
       type: 'json',
@@ -358,19 +372,52 @@ export default {
           { role: 'user', content: userContent },
         ];
 
-        const r = await providers.chat({
-          messages,
-          providerId: providerFor(msg.chatId),
-        });
+        // 工具调用循环：模型要工具就执行，把结果喂回去，直到它给最终回复
+        const useTools = c.tools !== false;
+        const tools = useTools ? TOOLS : undefined;
+        const maxRounds = Math.max(1, Number(c.maxToolRounds) || 4);
+        let r = null;
+        for (let round = 0; round < maxRounds; round++) {
+          r = await providers.chat({ messages, tools, providerId: providerFor(msg.chatId) });
+          if (!r.toolCalls?.length) break;
+
+          // 把 assistant 的 tool_calls 消息原样加回去（content 为空是正常的）
+          messages.push({
+            role: 'assistant',
+            content: r.message?.content ?? null,
+            tool_calls: r.toolCalls,
+          });
+          for (const tc of r.toolCalls) {
+            let out;
+            try {
+              const args = JSON.parse(tc.function?.arguments || '{}');
+              out = await runTool(tc.function?.name, args, { memory, chatId: msg.chatId });
+            } catch (e) {
+              out = `工具执行失败：${e.message}`;
+            }
+            messages.push({ role: 'tool', tool_call_id: tc.id, content: String(out) });
+          }
+
+          // 轮数用尽还没给最终回复：不带工具再要一次，逼它总结
+          if (round === maxRounds - 1) {
+            r = await providers.chat({ messages, providerId: providerFor(msg.chatId) });
+          }
+        }
+
+        const answer = String(r?.text || '').trim();
 
         // AI 自己判断模式下，模型可能选择闭嘴
-        if (aiMode && /^<skip>\s*$/i.test(r.text)) {
+        if (aiMode && /^<skip>\s*$/i.test(answer)) {
           ctx.logger.debug(`模型选择不接话：${String(msg.chatId).slice(0, 8)}`);
           return;
         }
+        if (!answer) {
+          ctx.logger.warn('模型没有给出最终文本，跳过');
+          return;
+        }
 
-        await msg.reply(r.text);
-        memory.addTurn(msg.chatId, fullText || '[图片]', r.text);
+        await msg.reply(answer);
+        memory.addTurn(msg.chatId, fullText || '[图片]', answer);
         ctx.state.lastReply.set(msg.chatId, Date.now());
 
         stats.replied += 1;
@@ -443,4 +490,125 @@ async function toImageUrl(img, log) {
     log?.debug?.(`图片转 base64 失败，回退 URL：${e.message}`);
     return src;
   }
+}
+
+/* ---------------- 工具（OpenAI function calling） ---------------- */
+
+const TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'get_time',
+      description: '获取当前日期和时间（中国时区）',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'remember',
+      description: '记住一件关于用户或本群的事，之后会一直记得',
+      parameters: {
+        type: 'object',
+        properties: { text: { type: 'string', description: '要记住的内容' } },
+        required: ['text'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'forget',
+      description: '忘掉包含某关键词的记忆',
+      parameters: {
+        type: 'object',
+        properties: { keyword: { type: 'string' } },
+        required: ['keyword'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'search_memory',
+      description: '在长期记忆里搜索',
+      parameters: {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'calc',
+      description: '计算一个算术表达式（只支持数字和 + - * / ( ) %）',
+      parameters: {
+        type: 'object',
+        properties: { expression: { type: 'string' } },
+        required: ['expression'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'random_pick',
+      description: '从候选里随机选一个',
+      parameters: {
+        type: 'object',
+        properties: { items: { type: 'array', items: { type: 'string' } } },
+        required: ['items'],
+      },
+    },
+  },
+];
+
+async function runTool(name, args, { memory, chatId }) {
+  switch (name) {
+    case 'get_time':
+      return new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+    case 'remember': {
+      if (!args?.text) return '缺少要记住的内容';
+      const arr = await memory.addFact(chatId, args.text);
+      return `已记住（现在共 ${arr.length} 条）`;
+    }
+    case 'forget': {
+      if (!args?.keyword) return '缺少关键词';
+      const r = await memory.removeFacts(chatId, args.keyword);
+      return r.removed ? `忘了 ${r.removed} 条` : '没找到匹配的记忆';
+    }
+    case 'search_memory': {
+      const q = String(args?.query || '').trim();
+      if (!q) return '缺少搜索词';
+      const all = await memory.facts(chatId);
+      const hit = all.filter((f) => f.includes(q));
+      return hit.length ? hit.join('\n') : '没找到相关记忆';
+    }
+    case 'calc': {
+      const expr = String(args?.expression || '').trim();
+      if (!expr) return '缺少表达式';
+      return String(safeCalc(expr));
+    }
+    case 'random_pick': {
+      const items = Array.isArray(args?.items)
+        ? args.items.filter((x) => typeof x === 'string' && x)
+        : [];
+      if (!items.length) return '候选为空';
+      return items[Math.floor(Math.random() * items.length)];
+    }
+    default:
+      return `没有这个工具：${name}`;
+  }
+}
+
+/** 只允许数字和 + - * / ( ) % 的算术，避免 eval 注入 */
+function safeCalc(expr) {
+  const s = String(expr).replace(/\s+/g, '');
+  if (!/^[0-9+\-*/().%]+$/.test(s) || s.length > 200) throw new Error('表达式不合法');
+  // eslint-disable-next-line no-new-func
+  const v = Function(`"use strict";return (${s})`)();
+  if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error('结果不是有效数字');
+  return Math.round(v * 1e10) / 1e10;
 }
