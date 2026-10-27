@@ -7,7 +7,7 @@
     {
       "id": "ai-chat",
       "name": "AI 对话",
-      "version": "4.2.0",
+      "version": "4.3.0",
       "description": "把大模型接进群聊和私聊，@机器人 就能对话，每会话独立上下文",
       "tags": [
         "AI",
@@ -17,7 +17,7 @@
       "frameworkVersion": ">=0.8.1",
       "runtime": "node",
       "path": "plugins/ai-chat",
-      "sha256": "aa6aabdecc54ced2e4b508937e585fa5c5a80f9a7e1eb48e14c8522c61d35a9d",
+      "sha256": "a1954f9491b5d1f8b373c209fb7ae12ba27e9dd9c947c637dfb3d290aa97e604",
       "author": "tdcq9594",
       "commands": [
         "ai",

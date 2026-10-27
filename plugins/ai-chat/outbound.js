@@ -217,7 +217,7 @@ export function buildKeyboard(buttons, { max = 4, perRow = 2 } = {}) {
  * @param {object} [opts.keyboard] 按钮组，见 buildKeyboard
  * @param {(m:string)=>void} [opts.log]
  */
-export async function sendReply(msg, text, { markdown = false, keyboard = null, log = () => {}, onSent = null } = {}) {
+export async function sendReply(msg, text, { markdown = false, keyboard = null, log = () => {}, onSent = null, stream = false } = {}) {
   /**
    * 发出去了就把 message id 报出去（`onSent`）。
    *
@@ -233,6 +233,40 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
       /* 记录失败不影响发送 */
     }
   };
+
+  /**
+   * 私聊流式：边发边更新（`replace` 模式，服务端算差量，只占一条消息）。
+   *
+   * 为什么只做私聊：官方**没有群聊的流式接口**，`replyStream()` 在群里
+   * 会自动降级成普通 markdown——那还不如走下面的正常路径。
+   *
+   * 为什么先切好片再推：DSH 给的是一次性完整文本，不是增量，
+   * 所以这里是"分段推送"而不是真流式。但因为是 replace 模式，
+   * 用户看到的是一条消息在长出来，不是刷屏。
+   */
+  if (stream && !keyboard && msg.kind === 'c2c' && typeof msg.replyStream === 'function') {
+    const chunks = planChunks(text);
+    if (chunks.length > 1) {
+      try {
+        const s = msg.replyStream();
+        let acc = '';
+        for (let i = 0; i < chunks.length; i++) {
+          acc += (i ? '\n\n' : '') + chunks[i];
+          if (i < chunks.length - 1) {
+            await s.push(acc);
+            // 停一下再推下一片，否则"长出来"的过程看不见
+            await new Promise((r) => setTimeout(r, 140));
+          } else {
+            const r = await s.end(acc);
+            report(r);
+          }
+        }
+        return 1;
+      } catch (e) {
+        log(`流式失败，退回普通发送：${e?.message ?? e}`);
+      }
+    }
+  }
 
   /**
    * 带按钮时必须一条发完——按钮只属于这一条消息，

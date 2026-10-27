@@ -41,7 +41,7 @@ const DEFAULT_TIMEOUT_SEC = 90;
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '4.2.0',
+  version: '4.3.0',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -800,6 +800,8 @@ export default {
             markdown: c.markdown,
             keyboard: buttons.length ? buildKeyboard(buttons) : null,
             log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
+            // 私聊走流式（群聊没这个接口，框架内部会降级），带按钮时不流式
+            stream: !buttons.length,
             // 记住这次发出去的 id，下一轮要撤的就是它
             onSent: (id) => {
               if (id) lastSent.set(msg.chatId, { id, at: Date.now() });
