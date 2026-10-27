@@ -23,8 +23,8 @@ const stats = { replied: 0, errors: 0, totalMs: 0, count: 0, lastModel: '' };
 export default {
   id: 'ai-native',
   name: 'AI 原生对话',
-  version: '0.3.0',
-  description: '直连模型（OpenAI 兼容），带人格、短期上下文、长期记忆与工具调用；不依赖 DSH',
+  version: '0.4.0',
+  description: '直连模型（OpenAI 兼容），带人格、上下文、长期记忆检索与工具调用；不依赖 DSH',
   shortDesc: '直连模型的群聊 AI：人格 + 记忆',
   frameworkVersion: '>=0.8.1',
 
@@ -103,6 +103,20 @@ export default {
       max: 8,
       label: '最多工具轮数',
       desc: '一次回复里最多连续调用几轮工具，防止死循环',
+    },
+    recall: {
+      type: 'boolean',
+      default: true,
+      label: '按需检索记忆',
+      desc: '记忆超过条数上限时，只把和当前消息相关的挑给模型；关掉则全部塞进提示词',
+    },
+    recallTop: {
+      type: 'number',
+      default: 8,
+      min: 1,
+      max: 50,
+      label: '每轮最多带几条记忆',
+      desc: '按相关度取前 N 条；记忆没超过这个数就全给',
     },
     providers: {
       type: 'json',
@@ -306,13 +320,31 @@ export default {
           );
         }
 
-        if (sub === '记忆' || sub === 'memory') {
-          const fs = await memory.facts(msg.chatId);
+        if (sub === '记忆' || sub === 'memory' || sub === '搜' || sub === 'search') {
           const sm = await memory.summary(msg.chatId);
+
+          // 带关键词 → 检索；不带 → 全量列（太多就截断，免得刷屏）
+          if (rest) {
+            const hits = await memory.search(msg.chatId, rest, 10);
+            const head = hits.length
+              ? `匹配到 ${hits.length} 条：\n${hits.map((h) => `· ${h.text}`).join('\n')}`
+              : '没找到相关的记忆';
+            return msg.reply(sm ? `${head}\n\n【摘要】\n${sm}` : head);
+          }
+
+          const fs = await memory.facts(msg.chatId);
           const lines = [];
           if (sm) lines.push(`【摘要】\n${sm}`);
-          if (fs.length) lines.push(`【事实】\n${fs.map((f) => `· ${f}`).join('\n')}`);
-          return msg.reply(lines.length ? lines.join('\n\n') : '这个会话还没有长期记忆');
+          if (fs.length) {
+            const shown = fs.slice(-20);
+            const more = fs.length > shown.length ? `\n… 还有 ${fs.length - shown.length} 条` : '';
+            lines.push(`【事实】共 ${fs.length} 条\n${shown.map((f) => `· ${f}`).join('\n')}${more}`);
+          }
+          return msg.reply(
+            lines.length
+              ? `${lines.join('\n\n')}\n\n用 /ai 记忆 <关键词> 搜`
+              : '这个会话还没有长期记忆',
+          );
         }
 
         return msg.reply(
@@ -322,7 +354,7 @@ export default {
             '/ai 新对话 —— 清空上下文\n' +
             '/ai 记住 <内容> —— 让它记住\n' +
             '/ai 忘记 <关键词> —— 忘掉\n' +
-            '/ai 记忆 —— 看看它记得什么',
+            '/ai 记忆 [关键词] —— 看它记得什么 / 搜记忆',
         );
       },
     );
@@ -355,11 +387,19 @@ export default {
       ctx.state.busy.add(msg.chatId);
       try {
         const persona = personaFor(msg.chatId);
-        const [factList, summaryText] = await Promise.all([
-          memory.facts(msg.chatId),
+        const [recalled, summaryText] = await Promise.all([
+          c.recall === false
+            ? memory.facts(msg.chatId).then((list) => ({ list, total: list.length, truncated: false }))
+            : memory.recall(msg.chatId, fullText),
           memory.summary(msg.chatId),
         ]);
-        const system = memory.buildSystem({ persona, factList, summaryText, aiMode });
+        const system = memory.buildSystem({
+          persona,
+          factList: recalled.list,
+          factTotal: recalled.total,
+          summaryText,
+          aiMode,
+        });
         const history = memory
           .history(msg.chatId)
           .slice(-((Number(c.historyTurns) || 12) * 2));
@@ -582,9 +622,8 @@ async function runTool(name, args, { memory, chatId }) {
     case 'search_memory': {
       const q = String(args?.query || '').trim();
       if (!q) return '缺少搜索词';
-      const all = await memory.facts(chatId);
-      const hit = all.filter((f) => f.includes(q));
-      return hit.length ? hit.join('\n') : '没找到相关记忆';
+      const hits = await memory.search(chatId, q, 5);
+      return hits.length ? hits.map((h) => `· ${h.text}`).join('\n') : '没找到相关记忆';
     }
     case 'calc': {
       const expr = String(args?.expression || '').trim();

@@ -15,6 +15,58 @@
 
 const MAX_FACTS = 50;
 
+/**
+ * 查询分词。
+ *
+ * 为什么不引分词库：中文没有空格，正经分词要么带词典（体积大）、要么上模型
+ * （慢且要 Key）。群聊里的查询都很短（「他喜欢吃啥」「我叫什么」），
+ * **双字组合 + 单字兜底**已经够用——比整串子串匹配强得多，又不用养一个 jieba。
+ *
+ * 权重：整段命中 > 拉丁词 > 中文双字 > 单字。
+ * 单字必须留：「我的猫叫什么」里的「猫」两边都没有相同邻字，纯双字匹配会漏。
+ * 代价是「我」「的」这类虚词会命中一切，所以配一张小停用词表压掉。
+ */
+const STOP_CHARS = new Set('我你他她它们的了是在有和就不也都这那什么吗呢啊吧着过很还个'.split(''));
+
+function queryTokens(s) {
+  const text = String(s || '').toLowerCase();
+  const map = new Map();
+  const bump = (t, w) => {
+    if (!t) return;
+    map.set(t, Math.max(map.get(t) ?? 0, w));
+  };
+
+  for (const w of text.match(/[a-z0-9_]{2,}/g) || []) bump(w, 1.5);
+
+  const cjkSegs = text.replace(/[^\u4e00-\u9fa5]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+  for (const seg of cjkSegs) {
+    bump(seg, 2); // 整段连续命中，最强信号
+    for (let i = 0; i < seg.length; i++) {
+      const ch = seg[i];
+      if (!STOP_CHARS.has(ch)) bump(ch, 0.4);
+      if (i + 1 < seg.length) bump(seg.slice(i, i + 2), 1);
+    }
+  }
+  return map;
+}
+
+/**
+ * 给一条记忆打分。`recency` 是 0..1 的新旧程度（1 = 最新）。
+ * 返回 0 表示不相关，调用方直接丢掉。
+ */
+function scoreFact(fact, q, tokens, recency) {
+  const f = String(fact).toLowerCase();
+  let score = 0;
+  if (q && f.includes(q)) score += 6;
+  for (const [tok, w] of tokens) {
+    if (f.includes(tok)) score += w;
+  }
+  if (score <= 0) return 0;
+  // 相关度为主，新旧为辅：老记忆只要真的相关，仍然排前面
+  return score + recency * 1.5;
+}
+
+
 export function createMemory({ conf, storage, state, providers, log = () => {} }) {
   // ctx.state 跨热重载保留（重启丢），正好放易失的上下文
   state.histories ??= new Map();
@@ -85,6 +137,47 @@ export function createMemory({ conf, storage, state, providers, log = () => {} }
     return { facts: await facts(chatId), removed };
   }
 
+  /**
+   * 关键词检索：返回 `[{ text, score }]`，按相关度降序。
+   *
+   * 为什么是关键词而不是向量：向量要 embedding 服务（多一份 Key、多一次网络、
+   * 多一笔钱），而群聊记忆是「用户自己说的短句」——关键词就够命中。
+   * 真到了几百条以上再考虑上向量，现在上就是过度设计。
+   */
+  async function search(chatId, query, limit = 5) {
+    const all = await facts(chatId);
+    const q = String(query || '').trim().toLowerCase();
+    if (!q || !all.length) return [];
+    const tokens = queryTokens(q);
+    const n = all.length;
+    const scored = [];
+    for (let i = 0; i < n; i++) {
+      const recency = n > 1 ? i / (n - 1) : 1;
+      const score = scoreFact(all[i], q, tokens, recency);
+      if (score > 0) scored.push({ text: all[i], score });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, Math.max(1, limit));
+  }
+
+  /**
+   * 决定「这一轮该把哪些记忆喂给模型」。
+   *
+   * 记忆少（≤ top）就全给，省得漏；多了只给相关的，否则 50 条事实塞进
+   * system prompt 既贵又冲淡重点。
+   *
+   * **不用最近几条兜底**：凑数的无关记忆会把模型带偏（问猫却看见「生日
+   * 3 月 7 日」，它就真敢往生日上答）。宁可空着，让它老实说不记得。
+   */
+  async function recall(chatId, query) {
+    const all = await facts(chatId);
+    const top = Math.max(1, Number(conf().recallTop) || 8);
+    if (all.length <= top) return { list: all, total: all.length, truncated: false };
+
+    const hits = await search(chatId, query, top);
+    return { list: hits.map((h) => h.text), total: all.length, truncated: true };
+  }
+
   async function summary(chatId) {
     return String((await storage.get(key('summary', chatId), '')) || '');
   }
@@ -132,13 +225,26 @@ export function createMemory({ conf, storage, state, providers, log = () => {} }
   /**
    * 拼 system prompt：人格 + 摘要 + 事实 + 输出风格。
    * aiMode 时再加一句「不该接话就只输出 <skip>」。
+   *
+   * `factTotal > factList.length` 说明记忆被检索筛过一轮，要告诉模型
+   * 「还有别的没列出来」，免得它以为这就是全部、硬编一个答案。
    */
-  function buildSystem({ persona, factList, summaryText, aiMode }) {
+  function buildSystem({ persona, factList, factTotal, summaryText, aiMode }) {
     const parts = [];
     if (persona?.prompt) parts.push(persona.prompt);
     if (summaryText) parts.push(`【之前聊过的事（摘要）】\n${summaryText}`);
     if (factList?.length) {
-      parts.push(`【你记得的事】\n${factList.map((f) => `· ${f}`).join('\n')}`);
+      const tail =
+        factTotal && factTotal > factList.length
+          ? `\n（一共记得 ${factTotal} 条，这里只挑了可能相关的 ${factList.length} 条）`
+          : '';
+      parts.push(`【你记得的事】\n${factList.map((f) => `· ${f}`).join('\n')}${tail}`);
+    } else if (factTotal) {
+      // 有记忆但这条消息没命中任何一条：明确说「没有」，否则模型容易现编
+      parts.push(
+        `【你记得的事】这个会话里有 ${factTotal} 条记忆，但都和当前这条消息不直接相关。` +
+          '涉及具体事实不确定就说不记得，不要编。',
+      );
     }
     parts.push('用中文回答，简短自然，像群友聊天；不要长篇大论，也不要解释自己是 AI。');
     if (aiMode) {
@@ -157,6 +263,8 @@ export function createMemory({ conf, storage, state, providers, log = () => {} }
     facts,
     addFact,
     removeFacts,
+    search,
+    recall,
     summary,
     clearSummary,
     maybeCompress,
