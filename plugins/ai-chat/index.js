@@ -50,7 +50,7 @@ const MAX_SEGMENTS = 5;
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '4.3.2',
+  version: '4.3.3',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -258,7 +258,13 @@ export default {
      *
      * 拿到之后只做一件事：**社交意愿低的时候，只接明确叫它的**。
      * 这是「情绪影响行为」的第一处耦合——不做的话情绪就只是个装饰。
+     *
+     * 阈值 0.4 要跟 dsh-roost 的 `mood.js` 的 `LOW` 对齐。
+     * 以前这里是 0.3，而那边衰减的落点是 0.5——**数学上永远到不了 0.3**，
+     * 这个闸门从上线起就没触发过一次。0.4 是「衰减够不到、但一次明确的
+     * 负面反馈就能跨过去」的位置，才是它该有的灵敏度。
      */
+    const LOW_SOCIABILITY = 0.4;
     let moodCache = { at: 0, low: false };
     async function isLowMood() {
       if (Date.now() - moodCache.at < 60_000) return moodCache.low;
@@ -267,7 +273,7 @@ export default {
       try {
         const res = await fetch(`${base}/roost/api/mood`);
         const j = await res.json();
-        moodCache = { at: Date.now(), low: Number(j?.sociability ?? 1) < 0.3 };
+        moodCache = { at: Date.now(), low: Number(j?.sociability ?? 1) < LOW_SOCIABILITY };
       } catch {
         moodCache = { at: Date.now(), low: false }; // 问不到就当正常，别让它不说话
       }
@@ -587,8 +593,14 @@ export default {
           /**
            * 情绪标记：让情绪从"被动衰减"变成"有原因"。
            * 由宿主执行并摘掉，群里看不到这行标记。
+           *
+           * 三个轴的取值范围**必须写准**：valence 是 -1~1（正负两极），
+           * energy / sociability 是 0~1（只有"多少"，没有负的）。
+           * 以前这里含糊地写成"都是 -1~1 或 0~1"，模型就会给
+           * `sociability=-0.5` 这种值——被 clamp 到 0 之后表现为"突然不理人"，
+           * 面板上看就是"数值怪怪的"。
            */
-          '你自己的情绪有变化时标一下：<<mood: valence=-0.3, reason=被凶了>>（valence/energy/sociability 都是 -1~1 或 0~1，可以只写 reason）',
+          '你自己的情绪有变化时标一下：<<mood: valence=-0.3, reason=被凶了>>（valence 是 -1~1，energy 和 sociability 是 0~1，0.5 是平常；可以只写 reason）',
           '要改这个会话的人设：<<persona: 内容>>',
           '要清空这个会话的上下文：<<clear>>',
           '要发图片（表情包、画好的图）：<<image: 网址或本地路径>>',
@@ -842,10 +854,18 @@ export default {
          *
          * 每段都过一遍 `stripSkip`：模型可能在工具参数里也写了 `<skip>`，
          * 而那个标记绝不能出现在群里。
+         *
+         * **还要过一遍 `parseActions`**：`<<mood:>>` / `<<remember:>>` 这类
+         * 标记如果写在 `qq_send` 的参数里，宿主那边（dsh-roost）不一定拦得住，
+         * 而这里直接按 `parts` 发原文——不摘就成了「标记原样出现在群里」。
+         * 动作本身已经在上面对整段 `text` 解析时收集过了，这里只借用它的清理能力。
          */
         const segs =
           Array.isArray(parts) && parts.length > 1
-            ? parts.map((p) => stripSkip(String(p ?? ''))).filter(Boolean).slice(0, MAX_SEGMENTS)
+            ? parts
+                .map((p) => parseActions(stripSkip(String(p ?? ''))).text.trim())
+                .filter(Boolean)
+                .slice(0, MAX_SEGMENTS)
             : null;
         /**
          * 动作产生的补充话（比如「记下了」）跟着**最后一段**走。

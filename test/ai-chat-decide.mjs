@@ -296,6 +296,43 @@ ok('剥标记: 没有标记时原样返回', stripSkip('今天确实挺热的') 
   ok('收尾: 不完整不当动作', r.actions.length === 0 && r.text.includes('没闭合'));
 }
 
+/* ---------------- 情绪 / 未知标记兜底 ---------------- */
+
+{
+  /**
+   * `<<mood:>>` 必须被摘掉。
+   *
+   * 它由 DSH 宿主执行，ai-chat 这边只管别让它漏进群——
+   * 而 `qq_send` 的工具参数里模型是真会写这个的。
+   */
+  const r = parseActions('<<mood: valence=-0.3, reason=被凶了>>今天不想说话');
+  ok('情绪: 标记被摘掉', r.text === '今天不想说话', JSON.stringify(r.text));
+  ok('情绪: 值原样带出来', r.actions.some((a) => a.type === 'mood' && a.value.includes('被凶了')));
+}
+
+{
+  /**
+   * 兜底：**没实现过的**标记也得摘掉。
+   *
+   * 两个仓库各写一套正则，一边加了新标记、另一边没跟上，标记就漏进群了
+   * （mood 已经这么漏过一次）。这条测的就是「以后再加新标记也不会漏」。
+   */
+  const r = parseActions('<<wake: 早八>>醒了 <<nonexistent>>');
+  ok('兜底: 未知标记被摘干净', r.text === '醒了', JSON.stringify(r.text));
+}
+
+{
+  // 单尖括号和普通比较符号不能被误伤
+  const r = parseActions('if (a << 3) 就 << 2，这是代码');
+  ok('兜底: 不误伤普通尖括号', r.text.includes('<< 3') && r.text.includes('<< 2'), JSON.stringify(r.text));
+}
+
+{
+  // 标记夹在中间，前后正文都得留着
+  const r = parseActions('前半句<<mood: energy=0.8>>后半句');
+  ok('情绪: 中间标记不吞正文', r.text === '前半句后半句', JSON.stringify(r.text));
+}
+
 /* ---------------- 汇总 ---------------- */
 
 console.log(`\n${pass}/${pass + fails.length} 通过`);
