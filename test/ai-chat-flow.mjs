@@ -435,6 +435,29 @@ const baseConf = (over = {}) => () => ({
   ok('宿主: system 不是 undefined（宿主会 String 它）', typeof hostPayload(base, opt).system === 'string');
 }
 
+/**
+ * 合并窗口攒过几句时，交给宿主的必须是 `batch.text` 而不是 `msg.content`。
+ *
+ * 这个 bug 的表现很隐蔽：单条消息一切正常，只有连着发几句（合并窗口内）
+ * 才会丢——而「在吗」→「问你个事」→「报错怎么办」正是最需要完整上下文的场景。
+ * 宿主那边只看到最后一句，前面全当没说。
+ */
+{
+  const { hostPayload } = await load('inbound.js');
+  const base = { kind: 'group', chatId: 'g1', content: '报错怎么办', userId: 'u1', userName: '小红' };
+  const opt = { id: 'e1', token: 't', replyUrl: 'http://127.0.0.1:1/r', expiresAt: Date.now() + 1000 };
+  const said = '小明(AAA111111111)：在吗\n小红(BBB222222222)：问你个事\n小红(BBB222222222)：报错怎么办';
+
+  const p = hostPayload(base, { ...opt, said, batch: { multi: true, count: 3 } });
+  ok('宿主: 合并批次用 batch.text 当正文', p.text.includes('在吗'), p.text.slice(0, 40));
+  ok('宿主: rendered 也带上前面几句', p.rendered.includes('问你个事'));
+  ok('宿主: 多人批次标了 multi（宿主据此不再贴外层标签）', p.batch?.multi === true);
+
+  const one = hostPayload(base, { ...opt, batch: { multi: false, count: 1 } });
+  ok('宿主: 单条不带 batch 字段', one.batch === undefined);
+  ok('宿主: 单条仍然用 msg.content', one.text === '报错怎么办');
+}
+
 /* ---------------- 出站：立刻发 vs 攒批 ---------------- */
 
 {

@@ -94,7 +94,16 @@ export function buildUserContent(msg, text) {
  * 跟 `buildUserContent` 的区别：这个是**结构化**的，宿主可以自己决定怎么用；
  * 那个是压成一段文本给模型。webhook / dsh 适配器用这个。
  */
-export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [], sender = null, system = '', images = [], channel = null }) {
+export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [], sender = null, system = '', images = [], channel = null, said = null, batch = null }) {
+  /**
+   * 这一轮真正该给宿主的正文。
+   *
+   * **不能用 `msg.content`**：合并窗口会把连着几句攒成一批，`msg` 只是
+   * 最后那条（回复要挂它的 msg_id 才稳），真正的正文在 `batch.text` 里。
+   * 以前这里读 `msg.content`，结果「在吗」→「问你个事」→「报错怎么办」
+   * 攒成一批时，宿主只看到最后那句——前两句等于没说过。
+   */
+  const body = said ?? msg.content;
   return {
     id,
     chat: {
@@ -131,7 +140,7 @@ export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [],
      * 老宿主读不到这个字段也没关系（不认识就忽略）。
      */
     ...(channel ? { channel } : {}),
-    text: msg.content || '',
+    text: String(body || ''),
     /**
      * 整形好的那段话。
      *
@@ -139,7 +148,14 @@ export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [],
      * 宿主应该尽量笨，整形是插件的事。没有它的老宿主可以退回 `text`
      * 加上结构化字段自己拼。
      */
-    rendered: buildUserContent(msg, msg.content),
+    rendered: buildUserContent(msg, body),
+    /**
+     * 这一轮是不是**多个人**的话攒成的一批。
+     *
+     * 是的话正文里每条都自带 `昵称(openid)：`，宿主不该再在外面套一层
+     * 发送者标签——套了就变成「整段都是最后那个人说的」。
+     */
+    ...(batch?.multi ? { batch: { count: batch.count, multi: true } } : {}),
     quoted: msg.quoted || '',
     /** 下载好的图片块（base64）。宿主直接拿去当 image 内容块用 */
     images: Array.isArray(images) ? images : [],

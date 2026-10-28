@@ -40,7 +40,7 @@ export function createHostAdapter({ name, url, bridge, publicUrl, log = () => {}
      * @param {object} [p.chat] { kind, chatId }
      * @returns {Promise<{text:string, usage:null, model:string}>}
      */
-    async chat({ messages = [], signal, msg, chat, sender, system, images, markdown }) {
+    async chat({ messages = [], signal, msg, chat, sender, system, images, markdown, said, batch }) {
       if (!url) {
         throw new Error(`还没填宿主的接收地址（面板 → 「${name} 地址」）`);
       }
@@ -66,6 +66,14 @@ export function createHostAdapter({ name, url, bridge, publicUrl, log = () => {}
          * （目前就是 @ 人的标签）。`undefined` 表示调用方没说 → 宿主按默认 true 处理。
          */
         channel: { markdown: markdown !== false },
+        /**
+         * 这一轮真正要交出去的正文。
+         *
+         * 合并窗口攒过的话，它是 `batch.text`（可能有好几行、每行带发言人），
+         * 而不是 `msg.content`（只有最后那一句）。
+         */
+        said,
+        batch,
       });
 
       // 顺带把「这一轮是谁在跟谁说」也带上，宿主不用自己猜

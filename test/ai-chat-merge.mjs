@@ -113,6 +113,35 @@ const M = (id) => ({ id });
   ok('合并: flushAll 之后 size 归零', m.size === 0);
 }
 
+/* ---------------- 多人批次带 openid ---------------- */
+
+/**
+ * 多条攒成一批时，每条都要带 `昵称(openid)：`。
+ *
+ * 只带昵称的话模型没法 @ 人（官方只认 openid），
+ * 而且群里两个「小明」根本分不清谁是谁。
+ */
+{
+  const m = createMerger({ waitSec: 0.02, maxSec: 1 });
+  const p1 = m.add({ chatId: 'g6', msg: M(1), text: '在吗', name: '小明', id: 'AAA111111111' });
+  const p2 = m.add({ chatId: 'g6', msg: M(2), text: '问你个事', name: '小红', id: 'BBB222222222' });
+  m.flush('g6');
+  const [b1, b2] = await Promise.all([p1, p2]);
+  ok('合并: 多人批次标了 multi', b1?.multi === true);
+  ok('合并: 第一条带 openid', b1?.text.includes('小明(AAA111111111)：在吗'), b1?.text);
+  ok('合并: 第二条带 openid', b1?.text.includes('小红(BBB222222222)：问你个事'));
+  ok('合并: 只有第一个拿到 batch', b2 === null);
+}
+
+{
+  const m = createMerger({ waitSec: 0.02, maxSec: 1 });
+  const p = m.add({ chatId: 'g7', msg: M(3), text: '单条', name: '小明', id: 'AAA111111111' });
+  m.flush('g7');
+  const b = await p;
+  ok('合并: 单条不拼发言人（宿主会贴消息头）', b?.text === '单条', b?.text);
+  ok('合并: 单条 multi 是假', b?.multi === false);
+}
+
 /* ---------------- 汇总 ---------------- */
 
 clearInterval(keep);

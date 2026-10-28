@@ -766,6 +766,8 @@ export default {
         // 用 textOf：纯语音消息 content 是空的，ASR 结果在 attachments 里
         text: textOf(msg),
         name: msg.userName || '',
+        // 多人合并时拼进正文，模型才能 @ 其中某个人（官方只认 openid）
+        id: msg.userId || '',
         // mergeWaitSec = 0 表示关闭合并，直接放行
         force: gate.force || c.mergeWaitSec === 0,
         // 冷却期攒着的消息，压到冷却结束再一起交
@@ -841,6 +843,14 @@ export default {
            * 发标签只会把源码露出来，所以这个开关必须告诉宿主。
            */
           markdown: c.markdown,
+          /**
+           * 这一轮真正要交出去的正文。
+           *
+           * 合并窗口攒过几句时是 `batch.text`（多行、每行带发言人），
+           * 只传 `msg.content` 会让宿主只看到最后一句——前几句等于没说过。
+           */
+          said: batch.text,
+          batch,
         });
 
         const { text: cleaned, actions } = parseActions(text);

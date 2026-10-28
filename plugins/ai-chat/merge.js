@@ -28,16 +28,32 @@ export function createMerger({ waitSec = 1.5, maxSec = 6, now = () => Date.now()
     if (!items.length) return;
 
     // 多人发言时标上是谁说的，否则模型分不清谁在问
+    /**
+     * 多条时每条都带发言人**和 openid**。
+     *
+     * 带 id 的理由：模型要 @ 其中某个人时得有个 handle。只给昵称等于
+     * 让它猜——群里两个「小明」、或者有人改了昵称，就会 @ 错人。
+     * 单条时不带（宿主会在消息头统一贴 `[昵称 (openid)]`），
+     * 免得同一句话出现两个 id。
+     */
     const text =
       items.length === 1
         ? items[0].text
         : items
-            .map((it) => (it.name ? `${it.name}：${it.text}` : it.text))
+            .map((it) => {
+              if (!it.name) return it.text;
+              return it.id ? `${it.name}(${it.id})：${it.text}` : `${it.name}：${it.text}`;
+            })
             .join('\n');
 
     const batch = {
       text,
       count: items.length,
+      /**
+       * 多人批次。宿主据此**不再**在整段前面贴发送者标签——
+       * 每条都自带 id 了，外面再套一个只会让人以为整段都是最后那个人说的。
+       */
+      multi: items.length > 1,
       /** 回复挂到最后一条上：它的 msg_id 最新，被动回复窗口最稳 */
       msg: items[items.length - 1].msg,
       senders: [...new Set(items.map((it) => it.name).filter(Boolean))],
@@ -60,12 +76,13 @@ export function createMerger({ waitSec = 1.5, maxSec = 6, now = () => Date.now()
      * @param {object} p.msg
      * @param {string} p.text
      * @param {string} [p.name] 发言人
+     * @param {string} [p.id] 发言人的 openid（多条合并时拼进正文，让模型能 @ 人）
      * @param {boolean} [p.force] 被 @ 时不等待，立刻回
      * @returns {Promise<object|null>} 轮到你就拿到 batch，否则 null
      */
-    add({ chatId, msg, text, name = '', force = false, delayMs = 0 }) {
+    add({ chatId, msg, text, name = '', id = '', force = false, delayMs = 0 }) {
       if (force) {
-        return Promise.resolve({ text, count: 1, msg, senders: name ? [name] : [] });
+        return Promise.resolve({ text, count: 1, multi: false, msg, senders: name ? [name] : [] });
       }
 
       let b = pending.get(chatId);
@@ -82,7 +99,7 @@ export function createMerger({ waitSec = 1.5, maxSec = 6, now = () => Date.now()
        */
       if (delayMs > 0) b.notBefore = Math.max(b.notBefore || 0, now() + delayMs);
 
-      b.items.push({ msg, text, name, at: now() });
+      b.items.push({ msg, text, name, id, at: now() });
 
       const p = new Promise((resolve) => b.waiters.push(resolve));
 
