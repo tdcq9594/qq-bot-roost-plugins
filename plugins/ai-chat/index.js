@@ -29,7 +29,7 @@ import { createAdapter } from './adapter/index.js';
 import { createBridge } from './adapter/bridge.js';
 import { buildUserContent } from './inbound.js';
 import { sendReply, sendMedia, buildKeyboard } from './outbound.js';
-import { shouldConsider, isSkip, parseActions, parseButton, textOf, SKIP_MARK, DEFAULT_IGNORE } from './decide.js';
+import { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseButton, textOf, SKIP_MARK, DEFAULT_IGNORE } from './decide.js';
 import { ChatStore, PaceStore } from './session.js';
 import { createMerger } from './merge.js';
 import { collectImages } from './vision.js';
@@ -41,7 +41,7 @@ const DEFAULT_TIMEOUT_SEC = 90;
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '4.3.0',
+  version: '4.3.1',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -769,30 +769,44 @@ export default {
          *
          * 不撤的话，下次真说话时模型会看到一堆「自己没理的插话」，
          * 上下文全是噪音，而且它可能以为自己当时应该回答。
+         *
+         * **被 @ / 回复（force）时也要拦**：模型自己判断「这条不用回」是有效结论，
+         * 把 `<skip>` 这几个字符原样发到群里是最糟的结果——以前只在「AI 自己判断」
+         * 模式下检查，被叫到时模型一旦输出 `<skip>` 就会直接漏到群里。
          */
-        if (!gate.force && isSkip(cleaned) && !confirm && !media.length) {
+        if (isSkip(cleaned) && !confirm && !media.length) {
           if (s.messages.at(-1)?.role === 'user') s.messages.pop();
-          if (c.debug) ctx.logger.debug(`[ai-chat] ${msg.chatId} 模型判断不接话`);
+          // 被明确叫到却不吭声是反常的，留条 info 方便排查「@ 了没反应」
+          if (gate.force) ctx.logger.info(`[ai-chat] ${msg.chatId.slice(0, 8)} 被叫但模型选择不回`);
+          else if (c.debug) ctx.logger.debug(`[ai-chat] ${msg.chatId} 模型判断不接话`);
           return;
         }
 
-        const body = [cleaned, confirm].filter(Boolean).join('\n\n');
-        // 既没话也没附件，就什么都不发
-        if (!body && !media.length) return;
-
-        s.messages.push({ role: 'assistant', content: cleaned || confirm || `（发了 ${media.length} 个附件）` });
-        store.trim(s);
-        s.rounds += 1;
+        /**
+         * 判定为「要回」时，正文里仍可能残留字面 `<skip>`
+         * （模型会写「<skip> 不过这个问题我可以答」）。标记本身绝不能出现在群里。
+         */
+        const said = stripSkip(cleaned);
 
         /**
          * `<<retract>>`：模型想把**上一条**收回来（说错了、语气不对）。
          *
          * 顺序很关键：先记住「上一条是谁」，再发这条，发完才撤。
          * 群消息撤回窗口是 2 分钟，超了就不撤（撤了也白撤，还多一次请求）。
-         * 标记本身不能发出去，先摘掉。
+         *
+         * 标记本身不能发出去，所以在拼正文**之前**就摘掉。
+         * （以前是发出去之后再 `body = body.replace(...)`，而 body 是 const，
+         *   模型一旦输出 `<<retract>>` 就抛 TypeError，整条回复变成报错。）
          */
-        const wantRetract = /<<retract>>/i.test(body);
-        if (wantRetract) body = body.replace(/<<retract>>/gi, '').trim();
+        const { text: finalText, want: wantRetract } = takeRetract(said);
+        const body = [finalText, confirm].filter(Boolean).join('\n\n');
+        // 既没话也没附件就不发；但要撤回上一条时还得往下走（撤回不靠这条文本）
+        if (!body && !media.length && !wantRetract) return;
+
+        s.messages.push({ role: 'assistant', content: finalText || confirm || `（发了 ${media.length} 个附件）` });
+        store.trim(s);
+        s.rounds += 1;
+
         const prevSent = lastSent.get(msg.chatId);
 
         if (body) {

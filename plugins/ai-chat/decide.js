@@ -124,6 +124,33 @@ export function parseButton(value) {
 }
 
 /**
+ * 把正文里的字面 `<skip>` 标记摘掉。
+ *
+ * 标记是插件和模型之间的内部约定，**任何情况下都不该出现在群消息里**。
+ * `isSkip` 判为「想答」时正文还要照发，那就得先把标记摘干净。
+ */
+export function stripSkip(text) {
+  return String(text ?? '').split(SKIP_MARK).join('').trim();
+}
+
+/**
+ * 摘掉 `<<retract>>`（「把上一条收回来」的标记）。
+ *
+ * 返回摘干净的正文和「到底要不要撤」，调用方两件事都要用：
+ * 正文发出去、上一条撤回。摘除必须在拼正文**之前**做——
+ * 以前是发完再 `body = body.replace(...)`，而 body 是 const，
+ * 模型一输出这个标记就抛 TypeError，整条回复变成报错。
+ *
+ * @param {string} text
+ * @returns {{ text: string, want: boolean }}
+ */
+export function takeRetract(text) {
+  const raw = String(text ?? '');
+  const want = /<<retract>>/i.test(raw);
+  return { text: want ? raw.replace(/<<retract>>/gi, '').trim() : raw.trim(), want };
+}
+
+/**
  * 从模型输出里剥掉 `<skip>` 标记。
  *
  * 只有「整条基本就是 <skip>」才算不接——模型有时会写
@@ -133,8 +160,7 @@ export function isSkip(text) {
   const t = String(text ?? '').trim();
   if (!t) return true;
   // 去掉标记后如果剩不下多少内容，就是真的不想接
-  const rest = t.split(SKIP_MARK).join('').trim();
-  return rest.length < 4;
+  return stripSkip(t).length < 4;
 }
 
 /**

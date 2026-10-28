@@ -25,7 +25,7 @@ const ok = (name, cond, detail = '') => {
   }
 };
 
-const { shouldConsider, isSkip, parseActions, parseButton, textOf, SKIP_MARK } = await import(
+const { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseButton, textOf, SKIP_MARK } = await import(
   pathToFileURL(path.join(PLUGIN, 'decide.js'))
 );
 
@@ -144,6 +144,29 @@ ok(
   '带了标记但还说了不少，说明其实想答',
   isSkip(`${SKIP_MARK} 不过这个我可以答：热就开空调`) === false,
 );
+
+// 标记是内部约定，绝不能原样发到群里（真机上被 @ 时漏过一次）
+ok('剥标记: 只剥标记不碰正文', stripSkip(`${SKIP_MARK} 热就开空调`) === '热就开空调');
+ok('剥标记: 纯标记剥完是空串', stripSkip(SKIP_MARK) === '');
+ok('剥标记: 多次出现都剥掉', stripSkip(`${SKIP_MARK}嗯${SKIP_MARK}`) === '嗯');
+ok('剥标记: 没有标记时原样返回', stripSkip('今天确实挺热的') === '今天确实挺热的');
+
+/* ---------------- 撤回标记 ---------------- */
+// 以前是发完正文再 replace，而 body 是 const → 抛 TypeError，整条回复变报错
+{
+  const r = takeRetract('说错了 <<retract>>');
+  ok('撤回: 认出标记', r.want === true);
+  ok('撤回: 标记不进正文', r.text === '说错了', JSON.stringify(r.text));
+
+  const only = takeRetract('<<retract>>');
+  ok('撤回: 只有标记时正文为空', only.want === true && only.text === '');
+
+  const none = takeRetract('今天挺热的');
+  ok('撤回: 没标记时不误判', none.want === false && none.text === '今天挺热的');
+
+  const twice = takeRetract('<<retract>><<retract>>好');
+  ok('撤回: 重复标记都摘掉', twice.want === true && twice.text === '好');
+}
 
 /* ---------------- 动作标记 ---------------- */
 

@@ -2,12 +2,12 @@
   "schema": 1,
   "repo": "tdcq9594/qq-bot-roost-plugins",
   "branch": "main",
-  "updated": "2026-10-27",
+  "updated": "2026-10-28",
   "plugins": [
     {
       "id": "ai-chat",
       "name": "AI 对话",
-      "version": "4.3.0",
+      "version": "4.3.1",
       "description": "把大模型接进群聊和私聊，不用 @ 也不用指令——它自己判断该不该接话；支持撤回、按钮、私聊流式，每会话独立上下文",
       "tags": [
         "AI",
@@ -17,7 +17,7 @@
       "frameworkVersion": ">=0.8.1",
       "runtime": "node",
       "path": "plugins/ai-chat",
-      "sha256": "80f27fc84d3d48a5940e80b4e94e75293eb75351d1bc32c1099d11d8178ceacc",
+      "sha256": "9c1d15f2a84eeed014fdde7180d98f3498033c2936271a7c1cf6a8222f90435b",
       "author": "tdcq9594",
       "commands": [
         "ai",
