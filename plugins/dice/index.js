@@ -95,11 +95,15 @@ export default {
 <div class="tip">数据来自插件存档，实时读取</div>
 <div id="box" class="empty">加载中…</div>
 <script>
-  // 面板会把访问密钥和当前机器人拼在 iframe 地址上，这里原样转发给接口，
-  // 否则多机器人时永远只能拿到第一个机器人的数据
+  // 面板把「页面令牌」和当前机器人拼在 iframe 地址上，这里原样转发给接口，
+  // 否则多机器人时永远只能拿到第一个机器人的数据。
+  //
+  // pt = 页面专属令牌，只对本插件的接口有效；key = 旧框架的写法。
+  // 两个都认：新框架给 pt、老框架给 key，插件不必跟着框架一起升级。
   const sp = new URLSearchParams(location.search);
   const q = new URLSearchParams();
-  if (sp.get('key')) q.set('key', sp.get('key'));
+  if (sp.get('pt')) q.set('pt', sp.get('pt'));
+  else if (sp.get('key')) q.set('key', sp.get('key'));
   if (sp.get('bot')) q.set('bot', sp.get('bot'));
   const qs = q.toString() ? '?' + q.toString() : '';
   fetch('/api/plugins/dice/panel' + qs)

@@ -1,0 +1,801 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>斗罗大陆 · 管理</title>
+<style>
+  /* 面板会注入 --panel / --text / --border / --primary 等变量，直接用，深浅色自动适配 */
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 14px 16px 40px; }
+  .hdr { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .hdr h1 { font-size: 16px; margin: 0; }
+  .hdr .sub { font-size: 12px; color: var(--muted); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .card { background: var(--panel-2); border-radius: var(--radius-sm); padding: 9px 11px; }
+  .card .k { font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+  .card .v { font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 12px; flex-wrap: wrap; }
+  .tabs button { background: transparent; border: 1px solid var(--border); color: var(--text-2);
+    padding: 5px 13px; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; }
+  .tabs button.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+  input, select { background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: var(--radius-sm); padding: 6px 9px; font-size: 13px; font-family: inherit; }
+  input:focus, select:focus { outline: none; border-color: var(--primary); }
+  button.act { background: var(--primary); border: 1px solid var(--primary); color: #fff;
+    border-radius: var(--radius-sm); padding: 6px 13px; cursor: pointer; font-size: 13px; }
+  button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text-2); }
+  button.ghost:hover { border-color: var(--border-strong); }
+  button:disabled { opacity: .45; cursor: default; }
+  table { font-size: 12.5px; }
+  th, td { padding: 5px 8px; white-space: nowrap; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--panel-2); }
+  tbody tr.on { background: var(--panel-3); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .wrap { overflow: auto; max-height: 52vh; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+  .pager { display: flex; gap: 8px; align-items: center; margin-top: 8px; font-size: 12px; color: var(--muted); }
+  .editor { margin-top: 14px; border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
+  .editor h3 { font-size: 13px; margin: 0 0 10px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); gap: 9px 12px; }
+  .fld label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+  .fld input { width: 100%; }
+  .fld .ro { font-size: 12px; padding: 6px 0; color: var(--faint); }
+  .msg { font-size: 12.5px; padding: 7px 11px; border-radius: var(--radius-sm); margin: 10px 0; display: none; }
+  .msg.ok { display: block; background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+  .msg.err { display: block; background: color-mix(in srgb, var(--err) 16%, transparent); color: var(--err); }
+  .empty { color: var(--faint); text-align: center; padding: 22px 0; font-size: 13px; }
+  .tip { font-size: 11.5px; color: var(--faint); margin-top: 6px; }
+  .pill { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--panel-3); color: var(--text-2); }
+</style>
+
+<div class="hdr">
+  <h1>斗罗大陆 · 管理</h1>
+  <span class="sub" id="pack"></span>
+</div>
+
+<div class="cards" id="cards"></div>
+
+<div class="tabs">
+  <button data-tab="players" class="on">玩家</button>
+  <button data-tab="content">内容表</button>
+  <button data-tab="cfg">数值系数</button>
+  <button data-tab="tx">经济流水</button>
+  <button data-tab="economy">经济</button>
+  <button data-tab="balance">数值</button>
+  <button data-tab="settings">设置</button>
+</div>
+
+<div class="msg" id="msg"></div>
+
+<!-- 玩家 -->
+<div id="pane-players">
+  <div class="bar">
+    <input id="pq" placeholder="搜昵称 / 精确 openid" style="min-width:240px">
+    <button class="act" id="psearch">搜索</button>
+    <span class="pill" id="pcount"></span>
+  </div>
+  <div class="wrap"><table id="ptable"></table></div>
+  <div class="pager">
+    <button class="ghost" id="pprev">上一页</button>
+    <span id="pinfo"></span>
+    <button class="ghost" id="pnext">下一页</button>
+  </div>
+  <div id="pdetail"></div>
+</div>
+
+<!-- 内容表 -->
+<div id="pane-content" hidden>
+  <div class="bar">
+    <select id="ctable"></select>
+    <input id="cq" placeholder="搜索" style="min-width:180px">
+    <button class="act" id="csearch">搜索</button>
+    <button class="ghost" id="cnew">新增一行</button>
+    <span class="pill" id="ccount"></span>
+  </div>
+  <div class="wrap"><table id="ctableview"></table></div>
+  <div class="pager">
+    <button class="ghost" id="cprev">上一页</button>
+    <span id="cinfo"></span>
+    <button class="ghost" id="cnext">下一页</button>
+  </div>
+  <div class="tip">点一行编辑；改动即时写库，游戏里下一次指令就生效。</div>
+  <div id="ceditor"></div>
+</div>
+
+<!-- 系数 -->
+<div id="pane-cfg" hidden>
+  <div class="wrap"><table id="cfgview"></table></div>
+  <div class="tip">数值先留空也没关系，这里随时改。改完不需要重启。</div>
+</div>
+
+<!-- 流水 -->
+<div id="pane-tx" hidden>
+  <div class="bar"><button class="act" id="txreload">刷新</button></div>
+  <div class="wrap"><table id="txview"></table></div>
+</div>
+
+<!-- 经济 -->
+<div id="pane-economy" hidden>
+  <div class="cards" id="ecards"></div>
+
+  <div class="editor" style="margin-top:0">
+    <h3>生成兑换码</h3>
+    <div class="bar">
+      <input id="ecode" placeholder="兑换码，如 NEWYEAR-01" style="min-width:180px">
+      <input id="ecount" type="number" value="1" title="可用次数" style="width:90px">
+      <input id="ehours" type="number" value="0" title="有效小时，0=永久" style="width:90px">
+      <button class="act" id="ecreate">生成</button>
+    </div>
+    <div class="fld" style="margin-top:8px">
+      <label>奖励（JSON）</label>
+      <input id="erewards" value='{"gold":500,"coupon":0,"items":[{"id":2,"qty":3}]}' style="width:100%">
+    </div>
+    <div class="tip">字段：<code>gold</code> <code>coupon</code> <code>items:[{id,qty}]</code> <code>equips:[id]</code> <code>companions:[id]</code>。玩家发 <code>/兑换 码</code> 领取。</div>
+  </div>
+
+  <div class="editor">
+    <h3>已生成的码</h3>
+    <div class="wrap" style="max-height:34vh"><table id="ecdk"></table></div>
+    <div class="bar" style="margin-top:8px"><button class="ghost" id="ereload">刷新</button></div>
+  </div>
+</div>
+
+<!-- 数值 -->
+<div id="pane-balance" hidden>
+  <div class="bar">
+    <button class="act" id="brun">跑体检</button>
+    <span class="tip" style="margin:0">每格采样</span>
+    <input id="bsamples" type="number" value="60" style="width:80px">
+    <span class="tip" style="margin:0">次</span>
+    <span class="pill" id="bstate"></span>
+  </div>
+  <div class="tip">模拟用的是**和线上同一个** <code>resolveRound()</code>，所以数字可信。</div>
+
+  <div class="editor" style="margin-top:12px">
+    <h3>规则判定</h3>
+    <div class="wrap" style="max-height:30vh"><table id="bcheck"></table></div>
+  </div>
+
+  <div class="editor">
+    <h3>怪物属性（由内容生成，不随玩家变）</h3>
+    <div class="wrap" style="max-height:26vh"><table id="bmobs"></table></div>
+  </div>
+
+  <div class="editor">
+    <h3>平衡矩阵 · 回合数 / 胜率</h3>
+    <div class="wrap" style="max-height:40vh"><table id="bmatrix"></table></div>
+    <div class="tip">绿色=接近目标回合，黄色=偏慢，红色=胜率不足（打不过）。</div>
+  </div>
+</div>
+
+<!-- 设置 -->
+<div id="pane-settings" hidden>
+  <div class="editor" style="margin-top:0">
+    <h3>指令前缀</h3>
+    <div class="bar">
+      <input id="sprefix" maxlength="4" style="width:90px;text-align:center;font-family:var(--font-mono)">
+      <button class="act" id="ssave">保存</button>
+      <span class="tip" style="margin:0">1–4 个字符，改完立即生效，菜单里的可点击项会跟着变</span>
+    </div>
+    <div class="tip" id="spreview"></div>
+  </div>
+
+  <div class="editor">
+    <h3>可用指令</h3>
+    <div class="tip" style="margin-top:0">玩家在群里发「前缀 + 指令词」，例如 <code>/攻击</code></div>
+    <div id="sverbs" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px"></div>
+  </div>
+
+  <div class="editor">
+    <h3>图片（图文同条）</h3>
+    <div class="bar">
+      <label style="font-size:13px;display:flex;align-items:center;gap:6px">
+        <input type="checkbox" id="simages" style="width:auto"> 发送图片
+      </label>
+      <button class="act" id="ssave3">保存</button>
+    </div>
+    <div class="tip" id="simgdir"></div>
+    <div class="tip">
+      在「内容表」里给 武魂 / 地图 / 魂兽 的 <code>image</code> 列填图，游戏里就会用**一条消息**把图和文字一起发出去。
+      填法两种：<code>https://…</code> 远程图；<code>wuhun/lanyincao.png</code> 本地图（相对上面的目录）。
+      留空则发纯文本；关掉上面的开关则全部退回文本。
+    </div>
+  </div>
+
+  <div class="editor">
+    <h3>其它</h3>
+    <div class="bar">
+      <label style="font-size:13px;display:flex;align-items:center;gap:6px">
+        <input type="checkbox" id="sseed" style="width:auto"> 空库时灌入测试数据
+      </label>
+      <button class="act" id="ssave2">保存</button>
+    </div>
+    <div class="tip">关掉后新建的库是空的，内容要自己在「内容表」里加。</div>
+  </div>
+</div>
+
+<script>
+  /* ---------- 基础设施 ---------- */
+  const sp = new URLSearchParams(location.search);
+  const qs = (() => {
+    const q = new URLSearchParams();
+    // pt = 页面专属令牌（只对本插件的接口有效）；key = 旧框架的写法。
+    // 两个都认，插件不必跟着框架一起升级。
+    if (sp.get('pt')) q.set('pt', sp.get('pt'));
+    else if (sp.get('key')) q.set('key', sp.get('key'));
+    if (sp.get('bot')) q.set('bot', sp.get('bot'));
+    // 这里**只返回参数串，不带问号**。
+    // 带了问号的话，像 `/players?page=1&q=` 这种本身已经带 query 的路径，
+    // 拼起来会变成 `...&q=?pt=xxx` —— 令牌被当成 q 的值，服务端拿不到 pt，
+    // 于是把请求判成跨站并回 403，而浏览器只看到一句「加载失败」。
+    return q.toString();
+  })();
+  const BASE = '/api/plugins/douluo/r';
+
+  async function api(path, opts = {}) {
+    /**
+     * GET/HEAD **不要带 Content-Type**。
+     *
+     * 带了它，这个请求就不再是「简单请求」，浏览器必须先发一次 CORS 预检
+     * （OPTIONS）。而预检会被某些安全软件的网页防护层劫持（例如卡巴斯基的
+     * kis.v2.scr.kaspersky-labs.com），它改写/丢掉了响应头，于是浏览器报
+     * `Request header field content-type is not allowed by
+     * Access-Control-Allow-Headers in preflight response` —— 看起来像服务端
+     * 配错了，实际服务端怎么改都没用。
+     *
+     * 只读请求本来就不需要 Content-Type（没有 body），去掉它就退回简单请求、
+     * 不触发预检，整条链路上少一个可被插手的环节。
+     * 有 body 的写请求照旧带，那是必须的。
+     */
+    const method = String(opts.method || 'GET').toUpperCase();
+    const headers =
+      method === 'GET' || method === 'HEAD'
+        ? { ...(opts.headers || {}) }
+        : { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+
+    // 路径里已经有 `?` 就用 `&`，否则用 `?`，避免出现两个问号
+    const url = BASE + path + (qs ? (path.includes('?') ? '&' : '?') + qs : '');
+
+    const res = await fetch(url, {
+      ...opts,
+      headers,
+    });
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = { error: text }; }
+    if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+    return data;
+  }
+
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const fmtTime = (ms) => (ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '-');
+  const shortId = (id) => (id && id.length > 12 ? id.slice(0, 6) + '…' + id.slice(-4) : id || '');
+
+  let msgTimer = null;
+  function toast(text, ok = true) {
+    const el = $('#msg');
+    el.textContent = text;
+    el.className = 'msg ' + (ok ? 'ok' : 'err');
+    clearTimeout(msgTimer);
+    msgTimer = setTimeout(() => { el.className = 'msg'; }, 3200);
+  }
+  function fail(e) { toast(e.message || String(e), false); }
+
+  /* ---------- 概览 ---------- */
+  async function loadStats() {
+    try {
+      const s = await api('/stats');
+      $('#pack').textContent = s.pack ? '内容包 ' + s.pack : '';
+      const cards = [
+        ['玩家', s.players],
+        ['今日新增', s.todayNew],
+        ['24h 活跃', s.active24h],
+        ['魂币总量', s.gold],
+        ['点券总量', s.coupon],
+        ['内容表', s.contentTables + ' 张 / ' + s.contentRows + ' 行'],
+      ];
+      $('#cards').innerHTML = cards.map(([k, v]) => `<div class="card"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('');
+      return s;
+    } catch (e) { fail(e); }
+  }
+
+  /* ---------- 标签切换 ---------- */
+  const panes = { players: '#pane-players', content: '#pane-content', cfg: '#pane-cfg', tx: '#pane-tx', economy: '#pane-economy', balance: '#pane-balance', settings: '#pane-settings' };
+  document.querySelectorAll('.tabs button').forEach((b) => {
+    b.onclick = () => {
+      document.querySelectorAll('.tabs button').forEach((x) => x.classList.remove('on'));
+      b.classList.add('on');
+      for (const [k, sel] of Object.entries(panes)) $(sel).hidden = k !== b.dataset.tab;
+      if (b.dataset.tab === 'cfg') loadCfg();
+      if (b.dataset.tab === 'tx') loadTx();
+      if (b.dataset.tab === 'content') loadContent();
+      if (b.dataset.tab === 'settings') loadSettings();
+      if (b.dataset.tab === 'economy') loadEconomy();
+      if (b.dataset.tab === 'balance') runBalance();
+    };
+  });
+
+  /* ---------- 数值体检 ---------- */
+  const VERDICT_COLOR = {
+    good: 'var(--ok)',
+    fast: 'var(--primary)',
+    slow: 'var(--warn)',
+    danger: 'var(--err)',
+  };
+
+  async function runBalance() {
+    const samples = Math.max(10, Math.min(300, Number($('#bsamples').value) || 60));
+    $('#bstate').textContent = '模拟中…';
+    try {
+      const [chk, rep] = await Promise.all([
+        api('/balance/check?bot=main&samples=' + Math.min(300, samples * 2)),
+        api('/balance?bot=main&samples=' + samples),
+      ]);
+
+      $('#bstate').innerHTML = chk.ok
+        ? `<span style="color:var(--ok)">✓ 全部 ${chk.passed} 条规则通过</span>`
+        : `<span style="color:var(--err)">✗ ${chk.failed} 条不通过</span>`;
+
+      $('#bcheck').innerHTML =
+        '<thead><tr><th>魂兽</th><th>规则</th><th>期望</th><th>实际</th><th></th></tr></thead><tbody>' +
+        chk.items.map((it) => `<tr>
+          <td>${esc(it.name)}</td>
+          <td style="white-space:normal">${esc(it.rule)}</td>
+          <td style="color:var(--muted)">${esc(it.expect)}</td>
+          <td>${esc(it.actual)}</td>
+          <td style="color:${it.ok ? 'var(--ok)' : 'var(--err)'}">${it.ok ? '✓' : '✗'}</td>
+        </tr>`).join('') + '</tbody>';
+
+      $('#bmobs').innerHTML =
+        '<thead><tr><th>魂兽</th><th>品阶</th><th>年龄</th><th>标准等级</th><th>生命</th><th>防御</th><th>攻击</th><th>目标回合</th></tr></thead><tbody>' +
+        rep.rows.map((r) => `<tr>
+          <td>${esc(r.name)}</td>
+          <td>${esc(r.tier)}</td>
+          <td class="num">${r.age}</td>
+          <td class="num">Lv${r.standardLevel}</td>
+          <td class="num">${r.hp}</td>
+          <td class="num">${r.def}</td>
+          <td class="num">${r.atk}</td>
+          <td class="num">${r.expectedRounds}</td>
+        </tr>`).join('') + '</tbody>';
+
+      $('#bmatrix').innerHTML =
+        '<thead><tr><th>魂兽 \\ 等级</th>' + rep.levels.map((l) => `<th class="num">Lv${l}</th>`).join('') + '</tr></thead><tbody>' +
+        rep.rows.map((r) => `<tr><td>${esc(r.name)}<br><span style="color:var(--faint);font-size:11px">目标 ${r.expectedRounds} 回合</span></td>` +
+          r.cells.map((c) => `<td class="num" style="color:${VERDICT_COLOR[c.verdict] || 'inherit'}">${c.avgRounds}<br><span style="font-size:11px;opacity:.7">${c.winRate}%</span></td>`).join('') +
+          '</tr>').join('') + '</tbody>';
+    } catch (e) { fail(e); $('#bstate').textContent = ''; }
+  }
+  $('#brun').onclick = () => runBalance();
+
+  /* ---------- 经济 ---------- */
+  async function loadEconomy() {
+    try {
+      const d = await api('/economy');
+      const cards = [
+        ['魂币总量', d.gold],
+        ['点券总量', d.coupon],
+        ['银行存款', d.deposit],
+        ['银行放贷', d.loan],
+        ['在售拍卖', d.openAuctions],
+        ['奖池', d.prizeCount + ' 个'],
+      ];
+      $('#ecards').innerHTML = cards.map(([k, v]) => `<div class="card"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('');
+      await loadCdk();
+    } catch (e) { fail(e); }
+  }
+
+  async function loadCdk() {
+    const d = await api('/cdk');
+    if (!d.rows.length) {
+      $('#ecdk').innerHTML = '<tbody><tr><td class="empty">还没有兑换码</td></tr></tbody>';
+      return;
+    }
+    $('#ecdk').innerHTML =
+      '<thead><tr><th>兑换码</th><th>已用 / 上限</th><th>过期</th><th>生成时间</th></tr></thead><tbody>' +
+      d.rows.map((r) => `<tr>
+        <td><code>${esc(r.code)}</code></td>
+        <td class="num">${r.used} / ${r.max_uses}</td>
+        <td style="color:var(--muted)">${r.expire_at ? fmtTime(r.expire_at) : '永久'}</td>
+        <td style="color:var(--muted)">${fmtTime(r.created_at)}</td>
+      </tr>`).join('') + '</tbody>';
+  }
+
+  $('#ecreate').onclick = async () => {
+    try {
+      await api('/cdk', {
+        method: 'POST',
+        body: JSON.stringify({
+          code: $('#ecode').value.trim(),
+          rewards: $('#erewards').value.trim() || '{}',
+          maxUses: Number($('#ecount').value || 1),
+          expireHours: Number($('#ehours').value || 0),
+        }),
+      });
+      toast('兑换码已生成');
+      $('#ecode').value = '';
+      loadCdk();
+    } catch (e) { fail(e); }
+  };
+  $('#ereload').onclick = () => loadCdk();
+
+  /* ---------- 设置 ---------- */
+  let sVerbs = [];
+  async function loadSettings() {
+    try {
+      const d = await api('/settings');
+      sVerbs = d.verbs || [];
+      $('#sprefix').value = d.prefix || '/';
+      $('#sseed').checked = d.seedOnEmpty !== false;
+      $('#simages').checked = d.images !== false;
+      $('#simgdir').innerHTML = d.imagesDir ? '本地图目录：<code>' + esc(d.imagesDir) + '</code>' : '';
+      renderVerbs();
+      renderPreview();
+      $('#sprefix').oninput = renderPreview;
+    } catch (e) { fail(e); }
+  }
+
+  function renderPreview() {
+    const p = $('#sprefix').value.trim() || '/';
+    $('#spreview').innerHTML = '效果：<code>' + esc(p) + '菜单</code> · <code>' + esc(p) + '攻击</code> · <code>' + esc(p) + '挑战魂兽 十年白虎</code>';
+  }
+
+  function renderVerbs() {
+    const p = $('#sprefix').value.trim() || '/';
+    $('#sverbs').innerHTML = sVerbs.map((v) => '<span class="pill" style="font-family:var(--font-mono)">' + esc(p) + esc(v) + '</span>').join('');
+  }
+
+  async function saveSettings(extra) {
+    try {
+      const body = Object.assign({ prefix: $('#sprefix').value.trim() || '/' }, extra || {});
+      await api('/settings', { method: 'PATCH', body: JSON.stringify(body) });
+      toast('已保存 · 前缀 ' + body.prefix);
+      renderVerbs();
+      loadStats();
+    } catch (e) { fail(e); }
+  }
+  $('#ssave').onclick = () => saveSettings();
+  $('#ssave2').onclick = () => saveSettings({ seedOnEmpty: $('#sseed').checked });
+  $('#ssave3').onclick = () => saveSettings({ images: $('#simages').checked });
+
+  /* ---------- 玩家 ---------- */
+  let pPage = 1;
+  async function loadPlayers() {
+    try {
+      const q = $('#pq').value.trim();
+      const d = await api(`/players?page=${pPage}&size=30&q=${encodeURIComponent(q)}`);
+      $('#pcount').textContent = `共 ${d.total} 人`;
+      $('#pinfo').textContent = `第 ${d.page} 页 / 共 ${Math.max(1, Math.ceil(d.total / d.size))} 页`;
+      $('#pprev').disabled = d.page <= 1;
+      $('#pnext').disabled = d.page * d.size >= d.total;
+      if (!d.rows.length) {
+        $('#ptable').innerHTML = '<tbody><tr><td class="empty">还没有玩家。让群里发一次 <code>/斗罗 开始 男 名字</code></td></tr></tbody>';
+        return;
+      }
+      $('#ptable').innerHTML =
+        '<thead><tr><th>昵称</th><th>openid</th><th>等级</th><th>战力</th><th>魂币</th><th>点券</th><th>状态</th><th>最后活跃</th></tr></thead><tbody>' +
+        d.rows.map((r) => `<tr data-openid="${esc(r.openid)}">
+          <td>${esc(r.name)}</td>
+          <td style="color:var(--faint)">${esc(shortId(r.openid))}</td>
+          <td class="num">${r.level}</td>
+          <td class="num">${r.power}</td>
+          <td class="num">${r.gold}</td>
+          <td class="num">${r.coupon}</td>
+          <td>${esc(r.status)}</td>
+          <td style="color:var(--muted)">${fmtTime(r.last_seen)}</td>
+        </tr>`).join('') + '</tbody>';
+      $('#ptable').querySelectorAll('tbody tr[data-openid]').forEach((tr) => {
+        tr.onclick = () => openPlayer(tr.dataset.openid, tr);
+      });
+    } catch (e) { fail(e); }
+  }
+
+  async function openPlayer(openid, tr) {
+    $('#ptable').querySelectorAll('tbody tr').forEach((x) => x.classList.remove('on'));
+    if (tr) tr.classList.add('on');
+    try {
+      const d = await api('/players/' + encodeURIComponent(openid));
+      const p = d.player;
+      const inv = d.inventory.length
+        ? d.inventory.map((i) => `<span class="pill">${esc(i.name)} × ${i.qty}</span>`).join(' ')
+        : '<span style="color:var(--faint)">空</span>';
+      const rings = d.rings.length
+        ? d.rings.map((r) => `<span class="pill">${r.slot}环 ${r.years}年</span>`).join(' ')
+        : '<span style="color:var(--faint)">无</span>';
+      const eqList = (d.equipment && d.equipment.equipped) || [];
+      const eq = eqList.length
+        ? eqList.map((e) => `<span class="pill">${esc(e.name)}</span>`).join(' ')
+        : '<span style="color:var(--faint)">无</span>';
+      const compList = (d.companions && d.companions.active) || [];
+      const cardCount = ((d.companions && d.companions.cards) || []).length;
+      const comp = compList.length
+        ? compList.map((c) => `<span class="pill">${esc(c.name)}</span>`).join(' ') +
+          (cardCount ? ` <span class="pill">集卡 ${cardCount} 张</span>` : '')
+        : `<span style="color:var(--faint)">无</span>${cardCount ? ` <span class="pill">集卡 ${cardCount} 张</span>` : ''}`;
+      const srcRows = ((d.equipment && d.equipment.sources) || [])
+        .map((s) => {
+          const parts = Object.entries(s.attrs || {}).map(([k, v]) => `${k}+${v}`).join(' ');
+          const tag = s.type === 'set' ? `套装 ${s.name}（${s.need}件）` : s.name;
+          return `<tr><td style="white-space:normal">${esc(tag)}</td><td style="white-space:normal">${esc(parts)}</td></tr>`;
+        })
+        .join('');
+      const tx = d.tx.length
+        ? '<table style="margin-top:6px"><thead><tr><th>时间</th><th>类型</th><th>数量</th><th>余额</th><th>原因</th></tr></thead><tbody>' +
+          d.tx.map((t) => `<tr><td>${fmtTime(t.at)}</td><td>${esc(t.kind)}</td><td class="num">${t.delta}</td><td class="num">${t.balance}</td><td>${esc(t.reason)}</td></tr>`).join('') +
+          '</tbody></table>'
+        : '<span style="color:var(--faint)">无记录</span>';
+
+      $('#pdetail').innerHTML = `<div class="editor">
+        <h3>${esc(p.name)} · Lv.${p.level} · 战力 ${p.power}</h3>
+        <div class="grid">
+          <div class="fld"><label>openid</label><div class="ro">${esc(p.openid)}</div></div>
+          <div class="fld"><label>生命</label><div class="ro">${p.hp} / ${p.hp_max}</div></div>
+          <div class="fld"><label>魂力</label><div class="ro">${p.mp} / ${p.mp_max}</div></div>
+          <div class="fld"><label>攻击 / 防御 / 速度</label><div class="ro">${p.atk} / ${p.def} / ${p.spd}</div></div>
+          <div class="fld"><label>魂币</label><div class="ro">${p.gold}</div></div>
+          <div class="fld"><label>点券</label><div class="ro">${p.coupon}</div></div>
+        </div>
+        <h3 style="margin-top:14px">背包</h3><div>${inv}</div>
+        <h3 style="margin-top:12px">魂环</h3><div>${rings}</div>
+        <h3 style="margin-top:12px">装备</h3><div>${eq}</div>
+        <h3 style="margin-top:12px">伙伴</h3><div>${comp}</div>
+        ${srcRows ? `<h3 style="margin-top:12px">加成来源</h3><table><thead><tr><th>来源</th><th>加成</th></tr></thead><tbody>${srcRows}</tbody></table>` : ''}
+
+        <h3 style="margin-top:14px">发放</h3>
+        <div class="bar">
+          <select id="gkind">
+            <option value="gold">魂币</option>
+            <option value="coupon">点券</option>
+            <option value="item">物品</option>
+            <option value="equip">装备</option>
+            <option value="companion">伙伴</option>
+          </select>
+          <select id="gitem" hidden></select>
+          <input id="gqty" type="number" value="100" style="width:110px">
+          <input id="greason" placeholder="原因（会写进流水）" style="min-width:160px">
+          <button class="act" id="gdo">发放</button>
+          <button class="ghost" id="gdel" style="margin-left:auto;color:var(--err)">删除角色</button>
+        </div>
+        <div class="tip">每一笔都会写 tx_log，可在「经济流水」里追到。</div>
+
+        <h3 style="margin-top:14px">最近流水</h3>${tx}
+      </div>`;
+
+      const opts = await api('/options');
+      const gkind = $('#gkind');
+      const gitem = $('#gitem');
+      const fillGitem = (kind) => {
+        if (kind === 'item') {
+          gitem.innerHTML = opts.item.map((i) => `<option value="${i.id}">${esc(i.name)}</option>`).join('');
+        } else if (kind === 'equip') {
+          gitem.innerHTML = (opts.equip || []).map((i) => `<option value="${i.id}">${esc(i.name)}（${esc(i.kind)}）</option>`).join('');
+        } else if (kind === 'companion') {
+          gitem.innerHTML = (opts.companion || []).map((i) => `<option value="${i.id}">${esc(i.name)}（${esc(i.kind)}）</option>`).join('');
+        } else {
+          gitem.innerHTML = '';
+        }
+        gitem.hidden = kind === 'gold' || kind === 'coupon';
+      };
+      gkind.onchange = () => fillGitem(gkind.value);
+      fillGitem(gkind.value);
+      $('#gdo').onclick = async () => {
+        try {
+          await api(`/players/${encodeURIComponent(openid)}/give`, {
+            method: 'POST',
+            body: JSON.stringify({
+              kind: gkind.value,
+              id: Number(gitem.value || 0),
+              qty: Number($('#gqty').value || 0),
+              reason: $('#greason').value.trim() || '面板发放',
+            }),
+          });
+          toast('发放成功');
+          openPlayer(openid);
+          loadPlayers();
+          loadStats();
+        } catch (e) { fail(e); }
+      };
+      $('#gdel').onclick = async () => {
+        if (!confirm(`确定删除角色「${p.name}」？背包和魂环会一起删掉，不可恢复。`)) return;
+        try {
+          await api('/players/' + encodeURIComponent(openid), { method: 'DELETE' });
+          toast('已删除');
+          $('#pdetail').innerHTML = '';
+          loadPlayers();
+          loadStats();
+        } catch (e) { fail(e); }
+      };
+    } catch (e) { fail(e); }
+  }
+
+  $('#psearch').onclick = () => { pPage = 1; loadPlayers(); };
+  $('#pq').onkeydown = (e) => { if (e.key === 'Enter') { pPage = 1; loadPlayers(); } };
+  $('#pprev').onclick = () => { pPage = Math.max(1, pPage - 1); loadPlayers(); };
+  $('#pnext').onclick = () => { pPage += 1; loadPlayers(); };
+
+  /* ---------- 内容表 ---------- */
+  const TABLE_LABEL = {
+    wuhun: '武魂', wuhun_series: '武魂系列', skill: '魂技', monster: '魂兽',
+    monster_map: '魂兽出没地图', item: '物品', map: '地图', npc: 'NPC',
+    quest: '任务', title: '称号', cfg: '数值系数',
+  };
+  let cPage = 1;
+  let cCurrent = null;
+  let cData = null;
+
+  async function loadContent(keep) {
+    try {
+      const stats = await api('/stats');
+      const sel = $('#ctable');
+      if (!sel.options.length) {
+        sel.innerHTML = stats.tables
+          .filter((t) => t.table !== 'content_meta')
+          .map((t) => `<option value="${t.table}">${esc(TABLE_LABEL[t.table] || t.table)}（${t.rows}）</option>`)
+          .join('');
+      }
+      cCurrent = sel.value;
+      if (!cCurrent) return;
+      if (!keep) cPage = 1;
+      const q = $('#cq').value.trim();
+      const d = await api(`/content/${cCurrent}?page=${cPage}&size=50&q=${encodeURIComponent(q)}`);
+      cData = d;
+      $('#ccount').textContent = `共 ${d.total} 行${d.readonly ? ' · 只读' : ''}`;
+      $('#cinfo').textContent = `第 ${d.page} 页 / 共 ${Math.max(1, Math.ceil(d.total / d.size))} 页`;
+      $('#cprev').disabled = d.page <= 1;
+      $('#cnext').disabled = d.page * d.size >= d.total;
+      $('#cnew').disabled = d.readonly;
+
+      const cols = d.columns;
+      if (!d.rows.length) {
+        $('#ctableview').innerHTML = '<tbody><tr><td class="empty">这张表还是空的</td></tr></tbody>';
+        return;
+      }
+      $('#ctableview').innerHTML =
+        '<thead><tr>' + cols.map((c) => `<th>${esc(c.name)}</th>`).join('') + '</tr></thead><tbody>' +
+        d.rows.map((r, i) =>
+          `<tr data-i="${i}">` + cols.map((c) => {
+            const v = r[c.name];
+            const isNum = c.type.includes('INT') || c.type.includes('REAL');
+            return `<td class="${isNum ? 'num' : ''}">${v === null ? '<span style="color:var(--faint)">null</span>' : esc(v)}</td>`;
+          }).join('') + '</tr>').join('') +
+        '</tbody>';
+      $('#ctableview').querySelectorAll('tbody tr[data-i]').forEach((tr) => {
+        tr.onclick = () => {
+          $('#ctableview').querySelectorAll('tbody tr').forEach((x) => x.classList.remove('on'));
+          tr.classList.add('on');
+          openEditor(d.rows[Number(tr.dataset.i)]);
+        };
+      });
+      $('#ceditor').innerHTML = '';
+    } catch (e) { fail(e); }
+  }
+
+  function openEditor(row) {
+    const d = cData;
+    if (!d) return;
+    const isNew = !row;
+    const pk = new Set(d.pk);
+    const fields = d.columns.map((c) => {
+      const v = isNew ? (c.default ?? '') : (row[c.name] ?? '');
+      const locked = !isNew && pk.has(c.name);
+      if (locked) {
+        return `<div class="fld"><label>${esc(c.name)}（主键）</label><div class="ro">${esc(v)}</div></div>`;
+      }
+      const isNum = c.type.includes('INT') || c.type.includes('REAL');
+      return `<div class="fld"><label>${esc(c.name)} <span style="color:var(--faint)">${esc(c.type)}</span></label>
+        <input data-col="${esc(c.name)}" data-num="${isNum ? 1 : 0}" value="${esc(v)}"></div>`;
+    }).join('');
+
+    $('#ceditor').innerHTML = `<div class="editor">
+      <h3>${isNew ? '新增' : '编辑'} · ${esc(TABLE_LABEL[cCurrent] || cCurrent)}${isNew ? '' : ' #' + d.pk.map((k) => row[k]).join('/')}</h3>
+      <div class="grid">${fields}</div>
+      <div class="bar" style="margin-top:12px">
+        <button class="act" id="edSave">${isNew ? '创建' : '保存'}</button>
+        ${isNew ? '' : '<button class="ghost" id="edDel" style="color:var(--err)">删除</button>'}
+        <button class="ghost" id="edCancel">取消</button>
+      </div>
+    </div>`;
+
+    const collect = () => {
+      const out = {};
+      $('#ceditor').querySelectorAll('input[data-col]').forEach((inp) => {
+        const col = inp.dataset.col;
+        let v = inp.value;
+        if (inp.dataset.num === '1') v = v === '' ? null : Number(v);
+        out[col] = v;
+      });
+      return out;
+    };
+
+    $('#edCancel').onclick = () => { $('#ceditor').innerHTML = ''; };
+    $('#edSave').onclick = async () => {
+      try {
+        if (isNew) {
+          await api(`/content/${cCurrent}`, { method: 'POST', body: JSON.stringify({ row: collect() }) });
+        } else {
+          const pkv = {};
+          d.pk.forEach((k) => { pkv[k] = row[k]; });
+          await api(`/content/${cCurrent}`, { method: 'PATCH', body: JSON.stringify({ pk: pkv, row: collect() }) });
+        }
+        toast(isNew ? '已创建' : '已保存');
+        loadContent(true);
+        loadStats();
+      } catch (e) { fail(e); }
+    };
+    if (!isNew) {
+      $('#edDel').onclick = async () => {
+        if (!confirm('确定删除这一行？')) return;
+        try {
+          const pkv = {};
+          d.pk.forEach((k) => { pkv[k] = row[k]; });
+          await api(`/content/${cCurrent}`, { method: 'DELETE', body: JSON.stringify({ pk: pkv }) });
+          toast('已删除');
+          $('#ceditor').innerHTML = '';
+          loadContent(true);
+          loadStats();
+        } catch (e) { fail(e); }
+      };
+    }
+  }
+
+  $('#ctable').onchange = () => loadContent();
+  $('#csearch').onclick = () => { cPage = 1; loadContent(); };
+  $('#cq').onkeydown = (e) => { if (e.key === 'Enter') { cPage = 1; loadContent(); } };
+  $('#cprev').onclick = () => { cPage = Math.max(1, cPage - 1); loadContent(true); };
+  $('#cnext').onclick = () => { cPage += 1; loadContent(true); };
+  $('#cnew').onclick = () => openEditor(null);
+
+  /* ---------- 系数 ---------- */
+  async function loadCfg() {
+    try {
+      const d = await api('/cfg');
+      $('#cfgview').innerHTML =
+        '<thead><tr><th>键</th><th>值</th><th>类型</th><th>说明</th><th></th></tr></thead><tbody>' +
+        d.rows.map((r) => `<tr>
+          <td><code>${esc(r.key)}</code></td>
+          <td><input data-cfg="${esc(r.key)}" value="${esc(r.value)}" style="width:190px"></td>
+          <td style="color:var(--muted)">${esc(r.type)}</td>
+          <td style="color:var(--muted);white-space:normal">${esc(r.desc)}</td>
+          <td><button class="ghost" data-save="${esc(r.key)}">保存</button></td>
+        </tr>`).join('') + '</tbody>';
+      $('#cfgview').querySelectorAll('button[data-save]').forEach((b) => {
+        b.onclick = async () => {
+          const key = b.dataset.save;
+          const inp = $(`input[data-cfg="${CSS.escape(key)}"]`);
+          try {
+            await api('/cfg', { method: 'PATCH', body: JSON.stringify({ key, value: inp.value }) });
+            toast('已保存 · ' + key);
+          } catch (e) { fail(e); }
+        };
+      });
+    } catch (e) { fail(e); }
+  }
+
+  /* ---------- 流水 ---------- */
+  async function loadTx() {
+    try {
+      const d = await api('/tx?limit=100');
+      if (!d.rows.length) {
+        $('#txview').innerHTML = '<tbody><tr><td class="empty">还没有流水</td></tr></tbody>';
+        return;
+      }
+      $('#txview').innerHTML =
+        '<thead><tr><th>时间</th><th>openid</th><th>类型</th><th>数量</th><th>余额</th><th>原因</th></tr></thead><tbody>' +
+        d.rows.map((r) => `<tr>
+          <td>${fmtTime(r.at)}</td>
+          <td style="color:var(--faint)">${esc(shortId(r.openid))}</td>
+          <td>${esc(r.kind)}</td>
+          <td class="num" style="color:${r.delta >= 0 ? 'var(--ok)' : 'var(--err)'}">${r.delta > 0 ? '+' : ''}${r.delta}</td>
+          <td class="num">${r.balance}</td>
+          <td>${esc(r.reason)}</td>
+        </tr>`).join('') + '</tbody>';
+    } catch (e) { fail(e); }
+  }
+  $('#txreload').onclick = loadTx;
+
+  /* ---------- 启动 ---------- */
+  (async () => {
+    await loadStats();
+    await loadPlayers();
+  })();
+</script>

@@ -30,8 +30,14 @@ const log = (...a) => process.stderr.write(`[roost-mcp] ${a.join(' ')}\n`);
 
 /* ---------------- 调 Roost ---------------- */
 
-function qs() {
-  return KEY ? `?key=${encodeURIComponent(KEY)}` : '';
+/**
+ * 鉴权走请求头，不走 query。
+ *
+ * 以前是 `?key=`：密钥会进反向代理的 access_log、进浏览器历史、
+ * 进任何一次抓包。头不会。Roost 两个写法都认，这里优先用安全的那个。
+ */
+function authHeaders(extra = {}) {
+  return { 'content-type': 'application/json', ...(KEY ? { 'X-Access-Key': KEY } : {}), ...extra };
 }
 
 async function call(method, args = {}, confirm = false) {
@@ -39,9 +45,9 @@ async function call(method, args = {}, confirm = false) {
   if (BOT) body.bot = BOT;
   if (confirm) body.confirm = true;
 
-  const res = await fetch(`${BASE}/api/qq/call${qs()}`, {
+  const res = await fetch(`${BASE}/api/qq/call`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(20000),
   });
@@ -159,7 +165,10 @@ const TOOLS = [
       + '不知道有什么能调的时候先看这个。',
     inputSchema: { type: 'object', properties: {} },
     async run() {
-      const res = await fetch(`${BASE}/api/qq/capabilities${qs()}`, { signal: AbortSignal.timeout(10000) });
+      const res = await fetch(`${BASE}/api/qq/capabilities`, {
+        headers: authHeaders(),
+        signal: AbortSignal.timeout(10000),
+      });
       if (!res.ok) throw new Error(`取能力清单失败（HTTP ${res.status}）`);
       const list = await res.json();
       return { count: Array.isArray(list) ? list.length : 0, endpoints: list };

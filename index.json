@@ -111,7 +111,17 @@
         "reset"
       ],
       "addedAt": "2026-10-23",
-      "sha256": "5f9bbbeab2f40e0920d6cd93be68dc757cb4886d02a881b9ab0bbcf19c629e2d"
+      "sha256": "bb798e853d6dc000b54d1476604b9bb6f8d1b12fc72ef636e10e9fef7376d084"
+    },
+    {
+      "id": "douluo",
+      "name": "斗罗大陆",
+      "version": "0.2.0",
+      "description": "斗罗大陆文字游戏：内容全部在面板可编辑，数据用 SQLite",
+      "tags": [],
+      "runtime": "node",
+      "path": "plugins/douluo",
+      "sha256": "c7d76ccdb8d38255524f19f2c8f73ee9a29ef37398815b661377d36850064a81"
     },
     {
       "id": "echo",
