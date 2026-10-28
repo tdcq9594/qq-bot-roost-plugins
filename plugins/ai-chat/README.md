@@ -172,7 +172,7 @@
 | 标签 | 作用 |
 |---|---|
 | `<qqbot-cmd-input text="想说的话" />` | 替对方把话打好，他点一下就发出去（**只能私聊**，群里不生效） |
-| `<qqbot-at-user id="他的 member_openid" />` | 在 markdown 消息里 @ 某个人 |
+| `<qqbot-at-user id="他的 member_openid" />` | 在 markdown 消息里 @ 某个人。**推荐让宿主拼**：dsh-roost 的 `qq_send` 有 `at` 参数（填 `sender` 或 openid），模型不用手抄那串 id |
 
 想让人接话又不知道怎么开口时用第一个：它问「要不要我展开讲讲」，
 下面直接给一个填好的输入框，比说「你可以回复『展开』」自然得多。

@@ -94,7 +94,7 @@ export function buildUserContent(msg, text) {
  * 跟 `buildUserContent` 的区别：这个是**结构化**的，宿主可以自己决定怎么用；
  * 那个是压成一段文本给模型。webhook / dsh 适配器用这个。
  */
-export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [], sender = null, system = '', images = [] }) {
+export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [], sender = null, system = '', images = [], channel = null }) {
   return {
     id,
     chat: {
@@ -120,6 +120,17 @@ export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [],
      * 之前就是这个 bug——DSH 模式下模型完全不知道有标记这回事。
      */
     system: String(system || ''),
+    /**
+     * 这个通道现在能发什么。
+     *
+     * 目前只有一个字段：`markdown`。宿主需要它，是因为**有些能力只在
+     * markdown 消息类型里生效**——最典型的是 `<qqbot-at-user>`（@ 人）：
+     * 官方文档写明群聊 @用户 只支持 markdown 消息，发成纯文本会把标签
+     * 原样露在群里。宿主不知道这个开关就只能瞎猜，所以由插件告诉它。
+     *
+     * 老宿主读不到这个字段也没关系（不认识就忽略）。
+     */
+    ...(channel ? { channel } : {}),
     text: msg.content || '',
     /**
      * 整形好的那段话。

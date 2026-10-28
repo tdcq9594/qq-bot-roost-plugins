@@ -40,7 +40,7 @@ export function createHostAdapter({ name, url, bridge, publicUrl, log = () => {}
      * @param {object} [p.chat] { kind, chatId }
      * @returns {Promise<{text:string, usage:null, model:string}>}
      */
-    async chat({ messages = [], signal, msg, chat, sender, system, images }) {
+    async chat({ messages = [], signal, msg, chat, sender, system, images, markdown }) {
       if (!url) {
         throw new Error(`还没填宿主的接收地址（面板 → 「${name} 地址」）`);
       }
@@ -61,6 +61,11 @@ export function createHostAdapter({ name, url, bridge, publicUrl, log = () => {}
         sender,
         system,
         images,
+        /**
+         * 通道能力。宿主据此决定「能不能发只在 markdown 里生效的东西」
+         * （目前就是 @ 人的标签）。`undefined` 表示调用方没说 → 宿主按默认 true 处理。
+         */
+        channel: { markdown: markdown !== false },
       });
 
       // 顺带把「这一轮是谁在跟谁说」也带上，宿主不用自己猜
