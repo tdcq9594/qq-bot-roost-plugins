@@ -140,6 +140,17 @@ const baseConf = (over = {}) => () => ({
   b.handleReply({ id: e.id, token: e.token, text: '第二段', done: true });
   const out = await e.promise;
   ok('桥: 分段拼成一条', out.text === '第一段\n第二段', JSON.stringify(out.text));
+  /**
+   * 分段要**原样**交出去。
+   *
+   * `text` 是拼好的全文，交给 `planChunks` 的话短的两段会被合并成一条，
+   * 模型对"发几条"的控制就失效了。所以调用方要能拿到原始分段。
+   */
+  ok(
+    '桥: 分段原样带出去（text 拼好，parts 保留原样）',
+    Array.isArray(out.parts) && out.parts.length === 2 && out.parts[0] === '第一段',
+    JSON.stringify(out.parts),
+  );
   ok('桥: 收尾后清掉挂起项', b.size === 0);
   b.dispose();
 }
@@ -248,6 +259,66 @@ const baseConf = (over = {}) => () => ({
 
   ok('webhook: 回话被接受', r.code === 200);
   ok('webhook: 拿到宿主的回复', out.text === '在呢', out.text);
+  ok('webhook: 只有一段时 parts 为 null（走老的切段路径）', out.parts === null, JSON.stringify(out.parts));
+}
+
+{
+  /**
+   * 多段回话：宿主用 `qq_send` 逐段发（`done:false`），适配器要把**原始分段**
+   * 带出去，而不是只给拼好的全文——否则短的两段会被 `planChunks` 合并成一条，
+   * 模型对"发几条"的控制就白费了。
+   */
+  const bridge = createBridge({ ttlMs: 2000 });
+  const calls = [];
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, body: JSON.parse(init.body) });
+    return { ok: true, status: 200, text: async () => '' };
+  };
+
+  const a = createAdapter({
+    conf: baseConf({ dshUrl: 'http://host' }),
+    bridge,
+    publicUrl: () => 'http://127.0.0.1:8080',
+    log: () => {},
+  });
+
+  const msg = {
+    kind: 'c2c',
+    chatId: 'u1',
+    userId: 'u1',
+    userName: '主人',
+    content: '在吗',
+    quoted: '',
+    attachments: [],
+    elements: [],
+  };
+
+  const pending = a.chat({
+    messages: [{ role: 'user', content: '在吗' }],
+    msg,
+    chat: { kind: 'c2c', chatId: 'u1' },
+  });
+
+  await new Promise((r) => setTimeout(r, 30));
+  const sent = calls[0];
+
+  bridge.handleReply({ id: sent.body.id, token: sent.body.reply.token, text: '在的', done: false });
+  bridge.handleReply({ id: sent.body.id, token: sent.body.reply.token, text: '刚忙完', done: false });
+  // 宿主最后用空文本收尾（只发过话、不再补正文）
+  bridge.handleReply({ id: sent.body.id, token: sent.body.reply.token, text: '', done: true });
+
+  const out = await pending;
+  globalThis.fetch = orig;
+  bridge.dispose();
+
+  ok('dsh: 多段时 text 仍是拼好的全文', out.text === '在的\n刚忙完', JSON.stringify(out.text));
+  ok(
+    'dsh: 多段时 parts 保留原样（2 段）',
+    Array.isArray(out.parts) && out.parts.length === 2 && out.parts[1] === '刚忙完',
+    JSON.stringify(out.parts),
+  );
+  ok('dsh: 空文本收尾不产生空段', (out.parts ?? []).every((p) => p.length > 0));
 }
 
 {
@@ -362,6 +433,67 @@ const baseConf = (over = {}) => () => ({
 
   // 这条很关键：system 里写着动作标记的契约，丢了模型就不知道有 <<skip>> <<button>> 这些
   ok('宿主: system 不是 undefined（宿主会 String 它）', typeof hostPayload(base, opt).system === 'string');
+}
+
+/* ---------------- 出站：立刻发 vs 攒批 ---------------- */
+
+{
+  /**
+   * 这两条是「多段回话」能不能成立的关键。
+   *
+   * 框架的 `msg.reply` 是攒批的（`src/message.js` 的 `replyBuf`，处理结束才合并成一条），
+   * 而 `qq_send` 逐段发要的是**几条独立消息**——所以多段必须走 `msg.replyNow()`。
+   * 这里用一个假 msg 把两条路分开记，验证 `immediate` 真的切过去了。
+   */
+  const { sendReply } = await load('outbound.js');
+
+  const makeMsg = (withNow = true) => {
+    const buf = []; // 攒批
+    const now = []; // 立刻发
+    const m = {
+      kind: 'group',
+      chatId: 'g1',
+      reply: async (t) => {
+        buf.push(String(t));
+        return null;
+      },
+      replyMarkdown: async (md) => {
+        now.push(String(md?.content ?? ''));
+        return { id: 'md1' };
+      },
+    };
+    if (withNow) {
+      m.replyNow = async (t) => {
+        now.push(String(t));
+        return { id: 'n1' };
+      };
+    }
+    return { m, buf, now };
+  };
+
+  const a = makeMsg();
+  await sendReply(a.m, '第一句', { immediate: true });
+  ok('出站: immediate 走 replyNow（不进攒批）', a.now.length === 1 && a.buf.length === 0, `now=${a.now.length} buf=${a.buf.length}`);
+
+  const b = makeMsg();
+  await sendReply(b.m, '第一句', {});
+  ok('出站: 不给 immediate 仍走攒批', b.buf.length === 1 && b.now.length === 0, `now=${b.now.length} buf=${b.buf.length}`);
+
+  /**
+   * 老宿主（没实现 `replyNow`）不能因为多了这个选项就崩。
+   * 降级到 `reply` 至少还能发出去，只是会被合并。
+   */
+  const c = makeMsg(false);
+  await sendReply(c.m, '第一句', { immediate: true });
+  ok('出站: 没有 replyNow 时降级到 reply', c.buf.length === 1, `buf=${c.buf.length}`);
+
+  /**
+   * 带按钮时必须一条发完，走 `replyMarkdown`——它本身就是立刻发的
+   * （内部先 `flushReplies()` 再 send），所以带按钮的分段不受攒批影响。
+   */
+  const d = makeMsg();
+  await sendReply(d.m, '点这个', { keyboard: { content: { rows: [] } }, immediate: true });
+  ok('出站: 带按钮走 markdown（本身就立刻发）', d.now.length === 1 && d.buf.length === 0, `now=${d.now.length} buf=${d.buf.length}`);
 }
 
 /* ---------------- 汇总 ---------------- */

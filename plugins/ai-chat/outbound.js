@@ -217,7 +217,7 @@ export function buildKeyboard(buttons, { max = 4, perRow = 2 } = {}) {
  * @param {object} [opts.keyboard] 按钮组，见 buildKeyboard
  * @param {(m:string)=>void} [opts.log]
  */
-export async function sendReply(msg, text, { markdown = false, keyboard = null, log = () => {}, onSent = null, stream = false } = {}) {
+export async function sendReply(msg, text, { markdown = false, keyboard = null, log = () => {}, onSent = null, stream = false, immediate = false } = {}) {
   /**
    * 发出去了就把 message id 报出去（`onSent`）。
    *
@@ -233,6 +233,18 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
       /* 记录失败不影响发送 */
     }
   };
+
+  /**
+   * `immediate` 走 `replyNow`，绕开攒批。
+   *
+   * 为什么需要：框架的 `msg.reply` 是**攒到本次处理结束**再由 `flushReplies`
+   * 合并的（见 `src/message.js` 的 `replyBuf`）。多个插件各回一句时这是对的，
+   * 但「模型决定分几条说」要的是**几条独立消息**——攒批会把它们吞成一条。
+   *
+   * `replyNow` 是被动回复（带 msgId），不占主动消息配额；
+   * 上限是官方给的「同一条消息最多回 5 次」，所以段数由调用方先卡住。
+   */
+  const emit = immediate && typeof msg.replyNow === 'function' ? msg.replyNow : msg.reply;
 
   /**
    * 私聊流式：边发边更新（`replace` 模式，服务端算差量，只占一条消息）。
@@ -283,7 +295,7 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
     } catch (e) {
       log(`带按钮的 markdown 发送失败：${e?.message ?? e}`);
     }
-    await msg.reply(text);
+    await emit(text);
     return 1;
   }
 
@@ -303,7 +315,7 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
         }
         log('markdown 发送失败，降级纯文本');
       }
-      const r2 = await msg.reply(body);
+      const r2 = await emit(body);
       // 多段时只记最后一段的 id —— 撤回撤的是「最后发出去那条」
       report(r2);
       sent++;

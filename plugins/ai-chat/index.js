@@ -38,10 +38,19 @@ import { synthesize, DEFAULT_VOICE } from './tts.js';
 /** 一次请求最多等多久 */
 const DEFAULT_TIMEOUT_SEC = 90;
 
+/**
+ * 宿主一次最多回几段（`qq_send` 逐段发）。
+ *
+ * 宿主管自己的上限（`dsh-roost` 的 `qqTools.maxParts`，默认 3），
+ * 这里只是**兜底硬顶**——webhook 那类宿主万一一次塞几十段，
+ * 不能让它把群刷爆。QQ 被动回复本身也只让回 5 次（msg_seq 1–5）。
+ */
+const MAX_SEGMENTS = 5;
+
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '4.3.1',
+  version: '4.3.2',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -195,6 +204,18 @@ export default {
 
   /** @param {object} ctx Roost 插件上下文 */
   setup(ctx) {
+    /**
+     * 启动时打一行能力标记。
+     *
+     * 为什么需要：框架的插件热重载只给**入口文件**加 `?t=` 时间戳绕 ESM 缓存
+     * （`src/plugin/loader.js` 的 `const url = ...?t=${Date.now()}`），
+     * `outbound.js` / `adapter/*.js` 这些子模块仍然走缓存。
+     * 结果是「面板点重载」会得到**新入口 + 旧子模块**，多段发送就静默失效，
+     * 而且从外面完全看不出来。这行日志用来一眼判断跑的是哪份代码：
+     * 有「多段直发」，说明子模块是新的。
+     */
+    ctx.logger.info(`[ai-chat] 已加载 ${this?.version ?? '?'}（多段直发：segs + immediate）`);
+
     const num = (v, def, min = 0) => {
       const n = Number(v);
       return Number.isFinite(n) && n >= min ? n : def;
@@ -574,6 +595,21 @@ export default {
           '要发语音：<<voice: 网址或本地路径>>',
           '想让你的话被念出来（语音条）：<<say: 要念的内容>>（会自动转成语音）',
           '要放按钮：<<button: 显示文字 | 点了之后发的话>>（一行最多两个，总共最多四个）',
+          /**
+           * 收尾**只在私聊给**。群里没有「聊完」这回事，一直有人说话，
+           * 告诉它反而会到处收尾（宿主那边也会拒，但那是白费 token）。
+           *
+           * 状态归宿主（`dsh-roost/src/closing.js`）：这边只负责让它知道
+           * 有这个动作，摘标记和落盘都在宿主。直连模式下没有觉醒机制，
+           * 收尾本来也无处生效，摘干净就行。
+           */
+          ...(msg.kind === 'c2c'
+            ? [
+                '想给这段对话收个尾（对方说要睡了、要出门、话题自然聊完了）：<<close: 收在哪 | 下次怎么接>>',
+                '  收尾不是道别，也不用特意说「那我先不打扰了」——它只是让她记住这段停在哪，下次接得上。',
+                '  **对方还在问你问题时不要收尾**；没什么可收的就别写。',
+              ]
+            : []),
           '这些标记不会展示给用户，放在回复最后就行。不需要就不要写。',
         ].join('\n'),
       );
@@ -735,7 +771,7 @@ export default {
         s.messages.push({ role: 'user', content: buildUserContent(msg, batch.text) });
         store.trim(s);
 
-        const { text, usage, model } = await callModel(s.messages, {
+        const { text, parts, usage, model } = await callModel(s.messages, {
           signal: paceSt.controller.signal,
           // 宿主要用原始消息整形
           msg,
@@ -800,16 +836,89 @@ export default {
          */
         const { text: finalText, want: wantRetract } = takeRetract(said);
         const body = [finalText, confirm].filter(Boolean).join('\n\n');
-        // 既没话也没附件就不发；但要撤回上一条时还得往下走（撤回不靠这条文本）
-        if (!body && !media.length && !wantRetract) return;
 
-        s.messages.push({ role: 'assistant', content: finalText || confirm || `（发了 ${media.length} 个附件）` });
+        /**
+         * 宿主分了几段说（`qq_send` 逐段发时才有）。
+         *
+         * 每段都过一遍 `stripSkip`：模型可能在工具参数里也写了 `<skip>`，
+         * 而那个标记绝不能出现在群里。
+         */
+        const segs =
+          Array.isArray(parts) && parts.length > 1
+            ? parts.map((p) => stripSkip(String(p ?? ''))).filter(Boolean).slice(0, MAX_SEGMENTS)
+            : null;
+        /**
+         * 动作产生的补充话（比如「记下了」）跟着**最后一段**走。
+         *
+         * 放在这里而不是发送循环里：下面记上下文时要用到它，
+         * 那时候各段必须已经是最终形态，否则上下文里少一句、
+         * 下一轮模型就可能把同一句补充话再说一遍。
+         */
+        if (confirm && segs?.length) segs[segs.length - 1] += '\n\n' + confirm;
+        // 既没话也没附件就不发；但要撤回上一条时还得往下走（撤回不靠这条文本）
+        if (!body && !segs?.length && !media.length && !wantRetract) return;
+
+        /**
+         * 上下文里记的是「**实际说出去的话**」。
+         *
+         * 多段时正文是空的（宿主用 `qq_send` 逐段发的），如果还按 `finalText` 记，
+         * 模型下一轮会以为自己什么都没说，要么重复一遍、要么接不上。
+         * 所以多段时把各段拼起来记。
+         */
+        const spoken = segs?.length ? segs.join('\n') : finalText;
+        s.messages.push({ role: 'assistant', content: spoken || confirm || `（发了 ${media.length} 个附件）` });
         store.trim(s);
         s.rounds += 1;
 
         const prevSent = lastSent.get(msg.chatId);
 
-        if (body) {
+        if (segs?.length) {
+          /**
+           * 多段回话：宿主用 `qq_send` 逐段发过（`done:false`），这里**逐条发出去**。
+           *
+           * 为什么不能交给 `planChunks`：它只在**超过 1800 字**时才切。
+           * 而"分两段说"通常总共才十几个字，会被合并成一条——
+           * 模型对"发几条"的控制就完全失效了，那 `qq_send` 调几次都一个样。
+           *
+           * 被动回复总次数预算：官方「同一条消息最多回 5 次」（`msg_seq` 1–5）。
+           * `MAX_SEGMENTS` 只限了段数，没限**每段再被切几块**——某段特别长时
+           * `planChunks` 会再拆开，加起来就超过 5 次，框架这时会**静默降级成主动消息**
+           * （见 `src/outbound.js` 的 `downgrade`），白白消耗当天主动额度。
+           * 宁可少说一段，也不要偷偷烧额度。
+           */
+          let budget = MAX_SEGMENTS;
+          ctx.logger.info(`[ai-chat] 分 ${segs.length} 段发（逐条独立消息）`);
+          for (let i = 0; i < segs.length && budget > 0; i++) {
+            const n = await sendReply(msg, segs[i], {
+              markdown: c.markdown,
+              /** 按钮只挂最后一段：挂前面的话，用户点完还得等后面几条才看到结果 */
+              keyboard: i === segs.length - 1 && buttons.length ? buildKeyboard(buttons) : null,
+              log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
+              /**
+               * **多段时不能流式。**
+               *
+               * 流式是「一条消息不断变长」（`replace` 模式），
+               * 多段要的是「发几条独立消息」——语义冲突，只能二选一。
+               */
+              stream: false,
+              /**
+               * **必须绕过攒批。**
+               *
+               * 框架的 `msg.reply` 是攒到本次处理结束再由 `flushReplies()` 合并成一条的
+               * （见 `src/message.js` 的 `replyBuf`）。多个插件各回一句时这是对的，
+               * 但这里要的是「几条独立消息」——走 `reply` 的话循环发五段，
+               * 用户只看到一条拼起来的，`qq_send` 调几次都一样。
+               * `immediate` 内部改走 `msg.replyNow()`，立刻发。
+               */
+              immediate: true,
+              onSent: (id) => {
+                if (id) lastSent.set(msg.chatId, { id, at: Date.now() });
+              },
+            });
+            // 没发出去也扣一格——失败大概率是同一原因，别接着试
+            budget -= Math.max(1, n || 0);
+          }
+        } else if (body) {
           await sendReply(msg, body, {
             markdown: c.markdown,
             keyboard: buttons.length ? buildKeyboard(buttons) : null,

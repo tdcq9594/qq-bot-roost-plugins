@@ -74,7 +74,7 @@ export function createBridge({ log = () => {}, ttlMs = DEFAULT_TTL_MS } = {}) {
     entry.timer = setTimeout(() => {
       // 已经收到半截的，就把半截交出去，比直接报错强
       if (entry.parts.length) {
-        finish(entry.settle.resolve, { text: entry.parts.join('\n') });
+        finish(entry.settle.resolve, { text: entry.parts.join('\n'), parts: entry.parts.slice() });
       } else {
         finish(entry.settle.reject, new Error(`宿主 ${Math.max(1, Math.round(ttl / 1000))} 秒没回话`));
       }
@@ -125,7 +125,19 @@ export function createBridge({ log = () => {}, ttlMs = DEFAULT_TTL_MS } = {}) {
       entry.settled = true;
       clearTimeout(entry.timer);
       pending.delete(id);
-      entry.settle.resolve({ text: entry.parts.join('\n'), markdown: Boolean(body.markdown) });
+      entry.settle.resolve({
+        text: entry.parts.join('\n'),
+        /**
+         * **原始分段也要交出去**。
+         *
+         * `text` 是拼好的全文，够简单调用方用；但「模型决定分几条说」
+         * 这件事只有分段本身能表达——拼完再交给 `planChunks`，
+         * 而它只在超过 1800 字时才切，短的两段会被合成一条，
+         * 模型对条数的控制就白费了。所以这里原样带一份。
+         */
+        parts: entry.parts.slice(),
+        markdown: Boolean(body.markdown),
+      });
     }
 
     return { code: 200, body: { ok: true, parts: entry.parts.length } };

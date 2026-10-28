@@ -85,7 +85,21 @@ export function createHostAdapter({ name, url, bridge, publicUrl, log = () => {}
       const r = await evt.promise;
       if (!r?.text?.trim()) throw new Error('宿主回了空内容');
       log(`[${name}] 事件 ${evt.id.slice(0, 12)} 收到回话 ${r.text.length} 字`);
-      return { text: r.text.trim(), usage: null, model: name };
+      return {
+        text: r.text.trim(),
+        /**
+         * 多段回话的**原始分段**（宿主用 `done:false` 逐段发时才有）。
+         *
+         * 只有一段时给 `null`——让调用方走老路径（`planChunks` 切长文本），
+         * 这样普通宿主和 QQ 的流式发送行为一个字都不会变。
+         */
+        parts:
+          Array.isArray(r.parts) && r.parts.length > 1
+            ? r.parts.map((p) => String(p ?? '').trim()).filter(Boolean)
+            : null,
+        usage: null,
+        model: name,
+      };
     },
   };
 }

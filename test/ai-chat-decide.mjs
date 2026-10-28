@@ -267,6 +267,35 @@ ok('剥标记: 没有标记时原样返回', stripSkip('今天确实挺热的') 
   ok('按钮: 太长会截断', parseButton('一二三四五六七八九十十一十二十三 | x').label.length <= 12);
 }
 
+{
+  // 对话收尾：这边只摘不执行，状态落在 dsh-roost 的 closing.json
+  const r = parseActions('那你去忙吧，晚安 <<close: 聊到他说要去忙 | 明天问他忙完没>>');
+  ok('收尾: 解析出 close', r.actions.length === 1 && r.actions[0].type === 'close');
+  ok(
+    '收尾: 值原样带出来',
+    r.actions[0].value === '聊到他说要去忙 | 明天问他忙完没',
+    r.actions[0].value,
+  );
+  ok('收尾: 正文不残留标记', r.text === '那你去忙吧，晚安', JSON.stringify(r.text));
+}
+
+{
+  /**
+   * 收尾**可以单独出现**。
+   *
+   * 「不说话地退场」正是它的用法（说完晚安，下一轮只留一个标记），
+   * 所以正文为空是正常结局，不该被当成"模型没说人话"。
+   */
+  const r = parseActions('<<close: 聊完了 | 下次接着问>>');
+  ok('收尾: 可以只有标记', r.actions.length === 1 && r.text === '');
+}
+
+{
+  // 不闭合的 close 跟别的标记一样，原样留着，别把正文吃掉
+  const r = parseActions('晚安 <<close: 没闭合');
+  ok('收尾: 不完整不当动作', r.actions.length === 0 && r.text.includes('没闭合'));
+}
+
 /* ---------------- 汇总 ---------------- */
 
 console.log(`\n${pass}/${pass + fails.length} 通过`);

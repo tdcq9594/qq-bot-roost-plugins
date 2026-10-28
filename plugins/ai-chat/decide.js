@@ -176,6 +176,7 @@ export function isSkip(text) {
  *   <<clear>>            清空这个会话的上下文
  *   <<image: 地址或路径>> 发一张图（表情包、生成的图都走这条）
  *   <<voice: 地址或路径>> 发一条语音
+ *   <<close: 收在哪 | 下次怎么接>> 给这段对话收个尾（这里只摘，执行在 DSH 宿主）
  *
  * @param {string} text
  * @returns {{ text: string, actions: Array<{type:string, value?:string}> }}
@@ -204,6 +205,14 @@ export function parseActions(text) {
   take(/<<button:\s*([\s\S]*?)>>/gi, 'button');
   // 语音：要念出来的话（插件转成 silk 再发）
   take(/<<say:\s*([\s\S]*?)>>/gi, 'say');
+  /**
+   * 对话收尾：`<<close: 收在哪 | 下次怎么接>>`。
+   *
+   * 这里**只摘不执行**——收尾状态归 DSH 宿主（`dsh-roost/src/closing.js`），
+   * 那边才有人读它（下一轮提示词、主动搭话的刹车）。直连模式没有这两样，
+   * 收尾本来也无处生效，摘干净就够了，别让标记漏到用户眼前。
+   */
+  take(/<<close:\s*([\s\S]*?)>>/gi, 'close');
 
   // 摘掉标记后可能留下多余空行，收一下
   out = out.replace(/\n{3,}/g, '\n\n').trim();
