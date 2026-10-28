@@ -1,12 +1,12 @@
 {
   "name": "ai-chat",
-  "version": "4.3.3",
+  "version": "4.3.5",
   "description": "Roost 插件 ai-chat 的语音依赖（可选）。不装也能用，只是没有语音条。",
   "scripts": {},
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "dependencies": {
+  "optionalDependencies": {
     "@andresaya/edge-tts": "^1.9.1",
     "mpg123-decoder": "^1.0.3",
     "silk-wasm": "^3.7.1"
