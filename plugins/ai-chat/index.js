@@ -29,7 +29,7 @@ import { createAdapter } from './adapter/index.js';
 import { createBridge } from './adapter/bridge.js';
 import { buildUserContent } from './inbound.js';
 import { sendReply, sendMedia, buildKeyboard } from './outbound.js';
-import { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseButton, textOf, SKIP_MARK, DEFAULT_IGNORE } from './decide.js';
+import { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseButton, textOf, isFromBot, SKIP_MARK, DEFAULT_IGNORE } from './decide.js';
 import { ChatStore, PaceStore } from './session.js';
 import { createMerger } from './merge.js';
 import { collectImages } from './vision.js';
@@ -50,7 +50,7 @@ const MAX_SEGMENTS = 5;
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '4.3.3',
+  version: '4.3.4',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -200,6 +200,13 @@ export default {
       label: '调试日志',
       desc: '在日志里打印每轮耗时、token 消耗，以及「这条为什么没接」',
     },
+
+    answerBots: {
+      type: 'boolean',
+      default: false,
+      label: '接机器人的话',
+      desc: '默认不接。群里有第二个 AI 时，两边会互相读、互相回，一句能滚成十几轮停不下来。除非你就是要看它俩聊，别开',
+    },
   },
 
   /** @param {object} ctx Roost 插件上下文 */
@@ -239,6 +246,7 @@ export default {
         dshUrl: String(c.dshUrl ?? 'http://127.0.0.1:17321').trim().replace(/\/+$/, ''),
         publicUrl: String(c.publicUrl ?? 'http://127.0.0.1:8080').trim().replace(/\/+$/, ''),
         debug: Boolean(c.debug),
+        answerBots: Boolean(c.answerBots),
       };
     };
 
@@ -667,6 +675,22 @@ export default {
      */
     async function handle(msg) {
       const c = conf();
+
+      /**
+       * 机器人发的消息不接。
+       *
+       * 判据是官方的 `author.bot`，见 decide.js 的 `isFromBot`。
+       * 判在**最前面**：这条消息连合并窗口、冷却、每分钟配额都不该进——
+       * 机器人之间的对话会把人的额度吃光，人再说话就没额度了。
+       *
+       * 想让它俩聊就把「接机器人的话」打开（`answerBots`）。
+       */
+      if (!c.answerBots && isFromBot(msg)) {
+        if (c.debug) {
+          ctx.logger.debug(`[ai-chat] 不接（对方是机器人）：${String(msg.content).slice(0, 30)}`);
+        }
+        return;
+      }
 
       /**
        * 这条已经被别的插件接了，别重复回答。

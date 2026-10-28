@@ -25,7 +25,7 @@ const ok = (name, cond, detail = '') => {
   }
 };
 
-const { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseButton, textOf, SKIP_MARK } = await import(
+const { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseButton, textOf, isFromBot, SKIP_MARK } = await import(
   pathToFileURL(path.join(PLUGIN, 'decide.js'))
 );
 
@@ -331,6 +331,22 @@ ok('剥标记: 没有标记时原样返回', stripSkip('今天确实挺热的') 
   // 标记夹在中间，前后正文都得留着
   const r = parseActions('前半句<<mood: energy=0.8>>后半句');
   ok('情绪: 中间标记不吞正文', r.text === '前半句后半句', JSON.stringify(r.text));
+}
+
+/* ---------------- 机器人发的消息 ---------------- */
+
+{
+  // 官方 author.bot=true：机器人发的
+  ok('机器人: author.bot=true 认出来', isFromBot({ raw: { author: { bot: true } } }) === true);
+  // 真人：author.bot=false
+  ok('机器人: 真人 bot=false 放行', isFromBot({ raw: { author: { bot: false } } }) === false);
+  // 老消息/别的通道没有这个字段，不能当成机器人
+  ok('机器人: 没有 bot 字段按真人处理', isFromBot({ raw: { author: { username: '小明' } } }) === false);
+  ok('机器人: 连 author 都没有也不炸', isFromBot({ raw: {} }) === false);
+  // 框架将来给了 msg.isBot 就直接用
+  ok('机器人: 认 msg.isBot', isFromBot({ isBot: true }) === true);
+  // 空消息不能抛
+  ok('机器人: undefined 不炸', isFromBot(undefined) === false);
 }
 
 /* ---------------- 汇总 ---------------- */

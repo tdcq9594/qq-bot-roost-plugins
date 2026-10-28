@@ -47,6 +47,24 @@ export function textOf(msg) {
     .join(' ');
 }
 
+/**
+ * 这条是机器人发的吗。
+ *
+ * 官方事件体里 `author.bot` 是 boolean（文档：「是否为机器人」），
+ * 这是**唯一可靠**的判据——从正文猜「这语气像 AI」必然误伤：
+ * 群里真有人这么说话，也有 AI 说得像人。
+ *
+ * 为什么要判：群里有第二个 AI 时，两边都是「读所有消息、自己决定接不接」，
+ * 谁都不认识对方是机器人。2026-10-28 实测，一句「嗨」滚成十几轮，
+ * 两个号还互相起外号（「分号」「小点点」），最后要人喊「停下」才断。
+ *
+ * `msg.isBot` 是框架将来可能会给的字段（现在还没有），先认着，
+ * 有了就直接用，不用再改这里。
+ */
+export function isFromBot(msg) {
+  return msg?.isBot === true || msg?.raw?.author?.bot === true;
+}
+
 export function shouldConsider(msg, c, state = {}) {
   // 私聊一律理——用户专门点开来跟你说话，没有「打扰」的问题
   if (msg.kind === 'c2c') return { go: true, force: true, reason: '私聊' };
