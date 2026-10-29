@@ -50,7 +50,7 @@ const MAX_SEGMENTS = 5;
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '4.3.7',
+  version: '4.3.8',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -438,8 +438,11 @@ export default {
      * 为什么要开这个口子：**主动消息只能由持有 QQ 连接的一方发**。
      * DSH 那边（dsh-roost 的主动搭话）算出了「该说句话了」，但它没有 api，发不出去。
      *
-     * 配额提醒：官方主动消息 **20 条/分钟、每群 1000 条/天**。
-     * 限频的责任在调用方，这里只做基本校验。
+     * 发送走 `ctx.push`（即框架的 outbound），**不能直连 `ctx.api`**。
+     * 以前这里是 `ctx.api.sendGroup/sendC2C` 直发，把 outbound 整个绕开了：
+     * 每秒限速、主动消息额度（20 条/分钟 + 1000 条/天）、离线判断、
+     * 审核识别全都不参与——dsh-roost 的主动搭话一路裸奔，只靠它自己的
+     * `maxPerDay: 3` 兜着，换个调用方就没有任何保护。
      */
     ctx.registerRoute?.('POST', '/send', async ({ body }) => {
       const b = body ?? {};
@@ -480,14 +483,32 @@ export default {
         }
       }
 
+      /**
+       * 出口统一走 `ctx.push`。老框架没有这个方法的极端情况才退回 `ctx.api`，
+       * 而且要**打日志**——静默退回等于额度账本又变回半真。
+       */
+      let send;
+      if (typeof ctx.push === 'function') {
+        send = (t, txt) => ctx.push(t, txt, { kind: scene });
+      } else {
+        ctx.logger.warn('[ai-chat] 框架没有 ctx.push，主动消息绕过 outbound 直发（额度记账不生效），请升级框架');
+        send = (t, txt) => (scene === 'group'
+          ? ctx.api.sendGroup(t, { content: txt, msgType: 0 })
+          : ctx.api.sendC2C(t, { content: txt, msgType: 0 }));
+      }
+
       try {
-        const opts = { content: text, msgType: 0 };
-        if (scene === 'group') await ctx.api.sendGroup(target, opts);
-        else await ctx.api.sendC2C(target, opts);
+        const r = await send(target, text);
         // 发成功 = 反证可达（他确实能收到）
         if (scene === 'c2c') await ctx.reach?.noteSendOk?.({ openid: target });
         ctx.logger.info(`[ai-chat] 主动发了 ${text.length} 字到 ${scene}:${target.slice(0, 8)}`);
-        return { ok: true, scene, target };
+        /**
+         * `pending` = 主动消息进了审核（官方 304023）。
+         * **既不是失败，也不是已送达**：调用方不能据此写「我说过」，
+         * 否则审核不通过就变成她坚称自己说过一句没人看见的话。
+         * 真正的状态判定留给投递账本（`docs/地基三块方案.md` 阶段 5）。
+         */
+        return { ok: true, scene, target, id: r?.id ?? '', pending: Boolean(r?.pending) };
       } catch (e) {
         ctx.logger.warn(`[ai-chat] 主动发消息失败：${e?.message ?? e}`);
         /**
@@ -495,11 +516,19 @@ export default {
          *   40054004 无好友关系  → is_friend = 0
          *   40054013 用户拒收消息 → c2c_push = 0
          * 其它码（频控/内容违规/审核）不改状态，见 `reach.js` 的 noteSendError。
+         *
+         * outbound 自己判出来的错误（离线/超窗/额度）没有 `qqCode`，
+         * 只是记一次失败时间，不动三态——那三种都跟「这个人能不能收到」无关。
          */
         if (scene === 'c2c' && e?.qqCode) {
           await ctx.reach?.noteSendError?.({ openid: target, qqCode: e.qqCode });
         }
-        return { ok: false, qqCode: e?.qqCode ?? 0, message: e?.message ?? String(e) };
+        return {
+          ok: false,
+          code: e?.code ?? '', // offline / expired / quota / api
+          qqCode: e?.qqCode ?? 0,
+          message: e?.message ?? String(e),
+        };
       }
     });
 
