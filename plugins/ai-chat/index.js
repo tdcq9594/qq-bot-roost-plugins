@@ -50,7 +50,7 @@ const MAX_SEGMENTS = 5;
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '4.3.12',
+  version: '4.3.13',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -482,6 +482,33 @@ export default {
         anchor: { id: row.id, seq: row.seq, at: row.at, chatId: row.chat_id },
         // timeline 自带 role: 'hit' | 'neighbor'
         items,
+      };
+    });
+
+    /**
+     * 查投递终态（阶段 5 的桥 3）：`GET /r/delivery?requestId=`
+     *
+     * 为什么需要这条桥：主动消息进审核（304023）时宿主拿到的是「待审核」，
+     * 而审核事件（`MESSAGE_AUDIT_PASS` / `REJECT`）到的是**框架侧**。
+     * 宿主不能靠等推送，只能下次写记忆前来问一次终态。
+     *
+     * 用 query 而不是 `/delivery/:id`：现有 `registerRoute` 都是固定路径，
+     * 路径参数要改路由匹配，为一个查询接口不值。
+     */
+    ctx.registerRoute?.('GET', '/delivery', async ({ query }) => {
+      const rid = String(query?.requestId ?? '').trim();
+      if (!rid) return { ok: false, message: '缺 requestId' };
+      const row = ctx.delivery?.get?.(rid);
+      if (!row) {
+        return { ok: false, gone: true, message: '没有这条投递记录（可能没开账本，或者 id 不对）' };
+      }
+      return {
+        ok: true,
+        state: row.state,              // pending / sent / audited / failed / unknown
+        msgId: row.msg_id || '',
+        code: row.code || '',
+        attempts: Number(row.attempts || 0),
+        at: Number(row.settled_at || row.created_at || 0),
       };
     });
 

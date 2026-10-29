@@ -120,6 +120,16 @@ ctx.ledger = {
 };
 
 /**
+ * 投递账本的桩。`/r/delivery` 靠它查终态——
+ * 审核事件到的是框架侧，宿主只能回来问。
+ */
+const deliveries = new Map();
+ctx.delivery = {
+  get: (id) => deliveries.get(String(id)) ?? null,
+  fail: () => true,
+};
+
+/**
  * 闸的桩。`silence` 是这条路由唯一会写的东西——
  * 她可以说「让我静静」，但说不出来「把整只鸟停掉」。
  */
@@ -156,6 +166,9 @@ await plugin.setup(ctx);
 
 const hit = routes.find((r) => r.method === 'POST' && r.path === '/send');
 ok('注册了 POST /send 路由', Boolean(hit), hit ? '' : `实际注册: ${routes.map((r) => `${r.method} ${r.path}`).join(', ')}`);
+
+const delivHit = routes.find((r) => r.method === 'GET' && r.path === '/delivery');
+ok('注册了 GET /delivery 路由', Boolean(delivHit), delivHit ? '' : `实际注册: ${routes.map((r) => `${r.method} ${r.path}`).join(', ')}`);
 
 const ctxHit = routes.find((r) => r.method === 'GET' && r.path === '/context');
 ok('注册了 GET /context 路由', Boolean(ctxHit), ctxHit ? '' : `实际注册: ${routes.map((r) => `${r.method} ${r.path}`).join(', ')}`);
@@ -349,6 +362,31 @@ reset();
   const gone = await runRoute({ handler: ctxHit.handler, params: {} }, { query: { aroundId: 'ev-nope' }, method: 'GET' });
   ok('邻文: 找不到时 ok:false', gone.data?.ok === false);
   ok('邻文: 找不到时标 gone（可能超过保留期）', gone.data?.gone === true, JSON.stringify(gone.data));
+}
+
+/* ---------------- 9. 查投递终态（阶段 5 的桥 3） ---------------- */
+
+/**
+ * 主动消息进审核时宿主拿到的是「待审核」，而审核事件到的是框架侧。
+ * 宿主只能回来问一次终态——这个接口就是那个「回来问」。
+ */
+{
+  deliveries.set('req-audited', { request_id: 'req-audited', state: 'audited', msg_id: 'm-a', code: '', attempts: 0, created_at: 1000 });
+  deliveries.set('req-rejected', { request_id: 'req-rejected', state: 'failed', msg_id: 'm-r', code: 'audit-reject', attempts: 1, settled_at: 2000 });
+
+  const a = await runRoute({ handler: delivHit.handler, params: {} }, { query: { requestId: 'req-audited' }, method: 'GET' });
+  ok('投递查询: 查到就回 ok', a.data?.ok === true, JSON.stringify(a.data));
+  ok('投递查询: 带状态', a.data?.state === 'audited', String(a.data?.state));
+
+  const r = await runRoute({ handler: delivHit.handler, params: {} }, { query: { requestId: 'req-rejected' }, method: 'GET' });
+  ok('投递查询: 审核驳回能看到原因码', r.data?.state === 'failed' && r.data?.code === 'audit-reject', JSON.stringify(r.data));
+  ok('投递查询: 带重试次数', r.data?.attempts === 1);
+
+  const noId = await runRoute({ handler: delivHit.handler, params: {} }, { query: {}, method: 'GET' });
+  ok('投递查询: 缺 requestId 回 ok:false', noId.data?.ok === false);
+
+  const none = await runRoute({ handler: delivHit.handler, params: {} }, { query: { requestId: 'req-nope' }, method: 'GET' });
+  ok('投递查询: 查不到标 gone', none.data?.ok === false && none.data?.gone === true, JSON.stringify(none.data));
 }
 
 await fs.rm(dataDir, { recursive: true, force: true }).catch(() => {});
