@@ -92,6 +92,34 @@ ctx.api = {
 };
 
 /**
+ * 事件账本的桩。`/r/context` 靠它把 eventId 换成原文和前后文——
+ * 账本在框架侧，插件这边只是个只读视图。
+ */
+const ledgerRows = new Map();
+ctx.ledger = {
+  get: (id) => ledgerRows.get(String(id)) ?? null,
+  timeline: ({ chatId, anchorSeq, before = 2, after = 2 }) => {
+    const all = [...ledgerRows.values()]
+      .filter((r) => r.chat_id === chatId)
+      .sort((a, b) => a.seq - b.seq);
+    const i = all.findIndex((r) => r.seq === anchorSeq);
+    if (i < 0) return [];
+    const from = Math.max(0, i - before);
+    const to = Math.min(all.length, i + after + 1);
+    return all.slice(from, to).map((r) => ({
+      seq: r.seq,
+      id: r.id,
+      chatId: r.chat_id,
+      at: r.at,
+      content: r.content,
+      role: r.seq === anchorSeq ? 'hit' : 'neighbor',
+    }));
+  },
+  recent: () => [],
+  stats: () => ({ total: ledgerRows.size }),
+};
+
+/**
  * 闸的桩。`silence` 是这条路由唯一会写的东西——
  * 她可以说「让我静静」，但说不出来「把整只鸟停掉」。
  */
@@ -128,6 +156,9 @@ await plugin.setup(ctx);
 
 const hit = routes.find((r) => r.method === 'POST' && r.path === '/send');
 ok('注册了 POST /send 路由', Boolean(hit), hit ? '' : `实际注册: ${routes.map((r) => `${r.method} ${r.path}`).join(', ')}`);
+
+const ctxHit = routes.find((r) => r.method === 'GET' && r.path === '/context');
+ok('注册了 GET /context 路由', Boolean(ctxHit), ctxHit ? '' : `实际注册: ${routes.map((r) => `${r.method} ${r.path}`).join(', ')}`);
 
 const send = async (body) =>
   runRoute({ handler: hit.handler, params: {} }, { body, method: 'POST' });
@@ -287,6 +318,37 @@ reset();
   const c = await send({ scene: 'group', target: 'g', text: 'x'.repeat(2001) });
   ok('校验: 超 2000 字拒掉', c.data?.ok === false && pushed.length === 0);
   ok('校验: 被拒时一次都没发', pushed.length === 0 && direct.length === 0);
+}
+
+/* ---------------- 8. 取邻文（阶段 4 的桥 2） ---------------- */
+
+/**
+ * 宿主那边只存了 eventId，要拿回原文和前后文只能回来问。
+ *
+ * 三条边界：
+ *   · 缺 id / 找不到 → 都要明确回 `ok:false`，不能假装成功返回空数组
+ *     （宿主会以为「这条消息没人说过」，而实际是查不到）
+ *   · 找到了 → 带 `hit` / `neighbor` 标记，相邻不等于同一话题
+ *   · 不返回 `payload`（原始报文）——宿主只要正文
+ */
+{
+  ledgerRows.set('ev-a', { id: 'ev-a', seq: 1, chat_id: 'g-ctx', at: 1000, content: '第一句' });
+  ledgerRows.set('ev-b', { id: 'ev-b', seq: 2, chat_id: 'g-ctx', at: 2000, content: '第二句' });
+  ledgerRows.set('ev-c', { id: 'ev-c', seq: 3, chat_id: 'g-ctx', at: 3000, content: '第三句' });
+
+  const r = await runRoute({ handler: ctxHit.handler, params: {} }, { query: { aroundId: 'ev-b' }, method: 'GET' });
+  ok('邻文: 查到就回 ok', r.data?.ok === true, JSON.stringify(r.data).slice(0, 80));
+  ok('邻文: 带锚点信息', r.data?.anchor?.id === 'ev-b' && r.data?.anchor?.seq === 2);
+  ok('邻文: 命中那条标 hit', r.data?.items?.some((x) => x.role === 'hit' && x.seq === 2));
+  ok('邻文: 前后文标 neighbor', r.data?.items?.filter((x) => x.role === 'neighbor').length === 2, JSON.stringify(r.data?.items?.map((x) => x.role)));
+  ok('邻文: 不返回原始报文', (r.data?.items ?? []).every((x) => x.payload === undefined));
+
+  const noId = await runRoute({ handler: ctxHit.handler, params: {} }, { query: {}, method: 'GET' });
+  ok('邻文: 缺 aroundId 回 ok:false', noId.data?.ok === false);
+
+  const gone = await runRoute({ handler: ctxHit.handler, params: {} }, { query: { aroundId: 'ev-nope' }, method: 'GET' });
+  ok('邻文: 找不到时 ok:false', gone.data?.ok === false);
+  ok('邻文: 找不到时标 gone（可能超过保留期）', gone.data?.gone === true, JSON.stringify(gone.data));
 }
 
 await fs.rm(dataDir, { recursive: true, force: true }).catch(() => {});

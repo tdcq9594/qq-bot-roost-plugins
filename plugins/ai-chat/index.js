@@ -50,7 +50,7 @@ const MAX_SEGMENTS = 5;
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '4.3.9',
+  version: '4.3.10',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -444,6 +444,47 @@ export default {
      * 审核识别全都不参与——dsh-roost 的主动搭话一路裸奔，只靠它自己的
      * `maxPerDay: 3` 兜着，换个调用方就没有任何保护。
      */
+    /**
+     * 取邻文（阶段 4 的桥 2）：`GET /r/context?aroundId=&before=&after=`
+     *
+     * dsh-roost 那边只存了 `eventId`，要拿回原文和前后文只能回到这边来问——
+     * 事件账本在框架侧（A 侧），它看不到。
+     *
+     * **只读，而且不返回 `payload`**：dsh-roost 要的是「那句话说了什么」，
+     * 整包报文对它没用，只会让这条跨进程通道变成数据外泄面。
+     *
+     * 找不到不代表出错：events 只留 7 天，更早的记忆里 `evidence` 还有快照。
+     */
+    ctx.registerRoute?.('GET', '/context', async ({ query }) => {
+      const aroundId = String(query?.aroundId ?? '').trim();
+      if (!aroundId) return { ok: false, message: '缺 aroundId' };
+      if (!ctx.ledger) return { ok: false, message: '当前环境没有事件账本' };
+
+      const row = ctx.ledger.get(aroundId);
+      if (!row) {
+        return {
+          ok: false,
+          gone: true,
+          message: '找不到这条事件——可能超过保留期（默认 7 天）被滚动删了，证据快照还在记忆里',
+        };
+      }
+
+      const clamp = (v, d) => Math.min(10, Math.max(0, Number(v ?? d)));
+      const items = ctx.ledger.timeline({
+        chatId: row.chat_id,
+        anchorSeq: row.seq,
+        before: clamp(query?.before, 2),
+        after: clamp(query?.after, 2),
+      });
+
+      return {
+        ok: true,
+        anchor: { id: row.id, seq: row.seq, at: row.at, chatId: row.chat_id },
+        // timeline 自带 role: 'hit' | 'neighbor'
+        items,
+      };
+    });
+
     ctx.registerRoute?.('POST', '/send', async ({ body }) => {
       const b = body ?? {};
       const scene = b.scene === 'group' ? 'group' : 'c2c';

@@ -74,6 +74,14 @@ export function createHostAdapter({ name, url, bridge, publicUrl, log = () => {}
          */
         said,
         batch,
+        /**
+         * 这一批对应的所有 eventId（场景片段，阶段 4）。
+         *
+         * 合并窗口攒过几句时是**多条**——一批消息合成一轮对话，
+         * 记忆的出处也该是这一批，不是最后那一句。
+         * `msg.eventId` 是框架入账时挂在消息上的，没开账本时就是空的。
+         */
+        eventIds: (batch?.items ?? []).map((x) => x?.msg?.eventId).filter(Boolean),
       });
 
       // 顺带把「这一轮是谁在跟谁说」也带上，宿主不用自己猜
