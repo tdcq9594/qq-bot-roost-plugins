@@ -118,6 +118,14 @@ export function createHostAdapter({ name, url, bridge, publicUrl, log = () => {}
           Array.isArray(r.parts) && r.parts.length > 1
             ? r.parts.map((p) => String(p ?? '').trim()).filter(Boolean)
             : null,
+        /**
+         * 和 `parts` **一一对应**的幂等键（阶段 5）。
+         *
+         * 注意它和上面那个 `parts` 的过滤**不同步**——`parts` 在这里过滤了空串，
+         * `requestIds` 是原样带出来的。所以 index.js 那边要按**原始 parts 的索引**
+         * 绑定，不能按过滤后的索引取，否则会整体错位。
+         */
+        requestIds: Array.isArray(r.requestIds) ? r.requestIds.map(String) : [],
         usage: null,
         model: name,
       };

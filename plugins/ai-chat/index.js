@@ -50,7 +50,7 @@ const MAX_SEGMENTS = 5;
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '4.3.11',
+  version: '4.3.12',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -988,7 +988,7 @@ export default {
         s.messages.push({ role: 'user', content: buildUserContent(msg, batch.text) });
         store.trim(s);
 
-        const { text, parts, usage, model } = await callModel(s.messages, {
+        const { text, parts, requestIds = [], usage, model } = await callModel(s.messages, {
           signal: paceSt.controller.signal,
           // 宿主要用原始消息整形
           msg,
@@ -1079,13 +1079,40 @@ export default {
          * 而这里直接按 `parts` 发原文——不摘就成了「标记原样出现在群里」。
          * 动作本身已经在上面对整段 `text` 解析时收集过了，这里只借用它的清理能力。
          */
-        const segs =
+        /**
+         * **幂等键必须在过滤之前和文本绑定**。
+         *
+         * `parts` 里可能有空串（宿主发了 `done:false` 但 text 为空），
+         * 过滤后索引就错位了——`segs[1]` 会拿到本该属于空段的那个 id，
+         * 于是「A 段发过了所以 B 段不发」。绑定在前、过滤在后，才错不了。
+         */
+        const paired =
           Array.isArray(parts) && parts.length > 1
-            ? parts
-                .map((p) => parseActions(stripSkip(String(p ?? ''))).text.trim())
-                .filter(Boolean)
-                .slice(0, MAX_SEGMENTS)
+            ? parts.map((p, i) => ({
+                text: parseActions(stripSkip(String(p ?? ''))).text.trim(),
+                requestId: String(requestIds?.[i] ?? '').trim(),
+              }))
             : null;
+        /**
+         * 超过 `MAX_SEGMENTS` 的段**发不出去**，必须明确结算成失败。
+         *
+         * 不结算的话它们在账本里永远是 `pending`，重启后被 `recoverPending`
+         * 转成 `unknown`——用户看到「结果未知」去核对，实际是「根本没发」。
+         * **账本说了假话，比不记账更糟。**
+         */
+        const kept = paired ? paired.filter((x) => x.text).slice(0, MAX_SEGMENTS) : null;
+        if (paired) {
+          const dropped = paired.filter((x) => x.text).slice(MAX_SEGMENTS);
+          for (const x of dropped) {
+            if (x.requestId) ctx.delivery?.fail?.(x.requestId, 'truncated');
+          }
+          if (dropped.length) {
+            ctx.logger.warn(`[ai-chat] 一轮最多 ${MAX_SEGMENTS} 段，${dropped.length} 段没发出去（已记失败）`);
+          }
+        }
+        const segs = kept ? kept.map((x) => x.text) : null;
+        /** 和 `segs` 一一对应；空串表示这一段没有幂等键 */
+        const segIds = kept ? kept.map((x) => x.requestId) : [];
         /**
          * 动作产生的补充话（比如「记下了」）跟着**最后一段**走。
          *
@@ -1130,6 +1157,8 @@ export default {
           for (let i = 0; i < segs.length && budget > 0; i++) {
             const n = await sendReply(msg, segs[i], {
               markdown: c.markdown,
+              /** 这一段的幂等键（阶段 5）。没有就空串，行为不变 */
+              requestId: segIds[i] || '',
               /** 按钮只挂最后一段：挂前面的话，用户点完还得等后面几条才看到结果 */
               keyboard: i === segs.length - 1 && buttons.length ? buildKeyboard(buttons) : null,
               log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
@@ -1160,6 +1189,14 @@ export default {
         } else if (body) {
           await sendReply(msg, body, {
             markdown: c.markdown,
+            /**
+             * 单段路径：幂等键只给**这一条**。
+             *
+             * 单段时 `sendReply` 内部可能按 1800 字切成几块发出去，
+             * 但那是**发送层**的事——语义上「一次 `qq_send` = 一段」，
+             * 切成几块只是为了过长度限制。所以整条共用一个 id。
+             */
+            requestId: String(requestIds?.[0] ?? '').trim(),
             keyboard: buttons.length ? buildKeyboard(buttons) : null,
             log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
             // 私聊走流式（群聊没这个接口，框架内部会降级），带按钮时不流式

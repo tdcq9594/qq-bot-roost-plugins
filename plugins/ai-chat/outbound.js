@@ -217,7 +217,7 @@ export function buildKeyboard(buttons, { max = 4, perRow = 2 } = {}) {
  * @param {object} [opts.keyboard] 按钮组，见 buildKeyboard
  * @param {(m:string)=>void} [opts.log]
  */
-export async function sendReply(msg, text, { markdown = false, keyboard = null, log = () => {}, onSent = null, stream = false, immediate = false } = {}) {
+export async function sendReply(msg, text, { markdown = false, keyboard = null, log = () => {}, onSent = null, stream = false, immediate = false, requestId = '' } = {}) {
   /**
    * 发出去了就把 message id 报出去（`onSent`）。
    *
@@ -245,6 +245,11 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
    * 上限是官方给的「同一条消息最多回 5 次」，所以段数由调用方先卡住。
    */
   const emit = immediate && typeof msg.replyNow === 'function' ? msg.replyNow : msg.reply;
+  /**
+   * 幂等键（阶段 5）。框架的 `msg.reply` 会把它从 body 里摘出来单独传给
+   * `outbound.send`——它不是官方字段，混进请求体会被一路带到接口上。
+   */
+  const emitOpts = requestId ? { requestId } : undefined;
 
   /**
    * 私聊流式：边发边更新（`replace` 模式，服务端算差量，只占一条消息）。
@@ -295,7 +300,7 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
     } catch (e) {
       log(`带按钮的 markdown 发送失败：${e?.message ?? e}`);
     }
-    await emit(text);
+    await emit(text, emitOpts);
     return 1;
   }
 
@@ -315,7 +320,7 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
         }
         log('markdown 发送失败，降级纯文本');
       }
-      const r2 = await emit(body);
+      const r2 = await emit(body, emitOpts);
       // 多段时只记最后一段的 id —— 撤回撤的是「最后发出去那条」
       report(r2);
       sent++;

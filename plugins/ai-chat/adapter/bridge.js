@@ -42,6 +42,8 @@ export function createBridge({ log = () => {}, ttlMs = DEFAULT_TTL_MS } = {}) {
       id,
       token,
       parts: [],
+      /** 和 parts 一一对应的幂等键（阶段 5）。没有就空串 */
+      requestIds: [],
       settled: false,
       timer: null,
       onAbort: null,
@@ -74,7 +76,11 @@ export function createBridge({ log = () => {}, ttlMs = DEFAULT_TTL_MS } = {}) {
     entry.timer = setTimeout(() => {
       // 已经收到半截的，就把半截交出去，比直接报错强
       if (entry.parts.length) {
-        finish(entry.settle.resolve, { text: entry.parts.join('\n'), parts: entry.parts.slice() });
+        finish(entry.settle.resolve, {
+          text: entry.parts.join('\n'),
+          parts: entry.parts.slice(),
+          requestIds: entry.requestIds.slice(),
+        });
       } else {
         finish(entry.settle.reject, new Error(`宿主 ${Math.max(1, Math.round(ttl / 1000))} 秒没回话`));
       }
@@ -116,6 +122,14 @@ export function createBridge({ log = () => {}, ttlMs = DEFAULT_TTL_MS } = {}) {
         log(`事件 ${id.slice(0, 12)} 回话段数超限，丢弃后面的`);
       } else {
         entry.parts.push(text);
+        /**
+         * `requestIds` **必须和 `parts` 同步 push**。
+         *
+         * 后面 index.js 是按「第 i 段」去取「第 i 个幂等键」的，
+         * 两边长度一旦不一致，索引就整体错位——把 A 段的 id 用到 B 段上，
+         * 幂等语义变成「A 发过了所以 B 不发」，比不做幂等更糟。
+         */
+        entry.requestIds.push(String(body.requestId ?? '').slice(0, 120));
       }
     }
 
@@ -136,6 +150,8 @@ export function createBridge({ log = () => {}, ttlMs = DEFAULT_TTL_MS } = {}) {
          * 模型对条数的控制就白费了。所以这里原样带一份。
          */
         parts: entry.parts.slice(),
+        /** 和 parts 一一对应；空串表示这一段没有幂等键 */
+        requestIds: entry.requestIds.slice(),
         markdown: Boolean(body.markdown),
       });
     }
