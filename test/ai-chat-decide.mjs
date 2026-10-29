@@ -25,7 +25,7 @@ const ok = (name, cond, detail = '') => {
   }
 };
 
-const { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseButton, textOf, isFromBot, SKIP_MARK } = await import(
+const { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseDuration, parseButton, textOf, isFromBot, SKIP_MARK } = await import(
   pathToFileURL(path.join(PLUGIN, 'decide.js'))
 );
 
@@ -347,6 +347,46 @@ ok('剥标记: 没有标记时原样返回', stripSkip('今天确实挺热的') 
   ok('机器人: 认 msg.isBot', isFromBot({ isBot: true }) === true);
   // 空消息不能抛
   ok('机器人: undefined 不炸', isFromBot(undefined) === false);
+}
+
+/* ---------------- 静默标记 ---------------- */
+
+/**
+ * `<<silence:2h>>` 是唯一一个**会改变运行状态**的动作标记——
+ * 别的标记改的是记忆或人设，这个会让机器人真的闭嘴。
+ * 所以它错了的代价是「机器人突然不理人」，比漏记一条记忆严重得多。
+ */
+
+{
+  const r = parseActions('让我静静 <<silence:2h>>');
+  ok('静默: 标记从正文里摘干净', r.text === '让我静静', JSON.stringify(r.text));
+  ok('静默: 解析成 silence 动作', r.actions.length === 1 && r.actions[0].type === 'silence');
+  ok('静默: 带上原始时长', r.actions[0]?.value === '2h', String(r.actions[0]?.value));
+}
+
+{
+  // 只有标记、没有正文：合法（「我要安静，没什么要说的」）
+  const r = parseActions('<<silence:30m>>');
+  ok('静默: 只有标记时正文为空', r.text === '');
+  ok('静默: 只有标记也能解析出动作', r.actions.some((a) => a.type === 'silence'));
+}
+
+{
+  // 不带时长：按未知标记摘掉，**不生效**——无期限静默等于「再也不说话」
+  const r = parseActions('<<silence>> 我先撤了');
+  ok('静默: 不带时长时被兜底摘掉', r.text === '我先撤了', JSON.stringify(r.text));
+  ok('静默: 不带时长不产生动作', !r.actions.some((a) => a.type === 'silence'));
+}
+
+{
+  ok('时长: 2h = 7200000ms', parseDuration('2h') === 7_200_000);
+  ok('时长: 默认单位是分钟', parseDuration('30') === 1_800_000);
+  ok('时长: 90s', parseDuration('90s') === 90_000);
+  ok('时长: 1d', parseDuration('1d') === 86_400_000);
+  ok('时长: 认不出来返回 0', parseDuration('乱写') === 0);
+  ok('时长: 空值返回 0', parseDuration('') === 0);
+  // 上限：`<<silence:9999h>>` 不能变成永久静默
+  ok('时长: 有 30 天上限', parseDuration('9999h') === 30 * 86_400_000);
 }
 
 /* ---------------- 汇总 ---------------- */

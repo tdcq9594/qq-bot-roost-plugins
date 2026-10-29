@@ -52,6 +52,7 @@ let pushError = null;
 const pushed = [];
 const direct = [];
 const reachCalls = [];
+const silenced = [];
 let reachVerdict = null; // { verdict:'no', reason:'reach:not-friend' } 时拦下
 
 const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'roost-aichat-send-'));
@@ -90,6 +91,20 @@ ctx.api = {
   },
 };
 
+/**
+ * 闸的桩。`silence` 是这条路由唯一会写的东西——
+ * 她可以说「让我静静」，但说不出来「把整只鸟停掉」。
+ */
+ctx.gate = {
+  silence: async (chatId, ms) => {
+    silenced.push({ chatId, ms });
+    return { chatId, until: Date.now() + ms };
+  },
+  check: () => ({ ok: true, reasons: [] }),
+  peek: () => ({ global: { paused: false }, bot: { paused: false } }),
+  pauseChat: async (chatId, paused) => ({ chatId, paused }),
+};
+
 ctx.reach = {
   canC2C: async (openid) => {
     reachCalls.push({ fn: 'canC2C', openid });
@@ -121,6 +136,7 @@ const reset = () => {
   pushed.length = 0;
   direct.length = 0;
   reachCalls.length = 0;
+  silenced.length = 0;
   reachVerdict = null;
   pushResult = { id: 'p-1' };
   pushError = null;
@@ -209,6 +225,55 @@ reachVerdict = { verdict: 'unknown' };
 {
   const r = await send({ scene: 'c2c', target: 'u-unknown', text: 'x' });
   ok('可达性未知: 一律放行', pushed.length === 1 && r.data?.ok === true);
+}
+
+/* ---------------- 7. 静默 ---------------- */
+
+/**
+ * `<<silence:2h>>` 是唯一一个会改变运行状态的标记，而主动搭话这条路上
+ * 它的标记**已经被 speakup 摘掉了**，时长只能靠 `silenceMs` 单独传。
+ * 两条来源都要认，否则「她在主动搭话时要求安静」这件事永远不生效。
+ */
+
+reset();
+{
+  const r = await send({ scene: 'c2c', target: 'u-sil', text: '让我静静 <<silence:2h>>' });
+  ok('静默: 标记不会漏给用户', pushed[0]?.text === '让我静静', JSON.stringify(pushed[0]?.text));
+  ok('静默: 从正文里解析出的时长生效', silenced[0]?.ms === 7_200_000, String(silenced[0]?.ms));
+  ok('静默: 仍然算发送成功', r.data?.ok === true);
+}
+
+reset();
+{
+  // 只带静默、没有正文：合法，不发消息但静默生效
+  const r = await send({ scene: 'c2c', target: 'u-sil', text: '<<silence:30m>>' });
+  ok('静默: 只有标记时不发消息', pushed.length === 0 && direct.length === 0);
+  ok('静默: 只有标记时静默仍然生效', silenced[0]?.ms === 1_800_000, String(silenced[0]?.ms));
+  ok('静默: 回 silentOnly 而不是失败', r.data?.ok === true && r.data?.silentOnly === true, JSON.stringify(r.data));
+}
+
+reset();
+{
+  // speakup 摘掉标记后单独传的时长
+  const r = await send({ scene: 'c2c', target: 'u-sil', text: '好', silenceMs: 3_600_000 });
+  ok('静默: silenceMs 字段生效', silenced[0]?.ms === 3_600_000, String(silenced[0]?.ms));
+  ok('静默: 正文照常发出去', pushed[0]?.text === '好');
+  ok('静默: 返回 ok', r.data?.ok === true);
+}
+
+reset();
+{
+  // 没正文也没静默：才是真的没内容
+  const r = await send({ scene: 'c2c', target: 'u-sil', text: '<<remember: 记一下>>' });
+  ok('静默: 只剩无关标记时判为空', r.data?.ok === false, JSON.stringify(r.data));
+  ok('静默: 判空时不发消息', pushed.length === 0);
+}
+
+reset();
+{
+  // 上限：调用方传一个离谱的值也不能变成永久静默
+  await send({ scene: 'c2c', target: 'u-sil', text: '好', silenceMs: 999 * 86_400_000 });
+  ok('静默: silenceMs 有 30 天上限', silenced[0]?.ms === 30 * 86_400_000, String(silenced[0]?.ms));
 }
 
 /* ---------------- 7. 入参校验 ---------------- */

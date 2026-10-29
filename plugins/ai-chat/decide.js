@@ -195,6 +195,7 @@ export function isSkip(text) {
  *   <<image: 地址或路径>> 发一张图（表情包、生成的图都走这条）
  *   <<voice: 地址或路径>> 发一条语音
  *   <<close: 收在哪 | 下次怎么接>> 给这段对话收个尾（这里只摘，执行在 DSH 宿主）
+ *   <<silence: 2h>>      自己安静一阵子（30m / 2h / 1d，不写单位按分钟）
  *
  * @param {string} text
  * @returns {{ text: string, actions: Array<{type:string, value?:string}> }}
@@ -242,6 +243,18 @@ export function parseActions(text) {
   take(/<<mood:\s*([\s\S]*?)>>/gi, 'mood');
 
   /**
+   * 静默：`<<silence:2h>>`。
+   *
+   * 她可以自己决定安静一阵子（吵累了、话题不对、想让人自己待会儿）。
+   * 这是**唯一一个由模型直接改运行状态的标记**——别的标记改的都是记忆或人设，
+   * 这个会真的让机器人闭嘴，所以时长必须带上，而且要能自动到期。
+   *
+   * 不写时长（`<<silence>>`）按兜底正则当未知标记摘掉，不生效——
+   * 无期限的静默等于「再也不说话」，那是运维该做的事，不该由模型顺手干。
+   */
+  take(/<<silence:\s*([\s\S]*?)>>/gi, 'silence');
+
+  /**
    * 兜底：任何剩下的 `<<名字>>` / `<<名字: 值>>` 一律当标记摘掉。
    *
    * 为什么需要这一层——标记协议是**两个仓库各自实现**的（这边一套正则，
@@ -255,3 +268,23 @@ export function parseActions(text) {
   out = out.replace(/\n{3,}/g, '\n\n').trim();
   return { text: out, actions };
 }
+
+/**
+ * 把 `30m` / `2h` / `1d` / `45` 解析成毫秒。认不出来返回 0。
+ *
+ * 默认单位是**分钟**：`<<silence:30>>` 比 `<<silence:30m>>` 更可能是人想写的。
+ *
+ * 上限 30 天。模型偶尔会写出 `<<silence:9999h>>` 这种，
+ * 而没有上限的话那等于永久静默——恢复只能靠面板，用户会以为机器人坏了。
+ *
+ * @param {string} v
+ * @returns {number} 毫秒
+ */
+export function parseDuration(v) {
+  const m = String(v ?? '').trim().match(/^(\d+(?:\.\d+)?)\s*(s|m|h|d)?$/i);
+  if (!m) return 0;
+  const mul = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[(m[2] || 'm').toLowerCase()];
+  const ms = Math.round(Number(m[1]) * mul);
+  return Math.min(ms, 30 * 86_400_000);
+}
+

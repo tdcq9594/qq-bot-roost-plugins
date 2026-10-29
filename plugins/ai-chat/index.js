@@ -29,7 +29,7 @@ import { createAdapter } from './adapter/index.js';
 import { createBridge } from './adapter/bridge.js';
 import { buildUserContent } from './inbound.js';
 import { sendReply, sendMedia, buildKeyboard } from './outbound.js';
-import { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseButton, textOf, isFromBot, SKIP_MARK, DEFAULT_IGNORE } from './decide.js';
+import { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseDuration, parseButton, textOf, isFromBot, SKIP_MARK, DEFAULT_IGNORE } from './decide.js';
 import { ChatStore, PaceStore } from './session.js';
 import { createMerger } from './merge.js';
 import { collectImages } from './vision.js';
@@ -50,7 +50,7 @@ const MAX_SEGMENTS = 5;
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '4.3.8',
+  version: '4.3.9',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -448,11 +448,47 @@ export default {
       const b = body ?? {};
       const scene = b.scene === 'group' ? 'group' : 'c2c';
       const target = String(b.target ?? '').trim();
-      const text = String(b.text ?? '').trim();
+
+      /**
+       * 主动消息的文本也是模型写的，所以同样要过一遍 `parseActions`：
+       *   · 标记不能漏到用户眼前（`<<remember:>>` 这种以前漏过）；
+       *   · `<<silence:2h>>` 在这里也要生效——主动搭话时她说「让我静静」
+       *     同样得算数，不能只有被动回复那条路认。
+       *
+       * `silenceMs` 是给 dsh-roost 的 speakup 留的显式入口：
+       * 它那边的 `raw.replace(/<<[^>]*>>/g, '')` 会先把标记全摘掉，
+       * 所以时长只能单独传过来，不能指望文本里还留着。
+       */
+      const { text, actions } = parseActions(String(b.text ?? '').trim());
+      const silMs = parseDuration(
+        actions.find((a) => a.type === 'silence')?.value ?? '',
+      );
 
       if (!target) return { ok: false, message: '缺 target（群 openid 或用户 openid）' };
-      if (!text) return { ok: false, message: '缺 text' };
+
+      const extraMs = Math.min(Math.max(0, Number(b.silenceMs) || 0), 30 * 86_400_000);
+      /**
+       * **只带静默、没有正文是合法的。**
+       * `<<silence:2h>>` 单独出现就是「我要安静，没什么要说的」——
+       * 这时候既不该发一条空消息，也不该当成错误拒掉。
+       */
+      if (!text && silMs <= 0 && extraMs <= 0) {
+        return { ok: false, message: '摘掉动作标记后没有内容可发' };
+      }
       if (text.length > 2000) return { ok: false, message: '太长了，主动消息别超过 2000 字' };
+
+      // 静默先设，即使后面发送失败也该生效（她决定的是「别说话」，不是「发完这条再说」）
+      if (silMs > 0 && ctx.gate?.silence) {
+        await ctx.gate.silence(target, silMs);
+        ctx.logger.info(`[ai-chat] 主动消息里带了静默 ${Math.round(silMs / 60_000)} 分钟 · ${target.slice(0, 8)}`);
+      }
+      if (extraMs > 0 && ctx.gate?.silence) {
+        await ctx.gate.silence(target, extraMs);
+        ctx.logger.info(`[ai-chat] 按调用方要求静默 ${Math.round(extraMs / 60_000)} 分钟 · ${target.slice(0, 8)}`);
+      }
+
+      // 只设了静默，没有要说的话
+      if (!text) return { ok: true, scene, target, id: '', pending: false, silentOnly: true };
 
       /**
        * 主动消息之前先问可达性。
@@ -737,6 +773,22 @@ export default {
           if (a.type === 'clear') {
             store.reset(msg.chatId);
             done.add('上下文清了');
+          } else if (a.type === 'silence') {
+            /**
+             * `<<silence:2h>>`：她自己决定安静一阵子。
+             *
+             * 这是唯一一个会**真的改变运行状态**的动作标记——别的标记改的是
+             * 记忆或人设，这个会让机器人闭嘴。所以三个前提缺一不可：
+             *   · 必须带时长（`parseDuration` 认不出来就是 0，直接不执行）；
+             *   · 必须有上限（30 天，防 `9999h` 变成永久静默）；
+             *   · 必须能自动到期（gate 存的是绝对时间戳，不靠定时器）。
+             */
+            const ms = parseDuration(a.value);
+            if (ms > 0 && ctx.gate?.silence) {
+              await ctx.gate.silence(msg.chatId, ms);
+              done.add(`安静 ${a.value}`);
+              ctx.logger.info(`[ai-chat] 她自己要求安静 ${a.value} · ${msg.chatId.slice(0, 8)}`);
+            }
           }
         } catch (e) {
           ctx.logger.warn(`[ai-chat] 动作 ${a.type} 执行失败：${e.message}`);
