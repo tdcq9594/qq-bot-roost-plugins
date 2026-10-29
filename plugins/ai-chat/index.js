@@ -50,7 +50,7 @@ const MAX_SEGMENTS = 5;
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '4.3.10',
+  version: '4.3.11',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -489,6 +489,8 @@ export default {
       const b = body ?? {};
       const scene = b.scene === 'group' ? 'group' : 'c2c';
       const target = String(b.target ?? '').trim();
+      /** 幂等键：调用方（dsh-roost 的 qq_send）给，没有就照旧发一次 */
+      const reqId = String(b.requestId ?? '').trim().slice(0, 120);
 
       /**
        * 主动消息的文本也是模型写的，所以同样要过一遍 `parseActions`：
@@ -566,7 +568,11 @@ export default {
        */
       let send;
       if (typeof ctx.push === 'function') {
-        send = (t, txt) => ctx.push(t, txt, { kind: scene });
+        /**
+         * `requestId` 是投递账本的幂等键（阶段 5）。调用方给了就一路带到
+         * `outbound.send`——同一个 id 再发一次不会重复，直接回上次的结果。
+         */
+        send = (t, txt) => ctx.push(t, txt, { kind: scene, requestId: reqId });
       } else {
         ctx.logger.warn('[ai-chat] 框架没有 ctx.push，主动消息绕过 outbound 直发（额度记账不生效），请升级框架');
         send = (t, txt) => (scene === 'group'
