@@ -50,7 +50,7 @@ const MAX_SEGMENTS = 5;
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '4.3.6',
+  version: '4.3.7',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   frameworkVersion: '>=0.8.1',
 
@@ -451,15 +451,55 @@ export default {
       if (!text) return { ok: false, message: '缺 text' };
       if (text.length > 2000) return { ok: false, message: '太长了，主动消息别超过 2000 字' };
 
+      /**
+       * 主动消息之前先问可达性。
+       *
+       * 官方**没有查好友的接口**，状态只能靠事件维护（框架 `src/reach.js`）。
+       * 两层要分别判：`reach:not-friend` 是没加好友，`reach:push-off` 是
+       * 加了好友但用户在资料卡里关掉了主动推送——后者最容易漏。
+       *
+       * **`unknown` 一律放行**：未知是「不知道」，不是「不行」。
+       * 群里聊过的人很可能早就加了好友，只是还没私聊过；
+       * 把未知当不可，会让主动搭话永远开不了口。
+       *
+       * `ctx.reach` 不存在时（旧框架）跳过检查，不拦。
+       */
+      if (scene === 'c2c') {
+        const v = await ctx.reach?.canC2C?.(target);
+        if (v?.verdict === 'no') {
+          return {
+            ok: false,
+            reason: v.reason,
+            message: v.reason === 'reach:push-off' ? '对方关闭了主动消息推送' : '对方没有加机器人好友',
+          };
+        }
+      } else {
+        const v = await ctx.reach?.canGroupPush?.(target);
+        if (v?.verdict === 'no') {
+          return { ok: false, reason: v.reason, message: '群管理员关闭了机器人的主动消息推送' };
+        }
+      }
+
       try {
         const opts = { content: text, msgType: 0 };
         if (scene === 'group') await ctx.api.sendGroup(target, opts);
         else await ctx.api.sendC2C(target, opts);
+        // 发成功 = 反证可达（他确实能收到）
+        if (scene === 'c2c') await ctx.reach?.noteSendOk?.({ openid: target });
         ctx.logger.info(`[ai-chat] 主动发了 ${text.length} 字到 ${scene}:${target.slice(0, 8)}`);
         return { ok: true, scene, target };
       } catch (e) {
         ctx.logger.warn(`[ai-chat] 主动发消息失败：${e?.message ?? e}`);
-        return { ok: false, message: e?.message ?? String(e) };
+        /**
+         * 按 QQ 业务错误码回写可达性，下次就不用再试：
+         *   40054004 无好友关系  → is_friend = 0
+         *   40054013 用户拒收消息 → c2c_push = 0
+         * 其它码（频控/内容违规/审核）不改状态，见 `reach.js` 的 noteSendError。
+         */
+        if (scene === 'c2c' && e?.qqCode) {
+          await ctx.reach?.noteSendError?.({ openid: target, qqCode: e.qqCode });
+        }
+        return { ok: false, qqCode: e?.qqCode ?? 0, message: e?.message ?? String(e) };
       }
     });
 
