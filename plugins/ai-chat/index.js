@@ -525,7 +525,7 @@ export default {
         }
         return {
           ok: false,
-          code: e?.code ?? '', // offline / expired / quota / api
+          code: e?.code ?? '', // offline / expired / quota / rate / api
           qqCode: e?.qqCode ?? 0,
           message: e?.message ?? String(e),
         };
