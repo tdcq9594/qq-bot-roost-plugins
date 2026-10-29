@@ -494,21 +494,44 @@ export default {
      *
      * 用 query 而不是 `/delivery/:id`：现有 `registerRoute` 都是固定路径，
      * 路径参数要改路由匹配，为一个查询接口不值。
+     *
+     * **查的是「整条」，不是「某一块」。** 超过 1800 字的回复会被切成几块，
+     * 每块一个幂等键（`base#1`、`base#2`…）。只报第一块的状态会撒谎：
+     * 第 2 块审核被驳了，这里还回 `sent`。所以走 `family` 聚合，
+     * 单块时它的结果和 `get` 完全一样。
      */
     ctx.registerRoute?.('GET', '/delivery', async ({ query }) => {
       const rid = String(query?.requestId ?? '').trim();
       if (!rid) return { ok: false, message: '缺 requestId' };
-      const row = ctx.delivery?.get?.(rid);
-      if (!row) {
-        return { ok: false, gone: true, message: '没有这条投递记录（可能没开账本，或者 id 不对）' };
+      const fam = ctx.delivery?.family?.(rid) ?? null;
+      if (!fam) {
+        /**
+         * 旧框架没有 `family`（升级前只认精确 id）时退回 `get`。
+         * 报错文案照旧——不能因为框架老就说「查不到」，那会让人以为是自己的 id 错了。
+         */
+        const row = ctx.delivery?.get?.(rid);
+        if (!row) {
+          return { ok: false, gone: true, message: '没有这条投递记录（可能没开账本，或者 id 不对）' };
+        }
+        return {
+          ok: true,
+          state: row.state,
+          msgId: row.msg_id || '',
+          code: row.code || '',
+          attempts: Number(row.attempts || 0),
+          at: Number(row.settled_at || row.created_at || 0),
+          parts: 1,
+        };
       }
       return {
         ok: true,
-        state: row.state,              // pending / sent / audited / failed / unknown
-        msgId: row.msg_id || '',
-        code: row.code || '',
-        attempts: Number(row.attempts || 0),
-        at: Number(row.settled_at || row.created_at || 0),
+        state: fam.state,              // pending / sent / audited / failed / unknown
+        msgId: fam.msgId,
+        code: fam.code,
+        attempts: fam.attempts,
+        at: fam.at,
+        /** 这条逻辑消息被切成了几块。`sent` 要所有块都 `sent` 才算 */
+        parts: fam.parts,
       };
     });
 
@@ -658,6 +681,36 @@ export default {
      * 这条路由给宿主回调回话用，平时是空闲的。
      */
     const bridge = createBridge({ log: (m) => ctx.logger.warn(`[ai-chat] ${m}`) });
+
+    /**
+     * 健康检查：`GET /r/status`
+     *
+     * 为什么补这一条：dsh-roost 的 `channel.ping()` 一直在打 `/r/status`，
+     * 而这边从来没注册过——404 被吞掉之后，那个方法就变成了「永远回
+     * `{ok:false}`」的死代码。留着它是因为它要回答的问题是真的
+     * （「ai-chat 到底在不在、用的是哪个模型」），只是以前没人答。
+     *
+     * 注册位置必须在 `bridge` 之后：`pending` 要读它的真实大小。
+     * 写成 `ctx.bridge` 会永远是 0——那个字段不存在，可选链会把它
+     * 悄悄吞掉，看起来一切正常。
+     *
+     * **不返回版本号**：版本号的真源是 `index.json`，在这里再写一份
+     * 迟早会两边不一致，而不一致比没有更糟。
+     */
+    ctx.registerRoute?.('GET', '/status', async () => ({
+      ok: true,
+      plugin: 'ai-chat',
+      /**
+       * 有没有在跑的待回话事件。>0 说明插件正等着宿主把话说完——
+       * 「她半天不回」时这是第一个要看的东西：卡在这边还是卡在宿主那边。
+       */
+      pending: bridge.size,
+      /**
+       * 宿主地址。**不报模型名**：模型是 DSH 那边选的，ai-chat 根本不知道，
+       * 报一个自己猜的值比不报更糟（排查时会照着假答案往下走）。
+       */
+      dshUrl: conf().dshUrl,
+    }));
 
     ctx.registerRoute('POST', '/reply', async ({ body, json }) => {
       const r = bridge.handleReply(body ?? {});

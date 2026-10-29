@@ -387,6 +387,41 @@ reset();
 
   const none = await runRoute({ handler: delivHit.handler, params: {} }, { query: { requestId: 'req-nope' }, method: 'GET' });
   ok('投递查询: 查不到标 gone', none.data?.ok === false && none.data?.gone === true, JSON.stringify(none.data));
+
+  /**
+   * 新框架有 `family`：超过 1800 字的回复被切成几块，每块一行。
+   * 只报第一块会撒谎——第 2 块审核被驳了，这里还回 `sent`。
+   */
+  ctx.delivery.family = (id) => {
+    if (id !== 'req-multi') return null;
+    return { state: 'failed', parts: 3, msgId: 'm-2', code: 'audit-reject', attempts: 1, at: 3000, rows: [] };
+  };
+  const m = await runRoute({ handler: delivHit.handler, params: {} }, { query: { requestId: 'req-multi' }, method: 'GET' });
+  ok('投递查询: 多块时按整条聚合，不只看第一块', m.data?.state === 'failed', JSON.stringify(m.data));
+  ok('投递查询: 带分块数', m.data?.parts === 3, String(m.data?.parts));
+
+  // family 查不到（老库/没这条）时要退回 get，而不是一律 gone
+  deliveries.set('req-fallback', { request_id: 'req-fallback', state: 'sent', msg_id: 'm-f', code: '', attempts: 0, created_at: 500 });
+  const fb = await runRoute({ handler: delivHit.handler, params: {} }, { query: { requestId: 'req-fallback' }, method: 'GET' });
+  ok('投递查询: family 查不到时退回 get', fb.data?.ok === true && fb.data?.state === 'sent', JSON.stringify(fb.data));
+  ok('投递查询: 退回时也带 parts', fb.data?.parts === 1, String(fb.data?.parts));
+}
+
+/* ---------------- 10. 健康检查（/status） ---------------- */
+
+/**
+ * dsh-roost 的 `channel.ping()` 一直在打 `/r/status`，而这边从来没注册过。
+ * 404 被吞掉之后那个方法就是「永远回 ok:false」的死代码——活着但没用。
+ */
+{
+  const st = routes.find((r) => r.method === 'GET' && r.path === '/status');
+  ok('注册了 GET /status 路由', Boolean(st), st ? '' : `实际注册: ${routes.map((r) => `${r.method} ${r.path}`).join(', ')}`);
+  const r = await runRoute({ handler: st.handler, params: {} }, { query: {}, method: 'GET' });
+  ok('健康检查: 回 ok', r.data?.ok === true, JSON.stringify(r.data));
+  ok('健康检查: 认得出是 ai-chat', r.data?.plugin === 'ai-chat', String(r.data?.plugin));
+  ok('健康检查: 带宿主地址（排查「连错地方」用）', typeof r.data?.dshUrl === 'string' && r.data.dshUrl.length > 0, String(r.data?.dshUrl));
+  ok('健康检查: pending 是数字（不是 undefined）', Number.isFinite(r.data?.pending), String(r.data?.pending));
+  ok('健康检查: 不瞎报模型名（模型是 DSH 选的，这边不知道）', !('model' in (r.data ?? {})), JSON.stringify(r.data));
 }
 
 await fs.rm(dataDir, { recursive: true, force: true }).catch(() => {});

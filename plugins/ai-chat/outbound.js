@@ -291,7 +291,7 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
    */
   if (keyboard) {
     try {
-      const r = await msg.replyMarkdown?.({ content: String(text) }, keyboard);
+      const r = await msg.replyMarkdown?.({ content: String(text) }, keyboard, emitOpts);
       if (r) {
         report(r);
         return 1;
@@ -307,12 +307,35 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
   const chunks = planChunks(text);
   if (!chunks.length) return 0;
 
+  /**
+   * 第 i 块的幂等键。
+   *
+   * **一块一个 id，不能共用。** 账本的语义是「同一个 requestId 调多少次
+   * 都只发第一次」（`delivery.claim` 第二次返回 `reuse`，`outbound.send`
+   * 拿到 `reuse` 就直接回上次结果、**不打接口**）。所以整条共用一个 id
+   * 的后果是：长回复被 `planChunks` 切成 3 块，第 2、3 块静默不发，
+   * 用户只看到第一块——而调用方以为全发出去了。
+   *
+   * 单块时用原 id（绝大多数情况，行为完全不变）；
+   * 多块时第 i 块用 `${id}#${i+1}`。派生是**确定的**，所以整条重发时
+   * 每块各自命中 `reuse`，一块都不会重复发；只失败了一块时也只补那一块。
+   *
+   * 要查整条的终态，拿 base id 调 `/r/delivery?requestId=`——账本那边
+   * 会按 `base` 和 `base#*` 聚合成一个状态（见框架 `delivery.family`）。
+   */
+  const idOf = (i) => (!requestId ? '' : chunks.length === 1 ? requestId : `${requestId}#${i + 1}`);
+  const optOf = (i) => {
+    const id = idOf(i);
+    return id ? { requestId: id } : undefined;
+  };
+
   let sent = 0;
   for (let i = 0; i < chunks.length; i++) {
     const body = chunks[i];
+    const opt = optOf(i);
     try {
       if (i === 0 && markdown) {
-        const r = await msg.replyMarkdown({ content: body });
+        const r = await msg.replyMarkdown({ content: body }, undefined, opt);
         if (r) {
           report(r);
           sent++;
@@ -320,7 +343,7 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
         }
         log('markdown 发送失败，降级纯文本');
       }
-      const r2 = await emit(body, emitOpts);
+      const r2 = await emit(body, opt);
       // 多段时只记最后一段的 id —— 撤回撤的是「最后发出去那条」
       report(r2);
       sent++;
