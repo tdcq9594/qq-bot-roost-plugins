@@ -7,7 +7,7 @@
     {
       "id": "ai-chat",
       "name": "AI 对话",
-      "version": "4.3.14",
+      "version": "4.3.15",
       "description": "把大模型接进群聊和私聊，不用 @ 也不用指令——它自己判断该不该接话；支持撤回、按钮、私聊流式，每会话独立上下文",
       "tags": [
         "AI",
@@ -17,7 +17,7 @@
       "frameworkVersion": ">=0.8.1",
       "runtime": "node",
       "path": "plugins/ai-chat",
-      "sha256": "48064cc16faeded377538ba79b643f7d4a5fb8417f1a75d8198fc658953f8956",
+      "sha256": "fbda4ad5fc72b29bf0efcfb1e201904e056c3dda6939ce5bad8da2dc3e553c76",
       "author": "tdcq9594",
       "commands": [
         "ai",
