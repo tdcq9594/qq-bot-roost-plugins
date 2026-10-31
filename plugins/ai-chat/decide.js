@@ -215,6 +215,8 @@ export function parseActions(text) {
   take(/<<remember-here[:：]\s*([\s\S]*?)>>/gi, 'rememberHere');
   take(/<<remember[:：]\s*([\s\S]*?)>>/gi, 'remember');
   take(/<<forget[:：]\s*([\s\S]*?)>>/gi, 'forget');
+  // replace：语义改口（旧说法 | 新说法）。执行归宿主，这里只负责摘干净
+  take(/<<replace[:：]\s*([\s\S]*?)>>/gi, 'replace');
   take(/<<persona[:：]\s*([\s\S]*?)>>/gi, 'persona');
   take(/<<clear>>/gi, 'clear', false);
   // 富媒体：图片（表情包/生图都走这条）和语音
