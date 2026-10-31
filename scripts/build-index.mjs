@@ -109,6 +109,42 @@ async function readMeta(dir) {
  */
 const STRUCT_FIELDS = ['id', 'version', 'path', 'runtime', 'sha256', 'frameworkVersion'];
 
+/**
+ * 插件分级。
+ *
+ * **这是我们的判断，不是插件的自述**，所以放在仓库根目录的 `verified.json` 里，
+ * 由这个脚本灌进索引——插件自己写的 `verified` 字段一律不认。
+ *
+ * 三档：
+ *   official  官方维护（我们自己写的、跟着框架一起发）
+ *   reviewed  我们复核过内容（看过代码、试过跑）
+ *   self      作者自证（作者说他是谁，我们没核）
+ * 没列出 = 未验证，索引里不写这个键。
+ *
+ * **签名是另一回事**：签名是「这份索引没被改过」的全体属性，
+ * 所有签名插件都落同一个状态，不能当成档位。
+ */
+const VERIFIED_LEVELS = ['official', 'reviewed', 'self'];
+
+/** 读分级表；文件不存在就当成「一个都没验证」 */
+async function readVerified() {
+  try {
+    const j = JSON.parse(await fs.readFile(path.join(ROOT, 'verified.json'), 'utf8'));
+    const out = new Map();
+    for (const [id, lv] of Object.entries(j)) {
+      if (id.startsWith('_')) continue; // _doc 这类说明字段
+      if (!VERIFIED_LEVELS.includes(lv)) {
+        throw new Error(`verified.json：${id} 的等级「${lv}」不认识（只认 ${VERIFIED_LEVELS.join(' / ')}）`);
+      }
+      out.set(id, lv);
+    }
+    return out;
+  } catch (e) {
+    if (e.code === 'ENOENT') return new Map();
+    throw e;
+  }
+}
+
 async function build() {
   let dirs;
   try {
@@ -117,6 +153,8 @@ async function build() {
     console.log('没有 plugins/ 目录，跳过');
     return null;
   }
+
+  const verified = await readVerified();
 
   const found = [];
   for (const d of dirs) {
@@ -167,8 +205,20 @@ async function build() {
        * 同一份索引里出现两种「没有」，读起来容易误以为漏了字段。
        */
       if (!p.frameworkVersion) delete p.frameworkVersion;
+      /**
+       * `verified` 以 `verified.json` 为准，**不继承旧索引里的值**：
+       * 降级（official → self）必须能生效，靠 `{...old}` 是改不掉的。
+       */
+      const lv = verified.get(p.id);
+      if (lv) p.verified = lv;
+      else delete p.verified;
       return p;
     });
+
+  // 分级表里有、但插件目录已经没了 —— 提醒一句，别让它悄悄烂在那儿
+  for (const id of verified.keys()) {
+    if (!merged.some((p) => p.id === id)) console.warn(`  verified.json 里的 ${id} 已经不在 plugins/ 下`);
+  }
 
   return {
     out: {
