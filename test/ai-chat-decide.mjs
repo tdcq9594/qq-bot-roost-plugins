@@ -207,6 +207,12 @@ ok('剥标记: 没有标记时原样返回', stripSkip('今天确实挺热的') 
 }
 
 {
+  // 未知标记 + 全角冒号：兜底也要摘，否则直连模式会原样发到群里
+  const r = parseActions('前面 <<unknown：x>> 后面');
+  ok('动作: 未知全角标记被兜底摘掉', r.text === '前面  后面', JSON.stringify(r.text));
+}
+
+{
   const r = parseActions('就是普通的一句话，没有标记');
   ok('动作: 没有标记时原样返回', r.actions.length === 0 && r.text === '就是普通的一句话，没有标记');
 }

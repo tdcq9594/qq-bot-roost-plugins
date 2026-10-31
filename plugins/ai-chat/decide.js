@@ -262,7 +262,7 @@ export function parseActions(text) {
    * `<<xxx:...>>` 就会漏进群。`mood` 已经这么漏过一次了。
    * 只匹配「字母开头 + 可选冒号值」的形状，普通文本里的尖括号不会误伤。
    */
-  out = out.replace(/<<[a-z][a-z-]{0,20}(?::[^<>]{0,2000})?>>/gi, '');
+  out = out.replace(/<<[a-z][a-z-]{0,20}(?:[:：][^<>]{0,2000})?>>/gi, '');
 
   // 摘掉标记后可能留下多余空行，收一下
   out = out.replace(/\n{3,}/g, '\n\n').trim();
