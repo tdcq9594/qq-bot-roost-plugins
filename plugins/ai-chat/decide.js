@@ -212,18 +212,18 @@ export function parseActions(text) {
   };
 
   // remember-here：只记在这个群（群内梗、绰号），不跨群
-  take(/<<remember-here:\s*([\s\S]*?)>>/gi, 'rememberHere');
-  take(/<<remember:\s*([\s\S]*?)>>/gi, 'remember');
-  take(/<<forget:\s*([\s\S]*?)>>/gi, 'forget');
-  take(/<<persona:\s*([\s\S]*?)>>/gi, 'persona');
+  take(/<<remember-here[:：]\s*([\s\S]*?)>>/gi, 'rememberHere');
+  take(/<<remember[:：]\s*([\s\S]*?)>>/gi, 'remember');
+  take(/<<forget[:：]\s*([\s\S]*?)>>/gi, 'forget');
+  take(/<<persona[:：]\s*([\s\S]*?)>>/gi, 'persona');
   take(/<<clear>>/gi, 'clear', false);
   // 富媒体：图片（表情包/生图都走这条）和语音
-  take(/<<image:\s*([\s\S]*?)>>/gi, 'image');
-  take(/<<voice:\s*([\s\S]*?)>>/gi, 'voice');
+  take(/<<image[:：]\s*([\s\S]*?)>>/gi, 'image');
+  take(/<<voice[:：]\s*([\s\S]*?)>>/gi, 'voice');
   // 可点击按钮
-  take(/<<button:\s*([\s\S]*?)>>/gi, 'button');
+  take(/<<button[:：]\s*([\s\S]*?)>>/gi, 'button');
   // 语音：要念出来的话（插件转成 silk 再发）
-  take(/<<say:\s*([\s\S]*?)>>/gi, 'say');
+  take(/<<say[:：]\s*([\s\S]*?)>>/gi, 'say');
   /**
    * 对话收尾：`<<close: 收在哪 | 下次怎么接>>`。
    *
@@ -231,7 +231,7 @@ export function parseActions(text) {
    * 那边才有人读它（下一轮提示词、主动搭话的刹车）。直连模式没有这两样，
    * 收尾本来也无处生效，摘干净就够了，别让标记漏到用户眼前。
    */
-  take(/<<close:\s*([\s\S]*?)>>/gi, 'close');
+  take(/<<close[:：]\s*([\s\S]*?)>>/gi, 'close');
   /**
    * 情绪：`<<mood: valence=-0.3, reason=被凶了>>`。
    *
@@ -240,7 +240,7 @@ export function parseActions(text) {
    * 而 `qq_send` 的工具参数里模型是真会写这个标记的（宿主那条路拦得住，
    * 参数回传给 ai-chat 的 `parts` 就未必了）。
    */
-  take(/<<mood:\s*([\s\S]*?)>>/gi, 'mood');
+  take(/<<mood[:：]\s*([\s\S]*?)>>/gi, 'mood');
 
   /**
    * 静默：`<<silence:2h>>`。
@@ -252,7 +252,7 @@ export function parseActions(text) {
    * 不写时长（`<<silence>>`）按兜底正则当未知标记摘掉，不生效——
    * 无期限的静默等于「再也不说话」，那是运维该做的事，不该由模型顺手干。
    */
-  take(/<<silence:\s*([\s\S]*?)>>/gi, 'silence');
+  take(/<<silence[:：]\s*([\s\S]*?)>>/gi, 'silence');
 
   /**
    * 兜底：任何剩下的 `<<名字>>` / `<<名字: 值>>` 一律当标记摘掉。

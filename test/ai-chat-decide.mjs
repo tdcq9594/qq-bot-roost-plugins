@@ -194,6 +194,19 @@ ok('剥标记: 没有标记时原样返回', stripSkip('今天确实挺热的') 
 }
 
 {
+  /**
+   * 全角冒号：中文输入法下极容易打出来。
+   *
+   * 不认的后果不是"少一个动作"，而是**标记原样进群**——用户看到
+   * `<<image：a.png>>` 这种内部语法。宿主那边（dsh-roost）已经把下游
+   * 标记原样放行了，所以这里必须认，否则两边都没人摘。
+   */
+  const r = parseActions('<<image：a.png>>');
+  ok('动作: 全角冒号也认', r.actions[0]?.type === 'image' && r.actions[0].value === 'a.png', JSON.stringify(r.actions));
+  ok('动作: 全角标记同样摘干净', r.text === '', JSON.stringify(r.text));
+}
+
+{
   const r = parseActions('就是普通的一句话，没有标记');
   ok('动作: 没有标记时原样返回', r.actions.length === 0 && r.text === '就是普通的一句话，没有标记');
 }
