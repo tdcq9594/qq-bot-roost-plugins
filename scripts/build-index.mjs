@@ -23,6 +23,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { hashDir } from './hashdir.mjs';
+import { signIndex, resolveKeyPath } from './sign-index.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const PLUGINS = path.join(ROOT, 'plugins');
@@ -219,6 +220,22 @@ if (checkOnly) {
 }
 
 await fs.writeFile(TARGET, `${JSON.stringify(result.out, null, 2)}\n`.replace(/\n/g, result.prevEol), 'utf8');
+
+/**
+ * 顺手签名：**有私钥就签，没有就明说这次没签**。
+ *
+ * 不强制要求私钥——本地开发和 PR 不该被密钥卡住。发版机上把
+ * `ROOST_TRUST_KEY` 指到私钥，生成索引这一步就自动带上 `.sig`，
+ * 不用再记一条手工命令。
+ */
+const keyPath = resolveKeyPath(process.argv.slice(2));
+if (keyPath) {
+  signIndex(TARGET, keyPath);
+  console.log('  已签名 → index.json.sig');
+} else {
+  console.log('  （未签名：没找到私钥。发版时设 ROOST_TRUST_KEY 或用 --key）');
+}
+
 console.log(`已生成 ${path.relative(ROOT, TARGET)}`);
 console.log(`  ${result.out.plugins.length} 个插件${result.out.repo ? `，repo=${result.out.repo}` : '（没有 repo，安装会失败）'}`);
 for (const p of result.out.plugins) {
