@@ -94,7 +94,7 @@ export function buildUserContent(msg, text) {
  * 跟 `buildUserContent` 的区别：这个是**结构化**的，宿主可以自己决定怎么用；
  * 那个是压成一段文本给模型。webhook / dsh 适配器用这个。
  */
-export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [], sender = null, system = '', images = [], channel = null, said = null, batch = null, eventIds = [] }) {
+export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [], sender = null, system = '', images = [], channel = null, said = null, batch = null, eventIds = [], trace = '' }) {
   /**
    * 这一轮真正该给宿主的正文。
    *
@@ -106,6 +106,11 @@ export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [],
   const body = said ?? msg.content;
   return {
     id,
+    /**
+     * 链路 id：框架在进站时生成，宿主每轮日志带着它。
+     * 老框架没有这个字段，所以给空串而不是报错。
+     */
+    trace: String(trace || msg.traceId || ''),
     /**
      * 这一轮对应事件账本里的哪几条（场景片段，阶段 4）。
      *

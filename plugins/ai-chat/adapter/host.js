@@ -53,6 +53,8 @@ export function createHostAdapter({ name, url, bridge, publicUrl, log = () => {}
       const evt = bridge.create({ signal });
 
       const payload = hostPayload(msg, {
+        // 框架生成的链路 id，一路带到宿主，四段日志才能串起来
+        trace: msg.traceId || '',
         id: evt.id,
         token: evt.token,
         replyUrl: joinUrl(publicUrl(), '/api/plugins/ai-chat/r/reply'),
