@@ -13,6 +13,7 @@
  * 本地没设就跳过，不阻塞日常开发。
  */
 import assert from 'node:assert';
+import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -25,7 +26,19 @@ if (!FRAMEWORK) {
   process.exit(0);
 }
 
-const fw = await import(pathToFileURL(path.join(FRAMEWORK, 'src/trust.js')).href);
+/**
+ * 框架太老就没有 `src/trust.js`（0.9.8 才加的）。
+ *
+ * 这种时候**跳过而不是红**：CI 钉的是某个已发布 tag，老 tag 里压根没有
+ * 签名实现，没什么可对比的。真正的漂移会被"两边都有、但输出不一致"抓到。
+ */
+const trustPath = path.join(FRAMEWORK, 'src/trust.js');
+if (!fs.existsSync(trustPath)) {
+  console.log(`跳过：${FRAMEWORK} 里没有 src/trust.js（框架早于 0.9.8）`);
+  process.exit(0);
+}
+
+const fw = await import(pathToFileURL(trustPath).href);
 
 /** 挑容易踩坑的形状：键序、嵌套、数组保序、unicode、数字、空值 */
 const FIXTURES = [
