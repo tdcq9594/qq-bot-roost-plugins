@@ -50,6 +50,13 @@ export function createHostAdapter({ name, url, bridge, publicUrl, log = () => {}
         throw new Error('适配器缺少原始消息，无法整形');
       }
 
+      /**
+       * 四段耗时的时间点。宿主那边会把它们和「自己什么时候开始/结束」拼起来：
+       *   recv  内核收到事件（框架打的时间戳）
+       *   start 插件准备完、准备发请求
+       * 剩下两段（生成、回发）宿主和 ai-chat 各自量。
+       */
+      const startedAt = Date.now();
       const evt = bridge.create({ signal });
 
       const payload = hostPayload(msg, {
@@ -89,6 +96,7 @@ export function createHostAdapter({ name, url, bridge, publicUrl, log = () => {}
       // 顺带把「这一轮是谁在跟谁说」也带上，宿主不用自己猜
       payload.chat.kind = chat?.kind ?? payload.chat.kind;
       payload.adapter = name;
+      payload.t = { recv: Number(msg.receivedAt) || 0, start: startedAt };
 
       const res = await fetch(joinUrl(url, 'inbound'), {
         method: 'POST',
