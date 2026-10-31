@@ -244,7 +244,15 @@ function diff(prev, next) {
       continue;
     }
     byId.delete(p.id);
-    for (const k of STRUCT_FIELDS) {
+    /**
+     * `verified` 也要比。
+     *
+     * 它不是结构字段（不来自插件目录，来自 `verified.json`），但同样是
+     * "脚本能算出来、索引里可能过期"的东西。漏掉它的话，改了分级表忘了
+     * 重跑 `build-index`，CI 一路绿灯，线上索引还是旧等级——
+     * 用户看到的是「官方维护」，而我们其实已经把它降级了。
+     */
+    for (const k of [...STRUCT_FIELDS, 'verified']) {
       const a = old[k] ?? '';
       const b = p[k] ?? '';
       if (String(a) !== String(b)) problems.push(`${p.id}: ${k} 索引里是 ${a || '(空)'}，实际是 ${b || '(空)'}`);
