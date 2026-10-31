@@ -1,6 +1,6 @@
 {
   "name": "ai-chat",
-  "version": "4.3.16",
+  "version": "4.3.17",
   "description": "Roost 插件 ai-chat 的语音依赖（可选）。不装也能用，只是没有语音条。",
   "scripts": {},
   "keywords": [],
