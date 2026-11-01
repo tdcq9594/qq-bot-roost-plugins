@@ -124,7 +124,15 @@ export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [],
     chat: {
       kind: msg.kind === 'c2c' ? 'c2c' : 'group',
       chatId: msg.chatId,
-      name: msg.groupName || msg.userName || '',
+      /**
+       * 群名和昵称不能互相兜底。
+       *
+       * 以前写 `msg.groupName || msg.userName`：群名拿不到时会退成**发消息人的昵称**，
+       * 群会话标题就变成「我的昵称」，和私聊一模一样；私聊又因为 C2C 事件没有
+       * `author.username` 退成 openid。现在各取各的，拿不到就留空——
+       * 由 dsh-roost 那边用「群 xxxxxx / 私聊 xxxxxx」兜底。
+       */
+      name: msg.kind === 'c2c' ? (msg.userName || '') : (msg.groupName || ''),
       groupId: msg.groupId || '',
     },
     sender: {
