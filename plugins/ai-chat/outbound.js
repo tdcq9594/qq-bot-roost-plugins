@@ -182,8 +182,15 @@ export function planStreamChunks(text, { chunkChars = 100, maxChunks = 12 } = {}
   }
   flush();
 
-  /** ③ 还是一片（超长单行、没标点：URL、x 结尾的长串）→ 只能硬切 */
-  if (out.length === 1 && out[0].length > chunkChars * 2) {
+  /**
+   * ③ 还是一片（超长单行、没标点：URL、x 结尾的长串）→ 只能硬切。
+   *
+   * **纯代码块除外**：整条回复就是一个长代码块时，硬切等于把 ① 的保护
+   * 一个照面推翻（首片是未闭合的代码框）。这种情况宁可整块一片、退成普通
+   * 发送——代码完整显示比「看着在长」重要。
+   */
+  const onlyCode = ((out[0] ?? '').match(/```/g) ?? []).length > 0;
+  if (out.length === 1 && out[0].length > chunkChars * 2 && !onlyCode) {
     const one = out[0];
     out.length = 0;
     for (let i = 0; i < one.length; i += chunkChars) out.push(one.slice(i, i + chunkChars));
@@ -388,6 +395,8 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
       let s = null;
       let acc = '';
       let pushed = 0;
+      /** 最后一片的 `end()` 已经发出去了没——用来区分「push 挂了」和「end 挂了」 */
+      let ending = false;
       try {
         s = msg.replyStream();
         for (let i = 0; i < pieces.length; i++) {
@@ -402,6 +411,7 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
             // 停一下再推下一片，否则"长出来"的过程看不见
             await new Promise((r) => setTimeout(r, 120));
           } else {
+            ending = true;
             const r = await s.end(acc);
             report(r);
           }
@@ -414,8 +424,11 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
          * 不收尾的话，用户看到一条永远停在半截的消息（没有结束态），
          * 紧接着又收到一条完整的，等于两条。收尾也失败才退回普通发送——
          * 那时候多一条总比内容缺一半强。
+         *
+         * **但 end 自己失败时不能再 end 一次**：服务端可能已经落了最后一片、
+         * 只是响应超时，重发会让用户看到两遍，还白烧一格 msg_seq。
          */
-        if (pushed > 0 && s) {
+        if (pushed > 0 && s && !ending) {
           try {
             const r = await s.end(acc);
             report(r);

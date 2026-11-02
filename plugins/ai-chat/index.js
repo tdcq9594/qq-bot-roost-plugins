@@ -28,7 +28,7 @@
 import { createAdapter } from './adapter/index.js';
 import { createBridge } from './adapter/bridge.js';
 import { buildUserContent } from './inbound.js';
-import { sendReply, sendMedia, buildKeyboard } from './outbound.js';
+import { sendReply, sendMedia, buildKeyboard, MAX_MEDIA } from './outbound.js';
 import { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseDuration, parseButton, textOf, isFromBot, SKIP_MARK, DEFAULT_IGNORE } from './decide.js';
 import { ChatStore, PaceStore } from './session.js';
 import { createMerger } from './merge.js';
@@ -1385,10 +1385,16 @@ export default {
               ctx.logger.warn(`[ai-chat] ${media.length - (sentN || 0)} 个附件没发出去（预算 ${mediaRoom} 格 / 上限 ${MAX_MEDIA}）`);
             }
             /**
-             * 按**实际占用的次数**扣：没发成功的没有真占 msg_seq，不该白扣。
-             * 预算提到外层之后这点更要紧——白扣一格就可能把后面的文件挤掉。
+             * 按**占用过的次数**扣，不是「成功几个」。
+             *
+             * 框架的 `#nextSeq` 是**发请求之前**就自增并记账的（`api.js`），
+             * 所以一次失败的尝试照样占掉一格。以前这里按成功数扣，
+             * 图全失败时一格没扣，后面的文件继续发 → 撞
+             * 「同一条消息最多回复 5 次」，报错却指向文件，排查方向全错。
+             *
+             * `Math.max(1, …)` 是兜底：真的发起了请求就至少扣一格。
              */
-            budget -= Math.max(0, sentN || 0);
+            budget -= Math.max(1, sentN || 0);
           }
         }
 
