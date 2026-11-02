@@ -17,7 +17,7 @@
       "frameworkVersion": ">=0.9.10",
       "runtime": "node",
       "path": "plugins/ai-chat",
-      "sha256": "a07b304bc300b0f45ecec2a9a8f7294a959f3508fdb32649aad1f4915e626359",
+      "sha256": "01b7c435daf5888cf68f3d0ab7f8b457cdd56cb2f33a186f946c03e6c14bdd90",
       "author": "tdcq9594",
       "addedAt": "2026-10-24",
       "verified": "official"

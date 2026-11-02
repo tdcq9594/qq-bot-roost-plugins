@@ -195,6 +195,21 @@ ok('剥标记: 没有标记时原样返回', stripSkip('今天确实挺热的') 
 
 {
   /**
+   * 模型不该写 `<<file:>>`（发文件要走 `qq_send_file` 工具），但它和
+   * `<<image:>>` 长得一样，手滑写出来很正常。**认识它**的唯一目的就是
+   * 别让那串路径原文漏到群里——`parseActions` 是白名单式摘除，不认识就原样留着。
+   */
+  const r = parseActions('发你了 <<file: C:\\Users\\me\\报告.docx>>');
+  ok('动作: 认得出 file 标记', r.actions.some((a) => a.type === 'file'));
+  ok('动作: file 标记连路径一起摘干净', r.text === '发你了', JSON.stringify(r.text));
+  ok(
+    '动作: file 的值是路径',
+    r.actions.find((a) => a.type === 'file')?.value === 'C:\\Users\\me\\报告.docx',
+  );
+}
+
+{
+  /**
    * 全角冒号：中文输入法下极容易打出来。
    *
    * 不认的后果不是"少一个动作"，而是**标记原样进群**——用户看到

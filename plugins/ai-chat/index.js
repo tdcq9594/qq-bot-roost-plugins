@@ -1130,6 +1130,19 @@ export default {
         const confirm = await runActions(msg, actions);
         /** 富媒体（图片 / 语音）单独发，不混进文本 */
         const media = actions.filter((a) => a.type === 'image' || a.type === 'voice');
+        /**
+         * 模型写了 `<<file: 路径>>` 而不是调 `qq_send_file` 工具。
+         *
+         * 标记已经被 `parseActions` 摘掉了（不会漏到群里），但**文件也不会发**——
+         * 路径校验只有宿主能做，这里没那个上下文。所以留一条 warn，
+         * 否则「她说了要发文件、用户什么都没收到」在日志里连痕迹都没有。
+         */
+        const strayFiles = actions.filter((a) => a.type === 'file');
+        if (strayFiles.length) {
+          ctx.logger.warn(
+            `[ai-chat] 模型写的是 <<file:>> 标记而不是工具，文件不会发出：${strayFiles.map((a) => a.value).join('、')}`,
+          );
+        }
         /** 可点击按钮——官方接口独有，hook 客户端那套发不出来 */
         const buttons = actions
           .filter((a) => a.type === 'button')
