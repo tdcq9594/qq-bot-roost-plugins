@@ -90,12 +90,19 @@ export function verifyIndex(file, pub) {
   return ok ? { status: 'ok', keyId: env.keyId ?? '' } : { status: 'bad', why: '签名与内容不匹配' };
 }
 
-/** 解析密钥路径：--key > ROOST_TRUST_KEY > keys/trust-private.pem */
+/**
+ * 解析密钥路径：--key > ROOST_TRUST_KEY > keys/trust-private.pem
+ *
+ * **相对路径按仓库根解析，不按 cwd。** 原来用 existsSync(p) 直接判，
+ * 换个目录跑（比如 `cd scripts && node ../scripts/sign-index.mjs --verify`）
+ * 就会「找不到公钥 → 跳过验签 → exit 0」——一道永远能过的关。
+ */
 export function resolveKeyPath(args = process.argv.slice(2), envName = 'ROOST_TRUST_KEY', def = 'keys/trust-private.pem') {
   const i = args.indexOf('--key');
   const fromArg = i >= 0 ? args[i + 1] : '';
-  const p = fromArg || process.env[envName] || path.join(ROOT, def);
-  return fs.existsSync(p) ? p : null;
+  const raw = fromArg || process.env[envName] || def;
+  const abs = path.isAbsolute(raw) ? raw : path.join(ROOT, raw);
+  return fs.existsSync(abs) ? abs : null;
 }
 
 /* ---------------- CLI ---------------- */
@@ -114,8 +121,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
       process.exit(0);
     }
     if (r.status === 'unavailable') {
-      console.log('· 没有公钥，跳过验签');
-      process.exit(0);
+      /**
+       * 以前这里是「跳过验签 + exit 0」。
+       * 结果 CI 里那道「索引签名有效」可以空转：路径写错就静默通过，
+       * 而配了公钥的用户市场会直接变空。验签拿不到公钥就该红。
+       */
+      console.error('✗ 验签需要公钥，但没找到（--key / ROOST_TRUST_PUBKEY / keys/trust-public.pem）');
+      process.exit(1);
     }
     console.error(`✗ 验签失败：${r.why || r.status}`);
     process.exit(1);

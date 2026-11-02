@@ -18,7 +18,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 import plugin from '../index.js';
-import { makeCtx, runCommand } from '../../../src/plugin/testkit.js';
+import { loadTestkit } from './_framework.mjs';
+
+const { makeCtx, runCommand } = await loadTestkit();
 
 const DATA_DIR = path.join(os.tmpdir(), 'douluo-journey');
 fs.rmSync(DATA_DIR, { recursive: true, force: true });

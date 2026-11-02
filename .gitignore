@@ -1,3 +1,5 @@
 
 # 签名私钥：只在发版机上，永不入库
 keys/
+# CI 会把框架 checkout 到这里（本地手工复现 CI 时也会）
+.framework/

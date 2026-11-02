@@ -12,7 +12,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 import plugin from '../index.js';
-import { makeCtx, runCommand, runListeners, makeMsg } from '../../../src/plugin/testkit.js';
+import { loadTestkit } from './_framework.mjs';
+
+const { makeCtx, runCommand, runListeners, makeMsg } = await loadTestkit();
 import { monsterHp, monsterDef, damageOnce, power, ringColor, monsterLevel } from '../src/engine/formula.js';
 import { levelCap, applyExp } from '../src/engine/progress.js';
 import { computeAttrs } from '../src/engine/stats.js';

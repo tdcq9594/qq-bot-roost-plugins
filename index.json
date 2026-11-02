@@ -2,33 +2,23 @@
   "schema": 1,
   "repo": "tdcq9594/qq-bot-roost-plugins",
   "branch": "main",
-  "updated": "2026-10-31",
+  "updated": "2026-11-02",
   "plugins": [
     {
       "id": "ai-chat",
       "name": "AI 对话",
-      "version": "4.3.21",
+      "version": "4.3.22",
       "description": "把大模型接进群聊和私聊，不用 @ 也不用指令——它自己判断该不该接话；支持撤回、按钮、私聊流式，每会话独立上下文",
       "tags": [
         "AI",
         "对话",
         "LLM"
       ],
-      "frameworkVersion": ">=0.8.1",
+      "frameworkVersion": ">=0.9.10",
       "runtime": "node",
       "path": "plugins/ai-chat",
-      "sha256": "f691df3abf68cf1f4d842b89dd8c23cd46117d4a9abfb6f3d4d28a844c2b194d",
+      "sha256": "fa9b9b246a6653a7ed66742ffc4a3ca2b1b6942953a871ed4df7b1adfe968813",
       "author": "tdcq9594",
-      "commands": [
-        "ai",
-        "新会话",
-        "清空",
-        "重置",
-        "模型",
-        "停止",
-        "对话状态",
-        "AI帮助"
-      ],
       "addedAt": "2026-10-24",
       "verified": "official"
     },
@@ -121,12 +111,12 @@
     {
       "id": "douluo",
       "name": "斗罗大陆",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "description": "斗罗大陆文字游戏：内容全部在面板可编辑，数据用 SQLite",
       "tags": [],
       "runtime": "node",
       "path": "plugins/douluo",
-      "sha256": "c7d76ccdb8d38255524f19f2c8f73ee9a29ef37398815b661377d36850064a81"
+      "sha256": "a8e41f215bcdb672b55a716497ca237acaa33797e3fcb2318bc8fd02160843bb"
     },
     {
       "id": "echo",
@@ -283,7 +273,7 @@
       "sha256": "119f21a5146d08d2bcfc8bd2dda481aa35d2bb2400fb2b186630ce01ad48ce55",
       "author": "tdcq9594",
       "commands": [
-        "render"
+        "card"
       ],
       "addedAt": "2026-10-24",
       "verified": "official"

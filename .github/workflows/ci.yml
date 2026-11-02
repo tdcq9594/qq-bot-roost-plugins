@@ -57,6 +57,18 @@ jobs:
         # 以前这段是内联在 yml 里的第二份实现，两份漏改一边就会互相打架。
         run: node scripts/build-index.mjs --check
 
+      - name: 索引签名有效
+        shell: bash
+        # 签名是「这份索引没被改过」的全体属性。
+        #
+        # 以前 CI 只查 sha256，不查签名——于是「没有私钥就重生成索引」这条路
+        # 会悄悄改掉 `updated` 让签名失效，而配了公钥的用户市场会直接变空，
+        # 我们这边却全绿。
+        #
+        # 这里用的是**公钥**（仓库根的 trust-public.pem，可以公开）；
+        # 私钥只在发版的人手里，`keys/` 已在 .gitignore 里。
+        run: node scripts/sign-index.mjs --verify --key trust-public.pem
+
   # 插件自己的断言测试。
   #
   # 夹具（src/plugin/testkit.js）在框架仓库里，所以先把框架 checkout 到
@@ -91,6 +103,25 @@ jobs:
           for t in test/*.mjs; do
             case "$(basename "$t")" in
               kun-play.mjs) continue ;;   # 通关脚本只打印过程，不断言，不参与 CI
+            esac
+            echo "--- $t"
+            ROOST_FRAMEWORK="$PWD/.framework" node "$t" || fail=1
+          done
+          exit $fail
+
+      # 插件自带的测试也要跑。
+      #
+      # 以前只跑仓库根的 test/*.mjs，插件目录里的测试从来没进过 CI——
+      # 而它们写死了 `../../../src/plugin/testkit.js`，只有在框架仓库内部才解析得到，
+      # 就算手动跑也必然 ERR_MODULE_NOT_FOUND。douluo 的引擎/数据库一直没有防护。
+      - name: 跑插件自带测试
+        shell: bash
+        run: |
+          fail=0
+          shopt -s nullglob
+          for t in plugins/*/test/*.mjs; do
+            case "$(basename "$t")" in
+              _*.mjs) continue ;;          # 共享夹具，不是用例
             esac
             echo "--- $t"
             ROOST_FRAMEWORK="$PWD/.framework" node "$t" || fail=1

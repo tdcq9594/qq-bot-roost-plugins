@@ -13,8 +13,10 @@ import os from 'node:os';
 import path from 'node:path';
 
 import plugin from '../index.js';
-import { makeCtx } from '../../../src/plugin/testkit.js';
-import { RouteRegistry, runRoute } from '../../../src/plugin/routes.js';
+import { loadTestkit, loadFramework } from './_framework.mjs';
+
+const { makeCtx } = await loadTestkit();
+const { RouteRegistry, runRoute } = await loadFramework('src/plugin/routes.js');
 
 const DATA_DIR = path.join(os.tmpdir(), 'douluo-api');
 fs.rmSync(DATA_DIR, { recursive: true, force: true });

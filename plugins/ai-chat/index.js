@@ -50,9 +50,14 @@ const MAX_SEGMENTS = 5;
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '4.3.21',
+  version: '4.3.22',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
-  frameworkVersion: '>=0.8.1',
+  /**
+   * 4.3.22 起读 `msg.groupName`（群名不再退成发送者昵称）。
+   * 那个字段是框架 v0.9.10 才加的——**先发框架再发这个插件**，
+   * 否则群标题会一直是空，只能落到宿主的「群 xxxxxx」兜底。
+   */
+  frameworkVersion: '>=0.9.10',
 
   /**
    * 监听器优先级：**排最后**。

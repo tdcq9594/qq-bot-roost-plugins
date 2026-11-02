@@ -42,7 +42,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 export default {
   id: 'douluo',
   name: '斗罗大陆',
-  version: '0.2.0',
+  version: '0.2.1',
   description: '斗罗大陆文字游戏：内容全部在面板可编辑，数据用 SQLite',
 
   config: {
