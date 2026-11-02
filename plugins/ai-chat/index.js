@@ -1093,7 +1093,7 @@ export default {
         s.messages.push({ role: 'user', content: buildUserContent(msg, batch.text) });
         store.trim(s);
 
-        const { text, parts, requestIds = [], usage, model } = await callModel(s.messages, {
+        const { text, parts, requestIds = [], files = [], usage, model } = await callModel(s.messages, {
           signal: paceSt.controller.signal,
           // 宿主要用原始消息整形
           msg,
@@ -1146,7 +1146,7 @@ export default {
          * 把 `<skip>` 这几个字符原样发到群里是最糟的结果——以前只在「AI 自己判断」
          * 模式下检查，被叫到时模型一旦输出 `<skip>` 就会直接漏到群里。
          */
-        if (isSkip(cleaned) && !confirm && !media.length) {
+        if (isSkip(cleaned) && !confirm && !media.length && !files.length) {
           if (s.messages.at(-1)?.role === 'user') s.messages.pop();
           // 被明确叫到却不吭声是反常的，留条 info 方便排查「@ 了没反应」
           if (gate.force) ctx.logger.info(`[ai-chat] ${msg.chatId.slice(0, 8)} 被叫但模型选择不回`);
@@ -1227,7 +1227,7 @@ export default {
          */
         if (confirm && segs?.length) segs[segs.length - 1] += '\n\n' + confirm;
         // 既没话也没附件就不发；但要撤回上一条时还得往下走（撤回不靠这条文本）
-        if (!body && !segs?.length && !media.length && !wantRetract) return;
+        if (!body && !segs?.length && !media.length && !files.length && !wantRetract) return;
 
         /**
          * 上下文里记的是「**实际说出去的话**」。
@@ -1237,11 +1237,27 @@ export default {
          * 所以多段时把各段拼起来记。
          */
         const spoken = segs?.length ? segs.join('\n') : finalText;
-        s.messages.push({ role: 'assistant', content: spoken || confirm || `（发了 ${media.length} 个附件）` });
+        const attachCount = media.length + files.length;
+        s.messages.push({
+          role: 'assistant',
+          content: spoken || confirm || `（发了 ${attachCount} 个附件）`,
+        });
         store.trim(s);
         s.rounds += 1;
 
         const prevSent = lastSent.get(msg.chatId);
+
+        /**
+         * 被动回复总次数预算：官方「同一条消息最多回 5 次」（`msg_seq` 1–5）。
+         *
+         * **文本、图片、文件共用这一个预算**。以前这个变量只写在多段分支里，
+         * 而媒体在分支外发——5 段文本 + 3 张图＝8 次请求，超出的部分
+         * 框架会**静默降级成主动消息**（见 `src/outbound.js` 的 `downgrade`），
+         * 白白消耗当天主动额度；群里没有 `group_push` 授权时是直接失败。
+         *
+         * 所以预算提到外面，后面每发一条都从同一个池子里扣。
+         */
+        let budget = MAX_SEGMENTS;
 
         if (segs?.length) {
           /**
@@ -1257,7 +1273,6 @@ export default {
            * （见 `src/outbound.js` 的 `downgrade`），白白消耗当天主动额度。
            * 宁可少说一段，也不要偷偷烧额度。
            */
-          let budget = MAX_SEGMENTS;
           ctx.logger.info(`[ai-chat] 分 ${segs.length} 段发（逐条独立消息）`);
           for (let i = 0; i < segs.length && budget > 0; i++) {
             const n = await sendReply(msg, segs[i], {
@@ -1292,7 +1307,7 @@ export default {
             budget -= Math.max(1, n || 0);
           }
         } else if (body) {
-          await sendReply(msg, body, {
+          const n = await sendReply(msg, body, {
             markdown: c.markdown,
             /**
              * 单段路径：幂等键只给**这一条**。
@@ -1311,6 +1326,8 @@ export default {
               if (id) lastSent.set(msg.chatId, { id, at: Date.now() });
             },
           });
+          /** 单段也可能被 `planChunks` 再切成几块，按实际发出去的条数扣预算 */
+          budget -= Math.max(1, n || 0);
         }
 
         if (wantRetract && prevSent?.id && Date.now() - prevSent.at < 110_000) {
@@ -1323,11 +1340,66 @@ export default {
         }
 
         /**
-         * 富媒体放最后发：`replyImage` 会先把攒着的文本 flush 掉，
-         * 所以顺序天然是「先说一句，再上图」。
+         * 附件放最后发：`replyImage` / `replyFile` 都会先把攒着的文本 flush 掉，
+         * 所以顺序天然是「先说一句，再上附件」。
+         *
+         * **预算分配上文件优先**（虽然发送顺序是图在前）。
+         * 交付物比配图重要：正文 4 块 + 1 张图 + 1 个文件时，先挑图就会把
+         * 最后一格吃掉，文件一个都发不出去——而宿主早在轮中就回了 `ok:true`、
+         * 模型也跟人说了「发你了」。少一张图没人会怪，少一个文件就是事故。
+         *
+         * 两者**共用同一个 `budget`**（被动回复总共 5 次）。超了宁可少发，
+         * 也不能让框架把剩下的偷偷降级成主动消息——那既烧当天额度，
+         * 群里没有 `group_push` 授权时还会直接失败。
          */
+        const fileRoom = Math.min(files.length, Math.max(0, budget));
+        const mediaRoom = Math.max(0, budget - fileRoom);
+
         if (media.length) {
-          await sendMedia(msg, media, { log: (m) => ctx.logger.warn(`[ai-chat] ${m}`) });
+          if (mediaRoom <= 0) {
+            ctx.logger.warn(`[ai-chat] 被动回复次数不够，${media.length} 个附件没发（给文件让位）`);
+          } else {
+            /**
+             * 不预切：`sendMedia` 自己按「**发出去几个**」算上限。
+             * 先切再过滤会让一条无效项白占一格（`[无扩展名, 图1, 图2]` 在
+             * max=2 时只剩前两个，图2 被裁掉，用户少收一张还不报错）。
+             */
+            const sentN = await sendMedia(msg, media, {
+              max: mediaRoom,
+              log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
+            });
+            if (media.length > (sentN || 0)) {
+              ctx.logger.warn(`[ai-chat] ${media.length - (sentN || 0)} 个附件没发出去（预算 ${mediaRoom} 格 / 上限 ${MAX_MEDIA}）`);
+            }
+            /**
+             * 按**实际占用的次数**扣：没发成功的没有真占 msg_seq，不该白扣。
+             * 预算提到外层之后这点更要紧——白扣一格就可能把后面的文件挤掉。
+             */
+            budget -= Math.max(0, sentN || 0);
+          }
+        }
+
+        /**
+         * 文件（`qq_send_file` 挂上来的绝对路径）。
+         *
+         * 走 `msg.replyFile` —— 和图片同一条被动回复通道（`msg_type=7` 带 `msg_id`），
+         * **不消耗主动额度**，群里也不需要 `group_push` 授权。
+         * 直传 / 分片由框架按文件大小自己选（≤5MB 直传，>5MB 分片），这里不用管。
+         */
+        for (const f of files) {
+          if (budget <= 0) {
+            ctx.logger.warn(`[ai-chat] 被动回复次数用完，文件没发出去：${f}`);
+            break;
+          }
+          /** 先扣再发：发失败也占了一次尝试，不该接着把预算耗在同一件事上 */
+          budget -= 1;
+          try {
+            const r = await msg.replyFile?.(f, { local: true });
+            if (r) ctx.logger.info(`[ai-chat] 文件已发：${f}`);
+            else ctx.logger.warn(`[ai-chat] 文件没发出去（附件过多/被平台拒/超限）：${f}`);
+          } catch (e) {
+            ctx.logger.warn(`[ai-chat] 文件发送失败：${f} · ${e?.message ?? e}`);
+          }
         }
 
         /**
@@ -1339,7 +1411,15 @@ export default {
          * 任何一步失败都只是「这条没有语音」——文字已经发过了，不影响对话。
          */
         const say = actions.find((a) => a.type === 'say');
-        if (say && c.ttsVoice) {
+        /**
+         * 语音条也吃同一份预算。
+         *
+         * 它是“同一句话的语音版”，文字已经发过了，所以优先级排在文件之后。
+         * 以前它在预算外，于是「4 块正文 + 1 图 + 语音」会打出第 6 次请求，
+         * 仍被框架静默降级成主动消息——正是这次想消灭的那种失败。
+         */
+        if (say && c.ttsVoice && budget > 0) {
+          budget -= 1;
           const file = await synthesize(say.value, {
             voice: c.ttsVoice,
             cacheDir: `${ctx.dataDir}/tts-cache`,

@@ -21,6 +21,9 @@ export const DEFAULT_TTL_MS = 180_000;
 /** 单次事件最多收几段回话（`done:false` 分段用），防止宿主刷爆 */
 const MAX_PARTS = 8;
 
+/** 单次事件最多收几个文件。宿主侧限一轮 1 个，这里是兜底 */
+const MAX_FILES = 2;
+
 export function createBridge({ log = () => {}, ttlMs = DEFAULT_TTL_MS } = {}) {
   /** @type {Map<string, object>} */
   const pending = new Map();
@@ -44,6 +47,14 @@ export function createBridge({ log = () => {}, ttlMs = DEFAULT_TTL_MS } = {}) {
       parts: [],
       /** 和 parts 一一对应的幂等键（阶段 5）。没有就空串 */
       requestIds: [],
+      /**
+       * 这一轮要发出去的文件（绝对路径）。
+       *
+       * **和 parts 分开存**：文件不是「一段话」，不参与分段/切块/幂等键那一套。
+       * 宿主（dsh-roost 的 `qq_send_file`）只把路径挂进来，真正的上传和发送
+       * 由 index.js 在这一轮结束后做——那时手上还有 `msg`，能走被动回复。
+       */
+      files: [],
       settled: false,
       timer: null,
       onAbort: null,
@@ -80,6 +91,21 @@ export function createBridge({ log = () => {}, ttlMs = DEFAULT_TTL_MS } = {}) {
           text: entry.parts.join('\n'),
           parts: entry.parts.slice(),
           requestIds: entry.requestIds.slice(),
+          files: entry.files.slice(),
+        });
+      } else if (entry.files.length) {
+        /**
+         * **只有文件、一句话没说的那种**也要交出去。
+         *
+         * 以前这里只认 `parts`，于是「发个文件不说话」会走 reject，
+         * 上游报「宿主没回话」，文件也跟着没了——而这恰恰是最常见的用法
+         * （对方要文件，她直接给，不用再多说一句）。
+         */
+        finish(entry.settle.resolve, {
+          text: '',
+          parts: [],
+          requestIds: [],
+          files: entry.files.slice(),
         });
       } else {
         finish(entry.settle.reject, new Error(`宿主 ${Math.max(1, Math.round(ttl / 1000))} 秒没回话`));
@@ -135,6 +161,26 @@ export function createBridge({ log = () => {}, ttlMs = DEFAULT_TTL_MS } = {}) {
 
     // done !== false 才算说完；不传就当说完了（简单调用方不用管这个字段）
     const finished = body.done !== false;
+
+    /**
+     * 收下这一轮要发的文件。
+     *
+     * 上限挡在 `MAX_FILES`：宿主侧本来就限一轮 1 个，这里是**兜底**——
+     * 别的宿主（不一定是我们的 dsh-roost）接进来时不该能一次塞 50 个路径
+     * 让插件去上传。
+     */
+    if (Array.isArray(body.files) && body.files.length) {
+      for (const f of body.files) {
+        const p = String(f ?? '').trim();
+        if (!p) continue;
+        if (entry.files.length >= MAX_FILES) {
+          log(`事件 ${id.slice(0, 12)} 文件数超限（${MAX_FILES}），丢弃：${p}`);
+          continue;
+        }
+        if (!entry.files.includes(p)) entry.files.push(p);
+      }
+    }
+
     if (finished) {
       entry.settled = true;
       clearTimeout(entry.timer);
@@ -152,6 +198,8 @@ export function createBridge({ log = () => {}, ttlMs = DEFAULT_TTL_MS } = {}) {
         parts: entry.parts.slice(),
         /** 和 parts 一一对应；空串表示这一段没有幂等键 */
         requestIds: entry.requestIds.slice(),
+        /** 这一轮要发的文件（绝对路径），由 index.js 在轮末真正发出去 */
+        files: entry.files.slice(),
         markdown: Boolean(body.markdown),
       });
     }

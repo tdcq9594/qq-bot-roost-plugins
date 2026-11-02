@@ -115,6 +115,10 @@ POST <host.url>/inbound
     { "type": "image", "url": "https://..." }
   ],
   "elements": [ { "type": "chatRecord", "content": "..." } ],
+  "channel": {                          // 通道能力，宿主据此决定「能发什么」
+    "markdown": true,                   // 群聊里 @ 人要靠它，关着就退成纯文字
+    "files": true                       // 能不能发文件。**缺省 = 不能**（老版本不带）
+  },
   "history": [                          // 插件侧维护的最近若干轮，宿主可以不存
     { "role": "user", "content": "..." },
     { "role": "assistant", "content": "..." }
@@ -137,6 +141,7 @@ POST /api/plugins/ai-chat/r/reply
   "text": "看到了，是只猫。",
   "markdown": false,                   // true 就用官方 markdown 消息
   "replyTo": "msgId",                  // 可选：引用/被动回复哪条
+  "files": ["C:\\Users\\me\\报告.docx"], // 可选：要发的本地文件（绝对路径）
   "done": true                         // false 表示「还有后续」，插件会等
 }
 ```
@@ -147,6 +152,12 @@ POST /api/plugins/ai-chat/r/reply
 - **`done:false` 支持分段**：宿主可以先发一句「我想想」，再发正文
 - **超时兜底**：`expiresAt` 之后插件丢弃，不会无限等
 - **不传 `history` 也行**：宿主自己存上下文的话，忽略 `history` 即可
+- **文件走 `files`，不要塞进正文**：宿主只交**绝对路径**，上传和发送由插件在
+  这一轮结束后做——那时它手上才有 `msg` 对象，才能走被动回复（带 `msg_id`，
+  不消耗主动额度）。宿主自己上传会把这条 15 秒超时的请求拖死。
+- **`channel.files` 缺失一律当不支持**：老版本插件不读 `files` 字段却照样回 200，
+  宿主会以为发成功了、模型会跟人说「发你了」，然后什么都没有。
+  所以要按 `=== true` 判，而不是「有就发」。
 
 ---
 

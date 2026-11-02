@@ -134,7 +134,15 @@ export function isRemote(src) {
  */
 export async function sendMedia(msg, items, { log = () => {}, max = MAX_MEDIA } = {}) {
   let sent = 0;
-  for (const it of (items ?? []).slice(0, max)) {
+  for (const it of (items ?? [])) {
+    /**
+     * 上限按**发出去几个**算，不按「看了几个」。
+     *
+     * 先 `slice(0, max)` 再过滤扩展名时，一条无效项（模型给了个没有扩展名的
+     * 路径）会白占一格：`[无效, 图1, 图2]` 在 max=2 时只剩前两项，
+     * 图2 被裁掉——用户少收一张，日志里也看不出是被谁挤掉的。
+     */
+    if (sent >= max) break;
     const src = String(it?.value ?? '').trim();
     if (!src) continue;
 
