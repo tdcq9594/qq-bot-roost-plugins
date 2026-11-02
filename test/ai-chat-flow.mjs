@@ -554,6 +554,21 @@ const baseConf = (over = {}) => () => ({
   const capped = planStreamChunks(huge);
   ok('流式: 片数有上限', capped.length <= 12, String(capped.length));
   ok('流式: 超上限时把剩下的合进最后一片，不丢字', capped.join('') === huge);
+
+  /**
+   * **代码块不能被切在两片之间。**
+   *
+   * 阈值降到 100 字以后，带代码的回复几乎都会走流式。按句子切会把
+   * ` ```js ` 和它的收尾拆开，中间态就是一段未闭合的代码框——
+   * `replace` 模式下最终显示虽然是对的，但那 1~2 秒看着就是坏的。
+   */
+  const withCode =
+    '先说明一下做法。'.repeat(8)
+    + '\n\n```js\nconst a = 1;\nconst b = 2;\nconsole.log(a + b);\n```\n\n以上就是全部内容。';
+  const cp = planStreamChunks(withCode);
+  const odd = cp.filter((p) => ((p.match(/```/g) ?? []).length % 2) === 1).length;
+  ok('流式: 代码块不跨片', odd === 0, `fence 未闭合的片数 ${odd}`);
+  ok('流式: 带代码块也拼回原文', cp.join('') === withCode);
 }
 
 /* ---------------- 汇总 ---------------- */

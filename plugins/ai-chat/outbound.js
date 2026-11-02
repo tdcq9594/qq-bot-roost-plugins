@@ -130,37 +130,76 @@ export function planStreamChunks(text, { chunkChars = 100, maxChunks = 12 } = {}
   if (!s) return [];
   if (s.length <= chunkChars) return [s];
 
-  /** 按句末标点和换行切；后行断言保留分隔符，拼回去就是原文 */
-  const parts = s.split(/(?<=[。！？；!?;\n])/).filter(Boolean);
-  const out = [];
-  let cur = '';
-  for (const p of parts) {
-    cur += p;
-    if (cur.length >= chunkChars) {
-      out.push(cur);
-      cur = '';
+  /**
+   * ① 先按**代码块边界**切成段：普通文本段 / 整块代码段。
+   *
+   * 按句子切会把 ```` ```js ```` 和它的收尾拆到两片里，中间态就是一段
+   * 未闭合的代码框（渲染时可能把后面的正文全吃进去）。`replace` 模式最后
+   * 一片是全量、最终显示是对的，但中间那 1~2 秒看着就是坏的。
+   */
+  const blocks = [];
+  let buf = '';
+  let inFence = false;
+  for (const line of s.split(/(?<=\n)/)) {
+    const isFence = /^\s*```/.test(line);
+    if (isFence && !inFence) {
+      if (buf) blocks.push({ code: false, text: buf });
+      buf = line;
+      inFence = true;
+    } else if (isFence && inFence) {
+      buf += line;
+      blocks.push({ code: true, text: buf });
+      buf = '';
+      inFence = false;
+    } else {
+      buf += line;
     }
   }
-  if (cur) out.push(cur);
+  /** 收尾：没闭合的代码块也按「代码」处理，别在里面切 */
+  if (buf) blocks.push({ code: inFence, text: buf });
 
   /**
-   * 一整句超过两倍阈值时硬切（没标点的长列表、URL、代码块）。
-   * 不切的话那一片会一次糊上来，等于没流式。
+   * ② 普通段按句切，代码段**整块**并进来（即使超过阈值也不拆）。
+   * 代码完整性比「每片 100 字」重要。
    */
-  const maxLen = chunkChars * 2;
-  const hard = [];
-  for (const p of out) {
-    if (p.length <= maxLen) {
-      hard.push(p);
+  const out = [];
+  let cur = '';
+  const flush = () => {
+    if (cur) out.push(cur);
+    cur = '';
+  };
+
+  for (const b of blocks) {
+    if (b.code) {
+      cur += b.text;
+      if (cur.length >= chunkChars) flush();
       continue;
     }
-    for (let i = 0; i < p.length; i += chunkChars) hard.push(p.slice(i, i + chunkChars));
+    for (const p of b.text.split(/(?<=[。！？；!?;\n])/)) {
+      cur += p;
+      if (cur.length >= chunkChars) flush();
+    }
+  }
+  flush();
+
+  /** ③ 还是一片（超长单行、没标点：URL、x 结尾的长串）→ 只能硬切 */
+  if (out.length === 1 && out[0].length > chunkChars * 2) {
+    const one = out[0];
+    out.length = 0;
+    for (let i = 0; i < one.length; i += chunkChars) out.push(one.slice(i, i + chunkChars));
   }
 
-  if (hard.length <= maxChunks) return hard;
-  const head = hard.slice(0, maxChunks - 1);
-  head.push(hard.slice(maxChunks - 1).join(''));
-  return head;
+  if (out.length <= maxChunks) return out;
+  /**
+   * 超上限时**均分合并**，不是把剩下的全塞进最后一片。
+   *
+   * 塞最后的话，1920 字会切成 11 片 112 字 + 1 片 688 字——前面一点一点长，
+   * 最后一秒糊上来一大坨，比不分片还难看。
+   */
+  const per = Math.ceil(out.length / maxChunks);
+  const merged = [];
+  for (let i = 0; i < out.length; i += per) merged.push(out.slice(i, i + per).join(''));
+  return merged;
 }
 
 /** 图片/语音的扩展名白名单——不让模型把任意文件当图发出去 */
