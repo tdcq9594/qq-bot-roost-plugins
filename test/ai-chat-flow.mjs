@@ -411,7 +411,14 @@ const baseConf = (over = {}) => () => ({
   ok('按钮: 两行（2+1）', k?.content?.rows?.length === 2, String(k?.content?.rows?.length));
   ok('按钮: 第一行两个', k.content.rows[0].buttons.length === 2);
   ok('按钮: 用指令型 action', k.content.rows[0].buttons[0].action.type === 2);
-  ok('按钮: 所有人可点', k.content.rows[0].buttons[0].action.permission.type === 0);
+  /**
+   * 官方 `Permission.type`：**0 = 指定用户、1 = 管理员、2 = 所有人**。
+   *
+   * 这条断言以前写的是 `=== 0`，标题还叫「所有人可点」——期望值本身就是错的，
+   * 于是它一直在保护一个「谁都不能点」的实现（线上点按钮弹「没有权限」）。
+   * 2026-11-02 按官方 schema 改正。
+   */
+  ok('按钮: 所有人可点（permission.type = 2）', k.content.rows[0].buttons[0].action.permission.type === 2);
   ok('按钮: data 是点了之后发的话', k.content.rows[0].buttons[1].action.data === '今天运势怎么样');
 
   const many = buildKeyboard(Array.from({ length: 8 }, (_, i) => ({ label: `b${i}`, data: `d${i}` })));
@@ -517,6 +524,51 @@ const baseConf = (over = {}) => () => ({
   const d = makeMsg();
   await sendReply(d.m, '点这个', { keyboard: { content: { rows: [] } }, immediate: true });
   ok('出站: 带按钮走 markdown（本身就立刻发）', d.now.length === 1 && d.buf.length === 0, `now=${d.now.length} buf=${d.buf.length}`);
+}
+
+/* ---------------- 流式分片 ---------------- */
+
+{
+  const { planStreamChunks } = await load('outbound.js');
+
+  ok('流式: 100 字以内不切（一次就出来，切了更慢）', planStreamChunks('短回复').length === 1);
+  ok('流式: 空串返回空数组', planStreamChunks('').length === 0);
+
+  const long = '这是一段测试文本。'.repeat(20); // 180 字
+  const pieces = planStreamChunks(long);
+  ok('流式: 超过 100 字会切成多片', pieces.length > 1, String(pieces.length));
+  ok('流式: 拼回去和原文逐字一致', pieces.join('') === long, '切片不能改字');
+  ok('流式: 每片非空', pieces.every((p) => p.length > 0));
+
+  /**
+   * 没有标点的长串（长 URL、代码、列表）：不硬切的话那一整片会一次糊上来，
+   * 等于没流式。
+   */
+  const noPunct = 'x'.repeat(450);
+  const hard = planStreamChunks(noPunct);
+  ok('流式: 无标点也会硬切', hard.length >= 3, String(hard.length));
+  ok('流式: 硬切不改字', hard.join('') === noPunct);
+
+  /** 片数上限：5000 字切成 50 片就是 50 次请求 */
+  const huge = 'a'.repeat(5000);
+  const capped = planStreamChunks(huge);
+  ok('流式: 片数有上限', capped.length <= 12, String(capped.length));
+  ok('流式: 超上限时把剩下的合进最后一片，不丢字', capped.join('') === huge);
+
+  /**
+   * **代码块不能被切在两片之间。**
+   *
+   * 阈值降到 100 字以后，带代码的回复几乎都会走流式。按句子切会把
+   * ` ```js ` 和它的收尾拆开，中间态就是一段未闭合的代码框——
+   * `replace` 模式下最终显示虽然是对的，但那 1~2 秒看着就是坏的。
+   */
+  const withCode =
+    '先说明一下做法。'.repeat(8)
+    + '\n\n```js\nconst a = 1;\nconst b = 2;\nconsole.log(a + b);\n```\n\n以上就是全部内容。';
+  const cp = planStreamChunks(withCode);
+  const odd = cp.filter((p) => ((p.match(/```/g) ?? []).length % 2) === 1).length;
+  ok('流式: 代码块不跨片', odd === 0, `fence 未闭合的片数 ${odd}`);
+  ok('流式: 带代码块也拼回原文', cp.join('') === withCode);
 }
 
 /* ---------------- 汇总 ---------------- */

@@ -222,6 +222,15 @@ export function parseActions(text) {
   // 富媒体：图片（表情包/生图都走这条）和语音
   take(/<<image[:：]\s*([\s\S]*?)>>/gi, 'image');
   take(/<<voice[:：]\s*([\s\S]*?)>>/gi, 'voice');
+  /**
+   * `<<file: 路径>>`：模型**不该**写这个（发文件要走 `qq_send_file` 工具），
+   * 但它长得和 `<<image:>>` 一模一样，手滑写出来很正常。
+   *
+   * **只摘不执行**：真正的路径校验和发送都在 dsh-roost 那边（只有它知道
+   * 谁能发、能发什么、文件是否存在）。这里认识它的唯一目的是——
+   * 别让 `<<file: C:\Users\...>>` 这串原文漏到群里。
+   */
+  take(/<<file[:：]\s*([\s\S]*?)>>/gi, 'file');
   // 可点击按钮
   take(/<<button[:：]\s*([\s\S]*?)>>/gi, 'button');
   // 语音：要念出来的话（插件转成 silk 再发）

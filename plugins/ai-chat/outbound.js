@@ -109,6 +109,106 @@ export function planChunks(text, maxChunks = MAX_CHUNKS) {
  */
 export const MAX_MEDIA = 3;
 
+/**
+ * 流式分片：按句子切成约 `chunkChars` 字一片。
+ *
+ * **不能复用 `planChunks`**。那是按 QQ 单条消息长度限制（1800 字）切的，
+ * 一段 300 字的回答根本切不出第二片，于是流式永远不触发——线上感受就是
+ * 「流式好像没有」（2026-11-02 实测）。流式要的是「够长就一点点长出来」，
+ * 跟消息上限没关系。
+ *
+ * 切片**保留原文**（分隔符不丢），推的时候直接累加，最终正文与原文逐字一致。
+ *
+ * @param {string} text
+ * @param {object} [o]
+ * @param {number} [o.chunkChars] 每片大概多少字
+ * @param {number} [o.maxChunks] 片数上限（30 片就是 30 次请求）
+ * @returns {string[]}
+ */
+export function planStreamChunks(text, { chunkChars = 100, maxChunks = 12 } = {}) {
+  const s = String(text ?? '');
+  if (!s) return [];
+  if (s.length <= chunkChars) return [s];
+
+  /**
+   * ① 先按**代码块边界**切成段：普通文本段 / 整块代码段。
+   *
+   * 按句子切会把 ```` ```js ```` 和它的收尾拆到两片里，中间态就是一段
+   * 未闭合的代码框（渲染时可能把后面的正文全吃进去）。`replace` 模式最后
+   * 一片是全量、最终显示是对的，但中间那 1~2 秒看着就是坏的。
+   */
+  const blocks = [];
+  let buf = '';
+  let inFence = false;
+  for (const line of s.split(/(?<=\n)/)) {
+    const isFence = /^\s*```/.test(line);
+    if (isFence && !inFence) {
+      if (buf) blocks.push({ code: false, text: buf });
+      buf = line;
+      inFence = true;
+    } else if (isFence && inFence) {
+      buf += line;
+      blocks.push({ code: true, text: buf });
+      buf = '';
+      inFence = false;
+    } else {
+      buf += line;
+    }
+  }
+  /** 收尾：没闭合的代码块也按「代码」处理，别在里面切 */
+  if (buf) blocks.push({ code: inFence, text: buf });
+
+  /**
+   * ② 普通段按句切，代码段**整块**并进来（即使超过阈值也不拆）。
+   * 代码完整性比「每片 100 字」重要。
+   */
+  const out = [];
+  let cur = '';
+  const flush = () => {
+    if (cur) out.push(cur);
+    cur = '';
+  };
+
+  for (const b of blocks) {
+    if (b.code) {
+      cur += b.text;
+      if (cur.length >= chunkChars) flush();
+      continue;
+    }
+    for (const p of b.text.split(/(?<=[。！？；!?;\n])/)) {
+      cur += p;
+      if (cur.length >= chunkChars) flush();
+    }
+  }
+  flush();
+
+  /**
+   * ③ 还是一片（超长单行、没标点：URL、x 结尾的长串）→ 只能硬切。
+   *
+   * **纯代码块除外**：整条回复就是一个长代码块时，硬切等于把 ① 的保护
+   * 一个照面推翻（首片是未闭合的代码框）。这种情况宁可整块一片、退成普通
+   * 发送——代码完整显示比「看着在长」重要。
+   */
+  const onlyCode = ((out[0] ?? '').match(/```/g) ?? []).length > 0;
+  if (out.length === 1 && out[0].length > chunkChars * 2 && !onlyCode) {
+    const one = out[0];
+    out.length = 0;
+    for (let i = 0; i < one.length; i += chunkChars) out.push(one.slice(i, i + chunkChars));
+  }
+
+  if (out.length <= maxChunks) return out;
+  /**
+   * 超上限时**均分合并**，不是把剩下的全塞进最后一片。
+   *
+   * 塞最后的话，1920 字会切成 11 片 112 字 + 1 片 688 字——前面一点一点长，
+   * 最后一秒糊上来一大坨，比不分片还难看。
+   */
+  const per = Math.ceil(out.length / maxChunks);
+  const merged = [];
+  for (let i = 0; i < out.length; i += per) merged.push(out.slice(i, i + per).join(''));
+  return merged;
+}
+
 /** 图片/语音的扩展名白名单——不让模型把任意文件当图发出去 */
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i;
 const VOICE_EXT = /\.(silk|amr|mp3|wav|ogg|m4a)$/i;
@@ -134,7 +234,15 @@ export function isRemote(src) {
  */
 export async function sendMedia(msg, items, { log = () => {}, max = MAX_MEDIA } = {}) {
   let sent = 0;
-  for (const it of (items ?? []).slice(0, max)) {
+  for (const it of (items ?? [])) {
+    /**
+     * 上限按**发出去几个**算，不按「看了几个」。
+     *
+     * 先 `slice(0, max)` 再过滤扩展名时，一条无效项（模型给了个没有扩展名的
+     * 路径）会白占一格：`[无效, 图1, 图2]` 在 max=2 时只剩前两项，
+     * 图2 被裁掉——用户少收一张，日志里也看不出是被谁挤掉的。
+     */
+    if (sent >= max) break;
     const src = String(it?.value ?? '').trim();
     if (!src) continue;
 
@@ -197,8 +305,19 @@ export function buildKeyboard(buttons, { max = 4, perRow = 2 } = {}) {
         render_data: { label: b.label, visited_label: b.label, style: 1 },
         action: {
           type: 2, // 2 = 指令：点击后把 data 当一条消息发出来
-          permission: { type: 0 }, // 0 = 所有人可点
+          /**
+           * **`2` = 所有人**。0 是「指定用户」、1 是「管理员」。
+           *
+           * 这里以前写的是 `type: 0` 并注释成「所有人可点」——`0` 实际是
+           * 「指定用户」，而 `specify_user_ids` 又是空的，等于「谁都不能点」。
+           * 线上表现就是点一下弹「没有权限」。2026-11-02 修的。
+           */
+          permission: { type: 2 },
           data: b.data,
+          /**
+           * `enter` 只在**单聊**有效（点了自动发出去）；群里退化成
+           * 「把 data 填进输入框」，用户还得自己按发送。不是 bug，是官方行为。
+           */
           enter: true,
         },
       })),
@@ -261,25 +380,64 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
    * 所以这里是"分段推送"而不是真流式。但因为是 replace 模式，
    * 用户看到的是一条消息在长出来，不是刷屏。
    */
-  if (stream && !keyboard && msg.kind === 'c2c' && typeof msg.replyStream === 'function') {
-    const chunks = planChunks(text);
-    if (chunks.length > 1) {
+  /**
+   * 流式消息**只支持 markdown 内容格式**（官方 `content_type` 只有 text/markdown，
+   * 而我们要的是渲染效果）。所以 `markdown: false` 的通道不能走这条路——
+   * 否则用户关了 markdown，看到的却是被当 markdown 渲染（或露出 `**` `#`）的正文。
+   */
+  if (stream && markdown && !keyboard && msg.kind === 'c2c' && typeof msg.replyStream === 'function') {
+    /**
+     * 阈值 100 字：比这短的回答一次就出来了，切片反而更慢。
+     * 以前用的 `planChunks`（阈值 1800），日常回复永远够不着，等于流式不存在。
+     */
+    const pieces = planStreamChunks(text);
+    if (pieces.length > 1) {
+      let s = null;
+      let acc = '';
+      let pushed = 0;
+      /** 最后一片的 `end()` 已经发出去了没——用来区分「push 挂了」和「end 挂了」 */
+      let ending = false;
       try {
-        const s = msg.replyStream();
-        let acc = '';
-        for (let i = 0; i < chunks.length; i++) {
-          acc += (i ? '\n\n' : '') + chunks[i];
-          if (i < chunks.length - 1) {
+        s = msg.replyStream();
+        for (let i = 0; i < pieces.length; i++) {
+          /**
+           * **直接累加，不插分隔符**：`planStreamChunks` 切片时保留了原文标点，
+           * 再补 `\n\n` 会把正文改样（以前用 planChunks 才需要补，因为它丢了分隔符）。
+           */
+          acc += pieces[i];
+          if (i < pieces.length - 1) {
             await s.push(acc);
+            pushed += 1;
             // 停一下再推下一片，否则"长出来"的过程看不见
-            await new Promise((r) => setTimeout(r, 140));
+            await new Promise((r) => setTimeout(r, 120));
           } else {
+            ending = true;
             const r = await s.end(acc);
             report(r);
           }
         }
         return 1;
       } catch (e) {
+        /**
+         * **推了一半才失败**：先把流收尾。
+         *
+         * 不收尾的话，用户看到一条永远停在半截的消息（没有结束态），
+         * 紧接着又收到一条完整的，等于两条。收尾也失败才退回普通发送——
+         * 那时候多一条总比内容缺一半强。
+         *
+         * **但 end 自己失败时不能再 end 一次**：服务端可能已经落了最后一片、
+         * 只是响应超时，重发会让用户看到两遍，还白烧一格 msg_seq。
+         */
+        if (pushed > 0 && s && !ending) {
+          try {
+            const r = await s.end(acc);
+            report(r);
+            log(`流式中途失败，已用结束片收尾：${e?.message ?? e}`);
+            return 1;
+          } catch {
+            /* 收尾也失败，往下走普通发送 */
+          }
+        }
         log(`流式失败，退回普通发送：${e?.message ?? e}`);
       }
     }

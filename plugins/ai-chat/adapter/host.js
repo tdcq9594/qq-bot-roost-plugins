@@ -74,7 +74,21 @@ export function createHostAdapter({ name, url, bridge, publicUrl, log = () => {}
          * 通道能力。宿主据此决定「能不能发只在 markdown 里生效的东西」
          * （目前就是 @ 人的标签）。`undefined` 表示调用方没说 → 宿主按默认 true 处理。
          */
-        channel: { markdown: markdown !== false },
+        channel: {
+          markdown: markdown !== false,
+          /**
+           * 发文件通道打通了没有（`qq_send_file`）。
+           *
+           * **必须显式声明**：老版本 ai-chat 的 `/r/reply` 根本不读 `files`
+           * 字段，收到也照回 200。宿主会以为发成功了、模型会跟人说「发你了」，
+           * 然后什么都没有——比直接说「发不了」糟得多。
+           * 所以宿主那边按 `=== true` 判，缺了就一律当不支持。
+           *
+           * 值取「框架真的有 `replyFile` 吗」而不是写死 `true`：
+           * 框架版本不一致时如实说自己不会，别替它打保票。
+           */
+          files: typeof msg?.replyFile === 'function',
+        },
         /**
          * 这一轮真正要交出去的正文。
          *
@@ -114,10 +128,17 @@ export function createHostAdapter({ name, url, bridge, publicUrl, log = () => {}
       }
 
       const r = await evt.promise;
-      if (!r?.text?.trim()) throw new Error('宿主回了空内容');
-      log(`[${name}] 事件 ${evt.id.slice(0, 12)} 收到回话 ${r.text.length} 字`);
+      /**
+       * 这一轮要发的文件。**先取出来再判空**——因为「只发文件不说话」是
+       * 正常行为（对方要文件，她直接给就行，不用再客套一句）。
+       * 以前这里一刀切 `if (!text) throw`，那种用法会整轮报错、文件也没了。
+       */
+      const files = Array.isArray(r?.files) ? r.files.map(String).filter(Boolean) : [];
+      const replyText = String(r?.text ?? '').trim();
+      if (!replyText && !files.length) throw new Error('宿主回了空内容');
+      log(`[${name}] 事件 ${evt.id.slice(0, 12)} 收到回话 ${replyText.length} 字${files.length ? ` + ${files.length} 个文件` : ''}`);
       return {
-        text: r.text.trim(),
+        text: replyText,
         /**
          * 多段回话的**原始分段**（宿主用 `done:false` 逐段发时才有）。
          *
@@ -136,6 +157,8 @@ export function createHostAdapter({ name, url, bridge, publicUrl, log = () => {}
          * 绑定，不能按过滤后的索引取，否则会整体错位。
          */
         requestIds: Array.isArray(r.requestIds) ? r.requestIds.map(String) : [],
+        /** 要发出去的文件（绝对路径），由 index.js 在正文之后统一发 */
+        files,
         usage: null,
         model: name,
       };
