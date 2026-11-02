@@ -277,21 +277,39 @@ if (checkOnly) {
   process.exit(0);
 }
 
-await fs.writeFile(TARGET, `${JSON.stringify(result.out, null, 2)}\n`.replace(/\n/g, result.prevEol), 'utf8');
-
 /**
- * 顺手签名：**有私钥就签，没有就明说这次没签**。
+ * **先决定能不能签名，再动磁盘。**
  *
- * 不强制要求私钥——本地开发和 PR 不该被密钥卡住。发版机上把
- * `ROOST_TRUST_KEY` 指到私钥，生成索引这一步就自动带上 `.sig`，
- * 不用再记一条手工命令。
+ * 以前是先写 json、再签名。没私钥时只更新了 json、`.sig` 还是旧的——
+ * 索引变了签名没变，CI 的验签必红；开了安全校验的用户更是整个市场被拦，
+ * 一个插件都装不上。而它只打一行「未签名」，看上去一切正常。
+ *
+ * 2026-11-02 就这么坏了一次：私钥在 `bot/keys/`，这儿默认找
+ * `qq-bot-roost-plugins/keys/`，目录不存在 → 静默跳过签名。
+ *
+ * 所以规矩改成：**已经签过名的仓库，没私钥就不许改索引**（退出码 1，
+ * 一个字节都不写）。本地开发、还没签过名的仓库不受影响。
  */
 const keyPath = resolveKeyPath(process.argv.slice(2));
+const sigPath = `${TARGET}.sig`;
+const signed = await fs.access(sigPath).then(
+  () => true,
+  () => false,
+);
+if (!keyPath && signed) {
+  console.error('✗ 这个仓库的 index.json 是签过名的，但没找到私钥，拒绝改写。');
+  console.error('  私钥默认在 keys/trust-private.pem，或用 ROOST_TRUST_KEY / --key 指定。');
+  console.error('  真要不带签名地重算（等于弄坏现有签名），先删掉 index.json.sig。');
+  process.exit(1);
+}
+
+await fs.writeFile(TARGET, `${JSON.stringify(result.out, null, 2)}\n`.replace(/\n/g, result.prevEol), 'utf8');
+
 if (keyPath) {
   signIndex(TARGET, keyPath);
   console.log('  已签名 → index.json.sig');
 } else {
-  console.log('  （未签名：没找到私钥。发版时设 ROOST_TRUST_KEY 或用 --key）');
+  console.log('  （未签名：这个仓库还没有 .sig，不当发布产物用）');
 }
 
 console.log(`已生成 ${path.relative(ROOT, TARGET)}`);
