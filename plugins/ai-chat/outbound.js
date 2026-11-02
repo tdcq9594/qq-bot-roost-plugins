@@ -109,6 +109,60 @@ export function planChunks(text, maxChunks = MAX_CHUNKS) {
  */
 export const MAX_MEDIA = 3;
 
+/**
+ * 流式分片：按句子切成约 `chunkChars` 字一片。
+ *
+ * **不能复用 `planChunks`**。那是按 QQ 单条消息长度限制（1800 字）切的，
+ * 一段 300 字的回答根本切不出第二片，于是流式永远不触发——线上感受就是
+ * 「流式好像没有」（2026-11-02 实测）。流式要的是「够长就一点点长出来」，
+ * 跟消息上限没关系。
+ *
+ * 切片**保留原文**（分隔符不丢），推的时候直接累加，最终正文与原文逐字一致。
+ *
+ * @param {string} text
+ * @param {object} [o]
+ * @param {number} [o.chunkChars] 每片大概多少字
+ * @param {number} [o.maxChunks] 片数上限（30 片就是 30 次请求）
+ * @returns {string[]}
+ */
+export function planStreamChunks(text, { chunkChars = 100, maxChunks = 12 } = {}) {
+  const s = String(text ?? '');
+  if (!s) return [];
+  if (s.length <= chunkChars) return [s];
+
+  /** 按句末标点和换行切；后行断言保留分隔符，拼回去就是原文 */
+  const parts = s.split(/(?<=[。！？；!?;\n])/).filter(Boolean);
+  const out = [];
+  let cur = '';
+  for (const p of parts) {
+    cur += p;
+    if (cur.length >= chunkChars) {
+      out.push(cur);
+      cur = '';
+    }
+  }
+  if (cur) out.push(cur);
+
+  /**
+   * 一整句超过两倍阈值时硬切（没标点的长列表、URL、代码块）。
+   * 不切的话那一片会一次糊上来，等于没流式。
+   */
+  const maxLen = chunkChars * 2;
+  const hard = [];
+  for (const p of out) {
+    if (p.length <= maxLen) {
+      hard.push(p);
+      continue;
+    }
+    for (let i = 0; i < p.length; i += chunkChars) hard.push(p.slice(i, i + chunkChars));
+  }
+
+  if (hard.length <= maxChunks) return hard;
+  const head = hard.slice(0, maxChunks - 1);
+  head.push(hard.slice(maxChunks - 1).join(''));
+  return head;
+}
+
 /** 图片/语音的扩展名白名单——不让模型把任意文件当图发出去 */
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i;
 const VOICE_EXT = /\.(silk|amr|mp3|wav|ogg|m4a)$/i;
@@ -286,17 +340,28 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
    * 否则用户关了 markdown，看到的却是被当 markdown 渲染（或露出 `**` `#`）的正文。
    */
   if (stream && markdown && !keyboard && msg.kind === 'c2c' && typeof msg.replyStream === 'function') {
-    const chunks = planChunks(text);
-    if (chunks.length > 1) {
+    /**
+     * 阈值 100 字：比这短的回答一次就出来了，切片反而更慢。
+     * 以前用的 `planChunks`（阈值 1800），日常回复永远够不着，等于流式不存在。
+     */
+    const pieces = planStreamChunks(text);
+    if (pieces.length > 1) {
+      let s = null;
+      let acc = '';
+      let pushed = 0;
       try {
-        const s = msg.replyStream();
-        let acc = '';
-        for (let i = 0; i < chunks.length; i++) {
-          acc += (i ? '\n\n' : '') + chunks[i];
-          if (i < chunks.length - 1) {
+        s = msg.replyStream();
+        for (let i = 0; i < pieces.length; i++) {
+          /**
+           * **直接累加，不插分隔符**：`planStreamChunks` 切片时保留了原文标点，
+           * 再补 `\n\n` 会把正文改样（以前用 planChunks 才需要补，因为它丢了分隔符）。
+           */
+          acc += pieces[i];
+          if (i < pieces.length - 1) {
             await s.push(acc);
+            pushed += 1;
             // 停一下再推下一片，否则"长出来"的过程看不见
-            await new Promise((r) => setTimeout(r, 140));
+            await new Promise((r) => setTimeout(r, 120));
           } else {
             const r = await s.end(acc);
             report(r);
@@ -304,6 +369,23 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
         }
         return 1;
       } catch (e) {
+        /**
+         * **推了一半才失败**：先把流收尾。
+         *
+         * 不收尾的话，用户看到一条永远停在半截的消息（没有结束态），
+         * 紧接着又收到一条完整的，等于两条。收尾也失败才退回普通发送——
+         * 那时候多一条总比内容缺一半强。
+         */
+        if (pushed > 0 && s) {
+          try {
+            const r = await s.end(acc);
+            report(r);
+            log(`流式中途失败，已用结束片收尾：${e?.message ?? e}`);
+            return 1;
+          } catch {
+            /* 收尾也失败，往下走普通发送 */
+          }
+        }
         log(`流式失败，退回普通发送：${e?.message ?? e}`);
       }
     }

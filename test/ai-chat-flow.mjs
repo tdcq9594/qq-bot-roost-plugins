@@ -526,6 +526,36 @@ const baseConf = (over = {}) => () => ({
   ok('出站: 带按钮走 markdown（本身就立刻发）', d.now.length === 1 && d.buf.length === 0, `now=${d.now.length} buf=${d.buf.length}`);
 }
 
+/* ---------------- 流式分片 ---------------- */
+
+{
+  const { planStreamChunks } = await load('outbound.js');
+
+  ok('流式: 100 字以内不切（一次就出来，切了更慢）', planStreamChunks('短回复').length === 1);
+  ok('流式: 空串返回空数组', planStreamChunks('').length === 0);
+
+  const long = '这是一段测试文本。'.repeat(20); // 180 字
+  const pieces = planStreamChunks(long);
+  ok('流式: 超过 100 字会切成多片', pieces.length > 1, String(pieces.length));
+  ok('流式: 拼回去和原文逐字一致', pieces.join('') === long, '切片不能改字');
+  ok('流式: 每片非空', pieces.every((p) => p.length > 0));
+
+  /**
+   * 没有标点的长串（长 URL、代码、列表）：不硬切的话那一整片会一次糊上来，
+   * 等于没流式。
+   */
+  const noPunct = 'x'.repeat(450);
+  const hard = planStreamChunks(noPunct);
+  ok('流式: 无标点也会硬切', hard.length >= 3, String(hard.length));
+  ok('流式: 硬切不改字', hard.join('') === noPunct);
+
+  /** 片数上限：5000 字切成 50 片就是 50 次请求 */
+  const huge = 'a'.repeat(5000);
+  const capped = planStreamChunks(huge);
+  ok('流式: 片数有上限', capped.length <= 12, String(capped.length));
+  ok('流式: 超上限时把剩下的合进最后一片，不丢字', capped.join('') === huge);
+}
+
 /* ---------------- 汇总 ---------------- */
 
 console.log(`\n${pass}/${pass + fails.length} 通过`);
