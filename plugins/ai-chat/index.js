@@ -1409,7 +1409,18 @@ export default {
           try {
             const r = await msg.replyFile?.(f, { local: true });
             if (r) ctx.logger.info(`[ai-chat] 文件已发：${f}`);
-            else ctx.logger.warn(`[ai-chat] 文件没发出去（附件过多/被平台拒/超限）：${f}`);
+            else {
+              /**
+               * `replyFile` 失败时只回 null（框架内部已经 `log.error` 过原因），
+               * 所以这里**别猜原因**。以前写的是「附件过多/被平台拒/超限」，
+               * 而真实情况可能是上传成功、发消息时官方回 500「系统繁忙」——
+               * 照那句文案去查「附件过多」会白查半天（2026-11-02 实际发生）。
+               */
+              ctx.logger.warn(
+                `[ai-chat] 文件没发出去：${f}`
+                + '（原因看同一时刻 message 的 ERROR 行；若是 5xx「系统繁忙」，隔几秒重发通常就好）',
+              );
+            }
           } catch (e) {
             ctx.logger.warn(`[ai-chat] 文件发送失败：${f} · ${e?.message ?? e}`);
           }
