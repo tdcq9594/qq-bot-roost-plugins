@@ -411,7 +411,14 @@ const baseConf = (over = {}) => () => ({
   ok('按钮: 两行（2+1）', k?.content?.rows?.length === 2, String(k?.content?.rows?.length));
   ok('按钮: 第一行两个', k.content.rows[0].buttons.length === 2);
   ok('按钮: 用指令型 action', k.content.rows[0].buttons[0].action.type === 2);
-  ok('按钮: 所有人可点', k.content.rows[0].buttons[0].action.permission.type === 0);
+  /**
+   * 官方 `Permission.type`：**0 = 指定用户、1 = 管理员、2 = 所有人**。
+   *
+   * 这条断言以前写的是 `=== 0`，标题还叫「所有人可点」——期望值本身就是错的，
+   * 于是它一直在保护一个「谁都不能点」的实现（线上点按钮弹「没有权限」）。
+   * 2026-11-02 按官方 schema 改正。
+   */
+  ok('按钮: 所有人可点（permission.type = 2）', k.content.rows[0].buttons[0].action.permission.type === 2);
   ok('按钮: data 是点了之后发的话', k.content.rows[0].buttons[1].action.data === '今天运势怎么样');
 
   const many = buildKeyboard(Array.from({ length: 8 }, (_, i) => ({ label: `b${i}`, data: `d${i}` })));

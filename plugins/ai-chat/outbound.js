@@ -205,8 +205,19 @@ export function buildKeyboard(buttons, { max = 4, perRow = 2 } = {}) {
         render_data: { label: b.label, visited_label: b.label, style: 1 },
         action: {
           type: 2, // 2 = 指令：点击后把 data 当一条消息发出来
-          permission: { type: 0 }, // 0 = 所有人可点
+          /**
+           * **`2` = 所有人**。0 是「指定用户」、1 是「管理员」。
+           *
+           * 这里以前写的是 `type: 0` 并注释成「所有人可点」——`0` 实际是
+           * 「指定用户」，而 `specify_user_ids` 又是空的，等于「谁都不能点」。
+           * 线上表现就是点一下弹「没有权限」。2026-11-02 修的。
+           */
+          permission: { type: 2 },
           data: b.data,
+          /**
+           * `enter` 只在**单聊**有效（点了自动发出去）；群里退化成
+           * 「把 data 填进输入框」，用户还得自己按发送。不是 bug，是官方行为。
+           */
           enter: true,
         },
       })),
@@ -269,7 +280,12 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
    * 所以这里是"分段推送"而不是真流式。但因为是 replace 模式，
    * 用户看到的是一条消息在长出来，不是刷屏。
    */
-  if (stream && !keyboard && msg.kind === 'c2c' && typeof msg.replyStream === 'function') {
+  /**
+   * 流式消息**只支持 markdown 内容格式**（官方 `content_type` 只有 text/markdown，
+   * 而我们要的是渲染效果）。所以 `markdown: false` 的通道不能走这条路——
+   * 否则用户关了 markdown，看到的却是被当 markdown 渲染（或露出 `**` `#`）的正文。
+   */
+  if (stream && markdown && !keyboard && msg.kind === 'c2c' && typeof msg.replyStream === 'function') {
     const chunks = planChunks(text);
     if (chunks.length > 1) {
       try {
