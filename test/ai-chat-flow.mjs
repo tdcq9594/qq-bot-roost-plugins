@@ -66,7 +66,12 @@ const baseConf = (over = {}) => () => ({
   ok('入站: 语音标记不重复 ASR', !buildUserContent(voice, textOf(voice)).includes('转成文字是'));
 
   const noAsr = { ...voice, attachments: [{ type: 'voice' }] };
-  ok('入站: 语音没转出文字也要说清楚', /没能转成文字/.test(buildUserContent(noAsr, '')));
+  /**
+   * 文案在 4.4.0 改过：从「没能转成文字」改成
+   * 「没转出文字——可以说没听清，请对方再说一遍」，多给了模型一句可执行的动作。
+   * 断言只钉住「要明确说没转出来」这个语义，不钉整句，免得下次改措辞又红。
+   */
+  ok('入站: 语音没转出文字也要说清楚', /没转出文字/.test(buildUserContent(noAsr, '')));
 
   const quoted = { ...voice, attachments: [], quoted: '上一条说的是什么' };
   ok('入站: 引用原文带上', buildUserContent(quoted, '这个').includes('上一条说的是什么'));
@@ -78,7 +83,28 @@ const baseConf = (over = {}) => () => ({
   ok('入站: 卡片标题带上', buildUserContent(arkMsg, '').includes('一个视频标题'));
 
   const image = { ...voice, attachments: [{ type: 'image', url: 'https://x/1.png' }] };
-  ok('入站: 图片给了地址', buildUserContent(image, '').includes('https://x/1.png'));
+  /**
+   * 4.4.0 起图片改成「下载落盘后给本地路径」。
+   *
+   * 原来这条断言钉的是 `includes('https://x/1.png')`——正好钉住了要删掉的行为：
+   * QQ 的图片 URL 有时效，模型拿它去 `<<image: url>>` 转发，过一会儿就 404。
+   */
+  const imageTxt = buildUserContent(image, '');
+  ok('入站: 图片不再给会过期的 URL', !imageTxt.includes('https://x/1.png'), imageTxt);
+
+  /**
+   * 三种 images 取值含义不同，别混：
+   *   `'off'` —— 这一轮确实关了看图 → 要说「看不到内容」，让模型请对方描述
+   *   `null`  —— 不知道（结构化通道）→ 中性一句话，不下结论
+   *   数组    —— 实际取到的结果
+   */
+  const offTxt = buildUserContent(image, '', { images: 'off' });
+  ok('入站: 没开看图时说清看不到内容', offTxt.includes('没开看图'), offTxt);
+  ok('入站: 不知道时不下结论', imageTxt.includes('发来一张图') && !imageTxt.includes('没开看图'), imageTxt);
+
+  // 下载并落盘后，给的是本地路径（模型能直接读）
+  const saved = buildUserContent(image, '', { images: [{ index: 0, path: '/tmp/cache/qq-m1-1.png' }] });
+  ok('入站: 图片落盘后给本地路径', saved.includes('/tmp/cache/qq-m1-1.png'), saved);
 
   ok('入站: 全空也有兜底文案', buildUserContent({ attachments: [], elements: [] }, '').length > 0);
   ok(

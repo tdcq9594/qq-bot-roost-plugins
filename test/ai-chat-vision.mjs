@@ -61,7 +61,8 @@ const msgWith = (urls) => ({
   ok('图片: 下载了两张', out.length === 2);
   ok('图片: 带 mediaType', out[0].mediaType === 'image/png' && out[1].mediaType === 'image/jpeg');
   ok('图片: 转成 base64', typeof out[0].data === 'string' && out[0].data.length > 0);
-  ok('图片: 带名字', /^qq-m1-1$/.test(out[0].name), out[0].name);
+  // 4.4.0 起文件名带扩展名——落盘时用它当真实文件名，没有扩展名系统认不出格式
+  ok('图片: 带名字', /^qq-m1-1\.png$/.test(out[0].name), out[0].name);
 }
 
 /* ---------------- 只认图片 ---------------- */
