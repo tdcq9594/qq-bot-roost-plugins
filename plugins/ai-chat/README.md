@@ -231,14 +231,21 @@
 
 ## 语音条（可选）
 
-让 AI 说的话被**念出来**。要先在插件目录装三个纯 JS/WASM 的依赖：
+让 AI 说的话被**念出来**。
+
+**合成在宿主那边做**（`dsh-roost` → 设置 → 「语音合成」）：可以选**本地模型（面板一键安装，
+完全离线、不要 Key）**、OpenAI 兼容的 `/audio/speech`，或本地 GPT-SoVITS。
+宿主里 `tts.enabled` 默认关闭——不配就完全静默，不报错、不占提示词。
+
+插件这边只负责后半段：把宿主返回的音频转成 QQ 要的 **silk**，然后发出去。
+这一步要两个纯 JS/WASM 的依赖：
 
 ```bash
 cd <Roost 目录>/plugins/ai-chat
-npm i @andresaya/edge-tts mpg123-decoder silk-wasm
+npm i mpg123-decoder silk-wasm
 ```
 
-> **不装也能用，只是没有语音条。** 这三个是 `optionalDependencies`——
+> **不装也能用，只是没有语音条。** 这两个是 `optionalDependencies`——
 > Roost 加载插件时如果能找到 npm / pnpm 会自动装；找不到就跳过并记一条警告，
 > 插件照常工作。
 >
@@ -246,16 +253,16 @@ npm i @andresaya/edge-tts mpg123-decoder silk-wasm
 > 里只有 pnpm、没有 npm）会因此**整个插件加载失败**——语音没装上，连文字也不回了。
 > 4.3.5 改掉了。
 
-然后在插件设置里把「语音音色」填成微软音色名，比如 `zh-CN-XiaoxiaoNeural`（女）
-或 `zh-CN-YunxiNeural`（男）。留空 = 不开。
+宿主里配好语音之后，模型输出 `<<say: 要念的话>>` 就会发一条语音条。
+宿主没启用语音时，这一句**根本不会告诉模型**（不给没有的能力）。
 
-模型输出 `<<say: 要念的话>>` 就会发一条语音条。
+**为什么还要转**：QQ 官方语音要 **silk**，而 TTS 出来的通常是 mp3 或 wav，
+所以中间转两道 —— 文字 → 音频 → PCM → silk。全在 Node 里跑，
+**不要 Python、不要 ffmpeg、不要装服务**。首版支持 mp3 和 16bit PCM 的 wav。
 
-**为什么绕这么大一圈**：QQ 官方语音要 **silk**，而 TTS 出来的都是 mp3，
-所以中间转两道 —— 文字 → mp3 → PCM → silk。全在 Node 里跑，
-**不要 Python、不要 ffmpeg、不要装服务**。
-
-没装依赖、或者任何一步失败，都只是「这条没有语音」——文字照发，不影响对话。
+依赖没装、格式不认识、或者任何一步失败，都只是「这条没有语音」——文字照发，
+不影响对话，日志里会说清是哪一步。只发语音、正文是空的时，语音失败会**把同一句话
+当文字补发**，不会让用户什么都收不到。
 
 ## 它能看见什么
 

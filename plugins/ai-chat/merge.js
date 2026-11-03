@@ -56,6 +56,15 @@ export function createMerger({ waitSec = 1.5, maxSec = 6, now = () => Date.now()
       multi: items.length > 1,
       /** 回复挂到最后一条上：它的 msg_id 最新，被动回复窗口最稳 */
       msg: items[items.length - 1].msg,
+      /**
+       * **整批**的附件，不是最后一条的。
+       *
+       * 以前只给了 `msg`，而 `msg` 是最后一条——用户先发图、再补一句话，
+       * 合并后 `msg.attachments` 是空的，图就凭空消失了，模型只能看到
+       * 那句「这是啥」然后回「你发的什么我看不到」。
+       * 2026-11-03 反馈的「有时候收不到图」就是这个。
+       */
+      attachments: items.flatMap((it) => it.msg?.attachments ?? []),
       senders: [...new Set(items.map((it) => it.name).filter(Boolean))],
     };
 

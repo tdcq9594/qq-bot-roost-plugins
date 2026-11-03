@@ -12,24 +12,75 @@
  * 用户发一段语音，模型看到的是空字符串。
  */
 
+import { isImageAttachment } from './vision.js';
+
+/**
+ * 图片说明：**给本地路径，不给 URL**。
+ *
+ * QQ 的图片 URL 有时效，模型拿它去 `<<image: url>>` 转发，过一会儿就 404；
+ * 而本地路径是我们自己落盘的，只要没被清理就一直能读。
+ *
+ * 四种情况分开说，别让模型猜：
+ *   · `'off'`    —— 这一轮关了看图，明确说看不到
+ *   · `null`     —— 不知道（结构化通道用，图片另走 vision），中性一句话
+ *   · 数组里有项 —— 取到并落盘给路径；取到但没落盘说清"能看到但没存"
+ *   · 数组是空的 —— 尝试过但全失败，说清"没取到，可以让对方重发"
+ */
+function imageNote(got, images) {
+  if (images === 'off') return '（发来一张图；这一轮没开看图，看不到内容）';
+  if (images === null) return '（发来一张图）';
+  if (got?.path) return `（发来一张图，已存到本地：${got.path}）`;
+  if (got) return '（发来一张图，能看到内容，但没存到本地）';
+  return '（发来一张图，但没取到——可以让对方重发）';
+}
+
 /** 附件 → 一行说明。没有就返回空数组 */
-export function describeAttachments(msg) {
+export function describeAttachments(msg, images = null) {
   const out = [];
+  const list = Array.isArray(images) ? images : [];
+  let imgIdx = 0;
+
   for (const a of msg.attachments ?? []) {
     switch (a?.type) {
       case 'voice':
-        // 官方 ASR 是白给的，直接用；识别失败也要说清楚，别让模型以为是静音
-        // 转写内容已经由 textOf 放进正文了，这里只说明「这是语音」，不重复文字
-        out.push(a.asrText ? '（发了一条语音）' : '（发了一条语音，但没能转成文字）');
+        /**
+         * 转写成功时**一个字都不写**。
+         *
+         * 以前这里输出「（发了一条语音）」，而转写文字就在它上一行。
+         * 模型会把那行说明当成「这条消息的实质」，把转写当成附件备注，
+         * 于是回一句「我只看到『发了条语音』这几个字」——2026-11-03
+         * 线上真实发生，用户以为识别坏了，其实文字一直好好地摆在那儿。
+         *
+         * 转写本身就是正文，再补一句说明只会把它稀释掉。
+         */
+        if (!a.asrText) {
+          out.push('（发来一条语音，但没转出文字——可以说没听清，请对方再说一遍）');
+        }
         break;
-      case 'image':
-        out.push(a.url ? `（发了一张图：${a.url}）` : '（发了一张图）');
+      case 'image': {
+        const got = list.find((x) => x.index === imgIdx);
+        imgIdx += 1;
+        out.push(imageNote(got, images));
         break;
+      }
       case 'video':
         out.push('（发了一段视频）');
         break;
       case 'file':
-        out.push(`（发了个文件：${a.filename || '未命名'}${a.size ? `，${Math.round(a.size / 1024)}KB` : ''}）`);
+        /**
+         * 以文件形式发出来的图，**按图说**，不说「发了个文件」。
+         *
+         * 说成文件，模型就只拿到一个文件名，然后回「我只看得到文件名」——
+         * 图其实早就下载好摆在它面前了。判定和 `collectImages` 用同一个函数，
+         * 保证两边的 `imgIdx` 一一对应。
+         */
+        if (isImageAttachment(a)) {
+          const got = list.find((x) => x.index === imgIdx);
+          imgIdx += 1;
+          out.push(imageNote(got, images));
+        } else {
+          out.push(`（发了个文件：${a.filename || '未命名'}${a.size ? `，${Math.round(a.size / 1024)}KB` : ''}）`);
+        }
         break;
       default:
         if (a?.type) out.push(`（发了一个 ${a.type}）`);
@@ -67,20 +118,23 @@ export function describeArk(msg) {
  * 给模型看的完整用户内容。
  *
  * 顺序有讲究：先说用户自己打的字，再补上下文（引用、附件、卡片）。
- * 反过来的话模型容易把「（发了一张图）」当成用户说的话。
+ * 反过来的话模型容易把「（发来一张图）」当成用户说的话。
  *
  * @param {object} msg Roost 的 Message
  * @param {string} text 用户打的字（`/ai` 后面的部分）
+ * @param {object} [opts]
+ * @param {Array<{path:string,index:number}>|'off'|null} [opts.images]
+ *   已下载的图片；`'off'` = 这一轮关了看图；`null` = 不知道（结构化通道用）
  * @returns {string}
  */
-export function buildUserContent(msg, text) {
+export function buildUserContent(msg, text, { images = null } = {}) {
   const parts = [];
   const said = String(text ?? '').trim();
   if (said) parts.push(said);
 
   if (msg.quoted) parts.push(`（引用了这句：${String(msg.quoted).slice(0, 500)}）`);
 
-  parts.push(...describeAttachments(msg));
+  parts.push(...describeAttachments(msg, images));
   parts.push(...describeElements(msg));
   parts.push(...describeArk(msg));
 

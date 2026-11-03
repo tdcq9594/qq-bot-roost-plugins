@@ -23,10 +23,17 @@ import { createHostAdapter } from './host.js';
  * @param {(s:string)=>void} [deps.log]
  */
 export function createAdapter({ conf, bridge, publicUrl, log }) {
-  const c = conf();
   return createHostAdapter({
     name: 'dsh',
-    url: c.dshUrl,
+    /**
+     * 地址和密钥都用**取值函数**，不用快照。
+     *
+     * 适配器只在第一次说话时创建一次；传快照的话，用户之后在面板里改了
+     * 「DSH 地址」或「共享密钥」，要重载插件才生效——而现象是 401 / 连不上，
+     * 完全看不出「改了没生效」。取值函数每次说话都现读，改完立刻对。
+     */
+    url: () => conf().dshUrl,
+    token: () => conf().dshToken,
     bridge,
     publicUrl,
     log,

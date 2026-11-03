@@ -22,13 +22,17 @@ export function joinUrl(base, path) {
 /**
  * @param {object} p
  * @param {string} p.name 适配器名（webhook / dsh），报错信息里会用到
- * @param {string} p.url 宿主接收地址（已经由调用方从配置里取好）
+ * @param {string|(() => string)} p.url 宿主接收地址（传函数则每次现读，改配置立刻生效）
+ * @param {string|(() => string)} [p.token] 共享密钥（宿主 `server.token`）；空表示宿主不校验
  * @param {object} p.bridge 回话通道（adapter/bridge.js）
  * @param {() => string} p.publicUrl 面板对外地址，用来拼回话 URL
  * @param {(s:string)=>void} [p.log]
  * @param {(msgs:object[])=>object[]} [p.trimHistory] 把 messages 剪成协议里的 history
  */
-export function createHostAdapter({ name, url, bridge, publicUrl, log = () => {}, trimHistory = (m) => m }) {
+export function createHostAdapter({ name, url, token, bridge, publicUrl, log = () => {}, trimHistory = (m) => m }) {
+  /** 字符串和取值函数都认——上层想让配置改动立刻生效就传函数 */
+  const read = (v) => (typeof v === 'function' ? v() : v);
+
   return {
     name,
 
@@ -41,7 +45,15 @@ export function createHostAdapter({ name, url, bridge, publicUrl, log = () => {}
      * @returns {Promise<{text:string, usage:null, model:string}>}
      */
     async chat({ messages = [], signal, msg, chat, sender, system, images, markdown, said, batch }) {
-      if (!url) {
+      const target = String(read(url) || '').trim();
+      /**
+       * 密钥只读一次存下来。
+       *
+       * 读两次（先判空再取值）在传的是取值函数时可能拿到两个不同的值——
+       * 判空时为真、真正发出去时是空串，于是「明明配了密钥却是 401」。
+       */
+      const tokenValue = String(read(token) || '').trim();
+      if (!target) {
         throw new Error(`还没填宿主的接收地址（面板 → 「${name} 地址」）`);
       }
       if (!msg) {
@@ -112,14 +124,24 @@ export function createHostAdapter({ name, url, bridge, publicUrl, log = () => {}
       payload.adapter = name;
       payload.t = { recv: Number(msg.receivedAt) || 0, start: startedAt };
 
-      const res = await fetch(joinUrl(url, 'inbound'), {
+      const res = await fetch(joinUrl(target, 'inbound'), {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          /**
+           * 宿主的 `server.token` 配了就一定要带。
+           *
+           * 以前这里只发 content-type，而宿主在 token 非空时要求这个头——
+           * 于是「设了密钥」等于「消息一条都推不进去」，两边都不报错，
+           * 表现只是机器人突然不回话。
+           */
+          ...(tokenValue ? { 'x-roost-token': tokenValue } : {}),
+        },
         body: JSON.stringify(payload),
         signal,
       }).catch((e) => {
         // 连不上是最常见的情况（宿主没开），把话说清楚
-        throw new Error(`连不上宿主（${url}）：${e?.message ?? e}`);
+        throw new Error(`连不上宿主（${target}）：${e?.message ?? e}`);
       });
 
       if (!res.ok) {

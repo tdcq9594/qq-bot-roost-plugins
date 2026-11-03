@@ -39,12 +39,25 @@ export const DEFAULT_IGNORE = ['/'];
  */
 export function textOf(msg) {
   const said = String(msg?.content ?? '').trim();
-  if (said) return said;
-  return (msg?.attachments ?? [])
+  const asr = (msg?.attachments ?? [])
     .filter((a) => a?.type === 'voice' && a.asrText)
     .map((a) => String(a.asrText).trim())
     .filter(Boolean)
     .join(' ');
+
+  /**
+   * 打字和语音**都要留下**。
+   *
+   * 以前是 `if (said) return said;`——用户打一句「你听」再补一条语音，
+   * 语音的转写就整段丢了，模型只看到「你听」。而这条路径是纯语音的
+   * 主路径（`content` 为空时才走 asrText），所以改这里不会影响纯语音。
+   *
+   * `includes` 那个判断是防重复：某些版本的框架会把转写直接拼进
+   * `content`，这时再加一遍就重复了。
+   */
+  if (!said) return asr;
+  if (!asr || said.includes(asr)) return said;
+  return `${said}\n${asr}`;
 }
 
 /**

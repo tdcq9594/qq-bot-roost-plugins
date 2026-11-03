@@ -33,7 +33,12 @@ import { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseDura
 import { ChatStore, PaceStore } from './session.js';
 import { createMerger } from './merge.js';
 import { collectImages } from './vision.js';
-import { synthesize, DEFAULT_VOICE } from './tts.js';
+/**
+ * 语音合成走宿主（dsh-roost）：
+ *   · 合成、provider、密钥全在宿主配置里，插件只负责转 silk 和发送
+ *   · 宿主没开语音 → 这里什么都不做，连提示词都不给模型
+ */
+import { hostTtsReady, synthesize } from './host-tts.js';
 
 /** 一次请求最多等多久 */
 const DEFAULT_TIMEOUT_SEC = 90;
@@ -50,7 +55,7 @@ const MAX_SEGMENTS = 5;
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '4.3.23',
+  version: '4.4.0',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   /**
    * 4.3.22 起读 `msg.groupName`（群名不再退成发送者昵称）。
@@ -168,13 +173,6 @@ export default {
       label: '一次最多看几张图',
       desc: '一张图几百到几千 token，太多了会撑爆上下文。0 等于不看',
     },
-    ttsVoice: {
-      type: 'string',
-      default: '',
-      label: '语音音色',
-      desc: '填微软音色名就开启语音，例如 zh-CN-XiaoxiaoNeural（女）、zh-CN-YunxiNeural（男）。'
-        + '留空 = 不合成语音。需要先在插件目录 npm i @andresaya/edge-tts mpg123-decoder silk-wasm',
-    },
     timeoutSec: {
       type: 'number',
       default: DEFAULT_TIMEOUT_SEC,
@@ -190,6 +188,19 @@ export default {
       label: 'DSH 地址',
       desc: 'dsh 适配器用，指向 dsh-roost 插件。装了 DSH 一般不用改',
       placeholder: 'http://127.0.0.1:17321',
+    },
+    /**
+     * 宿主的共享密钥（`dsh-roost` 的 `server.token`）。
+     *
+     * 宿主没设密钥时留空即可。设了就必须两边一致：`/inbound`、`/capabilities`、
+     * `/tts` 都会带这个头，缺了就是 401，而现象只是「突然不回话了」。
+     * 正常情况下由 dsh-roost 在同步地址时一起写进来，不用手填。
+     */
+    dshToken: {
+      type: 'string',
+      default: '',
+      label: '共享密钥',
+      desc: '和 dsh-roost 的 server.token 一致。宿主没设就留空；一般由 dsh-roost 自动同步',
     },
     publicUrl: {
       type: 'text',
@@ -243,7 +254,7 @@ export default {
         mergeMaxSec: num(c.mergeMaxSec, 6, 1),
         seeImages: c.seeImages !== false,
         maxImages: num(c.maxImages, 4, 0),
-        ttsVoice: String(c.ttsVoice || '').trim(),
+        dshToken: String(c.dshToken || '').trim(),
         maxRepliesPerMin: num(c.maxRepliesPerMin, 3),
         ignoreWords: Array.isArray(c.ignoreWords) ? c.ignoreWords.map(String).filter(Boolean) : DEFAULT_IGNORE,
         markdown: c.markdown !== false,
@@ -785,7 +796,14 @@ export default {
      * `force` 为假时再追加一段「判断要不要接话」——只在需要它自己判断时才说，
      * 被 @ 时说这段反而会让它犹豫。
      */
-    async function systemMessage(msg, c, force) {
+    /**
+     * @param {object} msg
+     * @param {object} c 配置
+     * @param {boolean} force 被 @ / 回复（不用判断要不要接）
+     * @param {boolean} [ttsOn] 宿主那边语音能不能用。只有能用才把 `<<say>>` 给模型——
+     *   给了却合成不出来，等于教它说一句用户永远听不到的话。
+     */
+    async function systemMessage(msg, c, force, ttsOn = false) {
       // 人设和记忆都由 dsh-roost 注入，这里只拼「动作标记」的契约
       const parts = [];
 
@@ -814,6 +832,24 @@ export default {
           '· 真按钮：用户能点的按钮',
           '· 图片和语音',
           '所以需要排版的时候放心用 Markdown；需要给用户几个选项时用按钮，别让人手打。',
+        ].join('\n'),
+      );
+
+      /**
+       * 告诉它「能收到什么」。
+       *
+       * 不写这段的后果（2026-11-03 实测）：用户发语音，官方 ASR 把转写
+       * 放在正文里了，模型却回「我只看到『发了条语音』这几个字」——
+       * 它把附件说明当成了全部内容，然后复读「我收不到语音」。
+       * 这属于**对自身能力的误解**，只能靠提示词纠正。
+       */
+      parts.push(
+        [
+          '【你能收到什么】',
+          '· 语音：官方会先把语音转成文字，你收到的就是那段文字。',
+          '  转写不一定准（方言、太吵、说得太短都可能出错）。看不懂就直说没听清、请对方再说一遍，',
+          '  **不要说自己收不到语音、看不到音频**——你收到的是文字，读它就行。',
+          '· 图片：能直接看到图里的内容。正文里如果给了本地路径，说明这张图已经存下来了。',
         ].join('\n'),
       );
 
@@ -881,7 +917,14 @@ export default {
           '要清空这个会话的上下文：<<clear>>',
           '要发图片（表情包、画好的图）：<<image: 网址或本地路径>>',
           '要发语音：<<voice: 网址或本地路径>>',
-          '想让你的话被念出来（语音条）：<<say: 要念的内容>>（会自动转成语音）',
+          /**
+           * `<<say>>` 只在宿主真的能合成时才教。
+           *
+           * 宿主语音默认关闭（`dsh-roost` 的 `tts.enabled`），而这一句是
+           * 「你可以这样做」的许可。许可给了、能力没有，模型就会时不时
+           * 输出一个被摘掉、用户什么也收不到的标记——比不说更糟。
+           */
+          ...(ttsOn ? ['想让你的话被念出来（语音条）：<<say: 要念的内容>>（会自动转成语音）'] : []),
           '要放按钮：<<button: 显示文字 | 点了之后发的话>>（一行最多两个，总共最多四个）',
           /**
            * 收尾**只在私聊给**。群里没有「聊完」这回事，一直有人说话，
@@ -1075,11 +1118,43 @@ export default {
         }, c.timeoutSec * 1000);
         timer.unref?.();
 
-        const sys = await systemMessage(msg, c, gate.force);
+        /**
+         * 语音能力：问宿主一次（30 秒缓存），决定要不要把 `<<say>>` 告诉模型。
+         *
+         * 放在拼 system 之前：这一轮的提示词和后面的发送必须用**同一个结论**，
+         * 否则会出现「提示词里有 say、发送时却当成没开」。
+         */
+        const ttsOn = await hostTtsReady(c, { log: (m) => ctx.logger.info(`[ai-chat] ${m}`) });
 
-        /** 下载图片给模型看（限张数限大小，任何一张失败都只是少看一张） */
-        const images = c.seeImages && c.maxImages > 0
-          ? await collectImages(msg, { max: c.maxImages, log: (m) => ctx.logger.warn(`[ai-chat] ${m}`) })
+        const sys = await systemMessage(msg, c, gate.force, ttsOn);
+
+        /**
+         * 下载图片给模型看（限张数限大小，任何一张失败都只是少看一张）。
+         *
+         * 同时**落一份到本地**：正文里给模型的是本地路径而不是 QQ 的 URL——
+         * 那个 URL 有时效，模型拿它去 `<<image: url>>` 转发过一会儿就 404。
+         *
+         * `seeImages` 单独记一个布尔：关闭看图时 `images` 是空数组，
+         * 但"没尝试下载"和"下载全失败"要给模型不同的说法。
+         */
+        /**
+         * 附件要用**整批**的，不是最后一条的。
+         *
+         * 合并窗口里 `msg` 是最后一条（回复要挂它的 msg_id），而用户
+         * 「先发图、再补一句话」时，图在前一条上——只看 `msg.attachments`
+         * 就等于把图丢了。`batch.attachments` 是整批合并后的列表。
+         */
+        const attMsg = batch.attachments?.length
+          ? { ...msg, attachments: batch.attachments }
+          : msg;
+
+        const seeImages = Boolean(c.seeImages && c.maxImages > 0);
+        const images = seeImages
+          ? await collectImages(attMsg, {
+              max: c.maxImages,
+              cacheDir: `${ctx.dataDir}/image-cache`,
+              log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
+            })
           : [];
         if (sys) {
           if (s.messages[0]?.role === 'system') s.messages[0] = sys;
@@ -1090,13 +1165,28 @@ export default {
 
         // 入站整形：语音 ASR、引用原文、合并转发、卡片都并进来
         // 合并过的批次用 batch.text（已带发言人），单条时两者等价
-        s.messages.push({ role: 'user', content: buildUserContent(msg, batch.text) });
+        s.messages.push({
+          role: 'user',
+          /**
+           * `'off'` 而不是 `null`：关掉看图时模型必须知道"这张图我看不到"，
+           * 否则它会照着 URL 编内容。`null` 留给结构化通道（`hostPayload`），
+           * 那边图片另走 vision，不该下"看不到"的结论。
+           */
+          content: buildUserContent(attMsg, batch.text, { images: seeImages ? images : 'off' }),
+        });
         store.trim(s);
 
         const { text, parts, requestIds = [], files = [], usage, model } = await callModel(s.messages, {
           signal: paceSt.controller.signal,
-          // 宿主要用原始消息整形
-          msg,
+          /**
+           * 宿主要用原始消息整形——**给整批附件的那个**，不是最后一条。
+           *
+           * 宿主拿 `msg` 去拼 `payload.rendered`，如果这里还是最后一条，
+           * 那么「先发图、再补一句话」的批次在宿主侧看不到图：本地
+           * `s.messages` 有图说明、`payload.images` 也有图块，唯独宿主
+           * 自己渲染的那份正文里没有路径（2026-11-03 审查发现）。
+           */
+          msg: attMsg,
           chat: { kind: msg.kind, chatId: msg.chatId },
           // 权限档位给宿主，它据此决定给不给本地工具
           sender: await senderInfo(msg),
@@ -1131,6 +1221,17 @@ export default {
         /** 富媒体（图片 / 语音）单独发，不混进文本 */
         const media = actions.filter((a) => a.type === 'image' || a.type === 'voice');
         /**
+         * 「把这句话念出来」的内容。
+         *
+         * **必须在这里取**：下面 `isSkip` 和「什么都没有就不发」两个早退都要看它。
+         * 以前它在发送前才取，于是「正文留空、只想发语音」会被当成空回复直接丢掉，
+         * 语音条永远发不出来——而且日志里看起来一切正常。
+         *
+         * 空值（`<<say:>>` / `<<say:   >>`）当没有：对象为真会绕过两个早退，
+         * 结果记一条空回复、白占一次被动回复预算，实际什么都没发。
+         */
+        const say = actions.find((a) => a.type === 'say' && String(a.value ?? '').trim());
+        /**
          * 模型写了 `<<file: 路径>>` 而不是调 `qq_send_file` 工具。
          *
          * 标记已经被 `parseActions` 摘掉了（不会漏到群里），但**文件也不会发**——
@@ -1159,7 +1260,7 @@ export default {
          * 把 `<skip>` 这几个字符原样发到群里是最糟的结果——以前只在「AI 自己判断」
          * 模式下检查，被叫到时模型一旦输出 `<skip>` 就会直接漏到群里。
          */
-        if (isSkip(cleaned) && !confirm && !media.length && !files.length) {
+        if (isSkip(cleaned) && !confirm && !media.length && !files.length && !say) {
           if (s.messages.at(-1)?.role === 'user') s.messages.pop();
           // 被明确叫到却不吭声是反常的，留条 info 方便排查「@ 了没反应」
           if (gate.force) ctx.logger.info(`[ai-chat] ${msg.chatId.slice(0, 8)} 被叫但模型选择不回`);
@@ -1240,7 +1341,14 @@ export default {
          */
         if (confirm && segs?.length) segs[segs.length - 1] += '\n\n' + confirm;
         // 既没话也没附件就不发；但要撤回上一条时还得往下走（撤回不靠这条文本）
-        if (!body && !segs?.length && !media.length && !files.length && !wantRetract) return;
+        /**
+         * 「只有语音」也算有内容。
+         *
+         * 不看 `ttsOn`：宿主没开语音时下面会把这句话**降级成文字**发出去。
+         * 内容不该因为发不出语音就被吞掉——用户什么都没收到、上下文里却记着
+         * 「我说过」，是这里最糟的一种失败。
+         */
+        if (!body && !segs?.length && !media.length && !files.length && !wantRetract && !say) return;
 
         /**
          * 上下文里记的是「**实际说出去的话**」。
@@ -1248,8 +1356,10 @@ export default {
          * 多段时正文是空的（宿主用 `qq_send` 逐段发的），如果还按 `finalText` 记，
          * 模型下一轮会以为自己什么都没说，要么重复一遍、要么接不上。
          * 所以多段时把各段拼起来记。
+         *
+         * 只发语音时正文也是空的，这时记 `say` 的内容——那才是用户听到的话。
          */
-        const spoken = segs?.length ? segs.join('\n') : finalText;
+        const spoken = segs?.length ? segs.join('\n') : (finalText || say?.value || '');
         const attachCount = media.length + files.length;
         s.messages.push({
           role: 'assistant',
@@ -1435,27 +1545,53 @@ export default {
         /**
          * 念一段话（语音条）。
          *
-         * QQ 语音要 **silk**，TTS 出的是 mp3，所以中间转两道：
-         * 文字 → mp3 → PCM → silk。全在 tts.js 里，纯 JS/WASM，不要 Python。
+         * 合成在宿主（`POST /tts`，provider 由用户在 dsh-roost 里选），
+         * 这里只做后半段：拿到的 mp3/wav → PCM → silk（QQ 只认 silk）。
          *
-         * 任何一步失败都只是「这条没有语音」——文字已经发过了，不影响对话。
-         */
-        const say = actions.find((a) => a.type === 'say');
-        /**
-         * 语音条也吃同一份预算。
+         * **语音条也吃同一份被动回复预算**：它是「同一句话的语音版」，
+         * 排在文件之后。以前它在预算外，于是「4 块正文 + 1 图 + 语音」
+         * 会打出第 6 次请求，被框架静默降级成主动消息。
          *
-         * 它是“同一句话的语音版”，文字已经发过了，所以优先级排在文件之后。
-         * 以前它在预算外，于是「4 块正文 + 1 图 + 语音」会打出第 6 次请求，
-         * 仍被框架静默降级成主动消息——正是这次想消灭的那种失败。
+         * 失败分两种，都要有下文：
+         *   · 正文已经发过（常见）→ 少了语音不影响对话，记一行 warn 就够
+         *   · 正文是空的（只发语音）→ **把这句话当文字补发**，否则用户零输出，
+         *     而上下文里已经记着「我说过」
          */
-        if (say && c.ttsVoice && budget > 0) {
-          budget -= 1;
-          const file = await synthesize(say.value, {
-            voice: c.ttsVoice,
-            cacheDir: `${ctx.dataDir}/tts-cache`,
-            log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
-          });
-          if (file) await msg.replyVoice?.(file, { local: true });
+        if (say && budget > 0) {
+          if (!ttsOn) {
+            /**
+             * 宿主没开语音（或这一轮的缓存说不可用），但模型还是写了 `<<say>>`
+             * ——可能来自历史上下文。标记已经被摘掉，用户不会看到它；
+             * 这里留一行 warn，免得「她明明说要念，怎么没声音」无从查起。
+             */
+            ctx.logger.warn('[ai-chat] 模型写了 <<say>>，但宿主语音没启用，这段没有语音');
+            /** 纯语音（正文为空）时还得把话补发出去，否则用户什么都没收到 */
+            if (!body && !segs?.length && budget > 0) {
+              budget -= 1;
+              await msg.reply(say.value).catch(() => {});
+            }
+          } else {
+            budget -= 1;
+            const file = await synthesize(c, say.value, {
+              cacheDir: `${ctx.dataDir}/tts-cache`,
+              log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
+            });
+            if (file) {
+              await msg.replyVoice?.(file, { local: true });
+            } else if (!body && !segs?.length && budget > 0) {
+              /**
+               * **合成失败时不能什么都不发。**
+               *
+               * 上面那句注释的前提是「文字已经发过了」——但纯语音路径下
+               * 正文本来就是空的。这时静默跳过 = 用户零输出，而上下文里
+               * 已经记了「我说过这句话」，模型下一轮会以为对方听到了。
+               * 语音发不出去，就把同一句话当文字发出去。
+               */
+              budget -= 1;
+              ctx.logger.warn('[ai-chat] 语音合成失败，改用文字发这句话');
+              await msg.reply(say.value).catch(() => {});
+            }
+          }
         }
 
         // 只有「主动接话」才计入节奏，被 @ 的不占配额
