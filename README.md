@@ -314,6 +314,19 @@ plugins/<插件id>/
 
 ---
 
+## 贡献者
+
+这些插件是外面的人写出来的，收录时不改代码风格，只做索引和签名：
+
+| 贡献者 | 插件 | 提交 |
+|---|---|---|
+| [@haibiandefengshu](https://github.com/haibiandefengshu) | `media-vision`（识图与看视频）、`pixiv-pid`（Pixiv 发图） | [PR #1](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/1)、[PR #2](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/2) |
+
+索引条目里的 `author` 写维护者、作者记在 `credits`，是签名链的要求（索引必须由维护者的私钥签），
+不代表抹掉署名——插件目录里的代码和 README 都保持投稿时的样子。
+
+---
+
 ## 许可
 
 与本项目一致：**永久免费、禁止任何收费、禁止商业使用**。见 [LICENSE](LICENSE)。
