@@ -35,6 +35,10 @@ export function createMerger({ waitSec = 1.5, maxSec = 6, now = () => Date.now()
      * 让它猜——群里两个「小明」、或者有人改了昵称，就会 @ 错人。
      * 单条时不带（宿主会在消息头统一贴 `[昵称 (openid)]`），
      * 免得同一句话出现两个 id。
+     *
+     * **有 QQ号 时号码排在 openid 前面**：openid 换机器人就全变，
+     * 号码不变。模型看到 `小明(QQ 10001 / CBF1E6B3…)` 才会拿号码认人；
+     * 只给 openid 的话，换一次机器人它就把老朋友当陌生人了。
      */
     const text =
       items.length === 1
@@ -42,6 +46,9 @@ export function createMerger({ waitSec = 1.5, maxSec = 6, now = () => Date.now()
         : items
             .map((it) => {
               if (!it.name) return it.text;
+              if (it.uin) {
+                return it.id ? `${it.name}(QQ ${it.uin} / ${it.id})：${it.text}` : `${it.name}(QQ ${it.uin})：${it.text}`;
+              }
               return it.id ? `${it.name}(${it.id})：${it.text}` : `${it.name}：${it.text}`;
             })
             .join('\n');
@@ -89,7 +96,7 @@ export function createMerger({ waitSec = 1.5, maxSec = 6, now = () => Date.now()
      * @param {boolean} [p.force] 被 @ 时不等待，立刻回
      * @returns {Promise<object|null>} 轮到你就拿到 batch，否则 null
      */
-    add({ chatId, msg, text, name = '', id = '', force = false, delayMs = 0 }) {
+    add({ chatId, msg, text, name = '', id = '', uin = '', force = false, delayMs = 0 }) {
       if (force) {
         return Promise.resolve({ text, count: 1, multi: false, msg, senders: name ? [name] : [] });
       }
@@ -108,7 +115,7 @@ export function createMerger({ waitSec = 1.5, maxSec = 6, now = () => Date.now()
        */
       if (delayMs > 0) b.notBefore = Math.max(b.notBefore || 0, now() + delayMs);
 
-      b.items.push({ msg, text, name, id, at: now() });
+      b.items.push({ msg, text, name, id, uin, at: now() });
 
       const p = new Promise((resolve) => b.waiters.push(resolve));
 

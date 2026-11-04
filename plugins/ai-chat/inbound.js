@@ -188,10 +188,31 @@ export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [],
        */
       name: msg.kind === 'c2c' ? (msg.userName || '') : (msg.groupName || ''),
       groupId: msg.groupId || '',
+      /**
+       * 身份对照：QQ号 / 群号。
+       *
+       * 面板绑过才有值，没绑就是空串——**不是错误**，只是「还没认出来」。
+       * 宿主拿到之后应该「有号码就用号码认人，没有才退回 openid」：
+       * openid 是每个 AppID 一套的，换机器人就全变，号码不会。
+       */
+      uin: msg.uin || '',
+      groupUin: msg.groupUin || '',
+      /**
+       * 读旧记忆的备用键：号码本身 + 这个号码名下**所有** openid
+       * （含别的机器人的）。宿主查记忆时应该 `chat_id IN (...)` 一起查，
+       * 否则换过机器人之后就只剩新记忆，旧的等于丢了。
+       *
+       * 人和群分开两组，**别合成一个数组**——混用会让群会话读到私聊记忆。
+       * 所以这里按 kind 选，**不能**用「群别名空了就退成人的」：
+       * 群没绑、发消息的人绑了，那样退会把这个群的记忆读成那个人的。
+       */
+      aliases: msg.kind === 'c2c' ? (msg.userAliases ?? []) : (msg.groupAliases ?? []),
     },
     sender: {
       id: msg.userId || '',
       name: msg.userName || '',
+      /** QQ号，没绑是空串。有它时宿主该拿它当主键认人 */
+      uin: msg.uin || '',
       /**
        * 权限档位。**算不准就不带这几个字段**——宿主拿不到就会按
        * 「身份不明」处理（只给聊天能力），比错报成「普通成员」安全。

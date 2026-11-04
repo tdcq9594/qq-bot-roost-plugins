@@ -2,22 +2,22 @@
   "schema": 1,
   "repo": "tdcq9594/qq-bot-roost-plugins",
   "branch": "main",
-  "updated": "2026-11-03",
+  "updated": "2026-11-04",
   "plugins": [
     {
       "id": "ai-chat",
       "name": "AI 对话",
-      "version": "4.4.0",
+      "version": "4.4.1",
       "description": "把大模型接进群聊和私聊，不用 @ 也不用指令——它自己判断该不该接话；支持撤回、按钮、私聊流式，每会话独立上下文",
       "tags": [
         "AI",
         "对话",
         "LLM"
       ],
-      "frameworkVersion": ">=0.9.10",
+      "frameworkVersion": ">=0.9.12",
       "runtime": "node",
       "path": "plugins/ai-chat",
-      "sha256": "405d956a9b25539f4511b754a7f10b25c86c95475b14797b01778405b23880b7",
+      "sha256": "26dddc9b081a197d2b4ec97e91cbcd0cf64262f38bfcecd711daa1a04124079e",
       "author": "tdcq9594",
       "addedAt": "2026-10-24",
       "verified": "official"
@@ -258,6 +258,29 @@
       "sha256": "b51f11c9308116135e61e813490039e7b161f3d6a865d8a2daad4d05e6f68d5a",
       "frameworkVersion": ">=0.6.0",
       "verified": "official"
+    },
+    {
+      "id": "media-vision",
+      "name": "识图与看视频",
+      "version": "1.0.1",
+      "description": "视频抽帧、大图压小，让会回话的 AI 真能看清消息里的图和视频",
+      "author": "tdcq9594",
+      "credits": "插件由 haibiandefengshu 提交（PR #1），签名由维护者用离线私钥重签",
+      "path": "plugins/media-vision",
+      "tags": [
+        "识图",
+        "视频",
+        "抽帧",
+        "ffmpeg",
+        "多模态"
+      ],
+      "commands": [
+        "识图"
+      ],
+      "addedAt": "2026-11-04",
+      "runtime": "node",
+      "sha256": "12aca28c035e1c43185f4fde25faf404d66e24005ef852a0e8e7cdfa122be7c1",
+      "frameworkVersion": ">=0.6.13"
     },
     {
       "id": "render",

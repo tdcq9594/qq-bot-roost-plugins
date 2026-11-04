@@ -142,6 +142,35 @@ const M = (id) => ({ id });
   ok('合并: 单条 multi 是假', b?.multi === false);
 }
 
+/* ---------------- 绑过 QQ号 的批次 ---------------- */
+
+/**
+ * 绑过号码的人，正文里**号码排在 openid 前面**。
+ *
+ * 理由：openid 是每个 AppID 一套的，换机器人就全变；号码不变。
+ * 模型看到 `小明(QQ 10001 / CBF1E6B3…)` 才会拿号码认人——
+ * 只给 openid 的话，换一次机器人它就把老朋友当陌生人了。
+ */
+{
+  const m = createMerger({ waitSec: 0.02, maxSec: 1 });
+  const p1 = m.add({ chatId: 'g8', msg: M(4), text: '在吗', name: '小明', id: 'AAA111111111', uin: '10001' });
+  const p2 = m.add({ chatId: 'g8', msg: M(5), text: '在的', name: '小红', id: 'BBB222222222' });
+  m.flush('g8');
+  const [b] = await Promise.all([p1, p2]);
+  ok('合并: 有号码时写成「昵称(QQ 号码 / openid)」', b?.text.includes('小明(QQ 10001 / AAA111111111)：在吗'), b?.text);
+  ok('合并: 没号码的那条保持原样', b?.text.includes('小红(BBB222222222)：在的'), b?.text);
+}
+
+{
+  // 只有号码、没有 openid（理论上不会有，但别拼出 `QQ 10001 / ` 这种尾巴）
+  const m = createMerger({ waitSec: 0.02, maxSec: 1 });
+  const p1 = m.add({ chatId: 'g9', msg: M(6), text: 'a', name: '小明', id: '', uin: '10001' });
+  const p2 = m.add({ chatId: 'g9', msg: M(7), text: 'b', name: '小红', id: 'BBB' });
+  m.flush('g9');
+  const [b] = await Promise.all([p1, p2]);
+  ok('合并: 只有号码时不带空 openid', b?.text.includes('小明(QQ 10001)：a'), b?.text);
+}
+
 /* ---------------- 汇总 ---------------- */
 
 clearInterval(keep);

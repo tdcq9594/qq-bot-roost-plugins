@@ -55,14 +55,18 @@ const MAX_SEGMENTS = 5;
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '4.4.0',
+  version: '4.4.1',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   /**
    * 4.3.22 起读 `msg.groupName`（群名不再退成发送者昵称）。
    * 那个字段是框架 v0.9.10 才加的——**先发框架再发这个插件**，
    * 否则群标题会一直是空，只能落到宿主的「群 xxxxxx」兜底。
+   *
+   * 4.4.1 起读 `msg.uin` / `msg.userAliases`（QQ号与 openid 的对照），
+   * 那是 v0.9.12 才有的。老框架上这些字段是空的，插件会自动退回
+   * 「只认 openid」的老行为，不会崩——但号码相关的功能也就不生效。
    */
-  frameworkVersion: '>=0.9.10',
+  frameworkVersion: '>=0.9.12',
 
   /**
    * 监听器优先级：**排最后**。
@@ -1084,6 +1088,9 @@ export default {
         name: msg.userName || '',
         // 多人合并时拼进正文，模型才能 @ 其中某个人（官方只认 openid）
         id: msg.userId || '',
+        // QQ号：面板绑过才有。有它时正文里号码排在 openid 前面——
+        // openid 换机器人就变，号码不变
+        uin: msg.uin || '',
         // mergeWaitSec = 0 表示关闭合并，直接放行
         force: gate.force || c.mergeWaitSec === 0,
         // 冷却期攒着的消息，压到冷却结束再一起交
