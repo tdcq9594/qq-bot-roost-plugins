@@ -140,10 +140,23 @@ ls -l ../bot/keys/trust-private.pem        # 私钥在不在，不在就别往�
 
 ### 1. 收 PR / 放插件
 
-贡献者的 PR 只含 `plugins/<id>/**`。**不要直接点合并**，先拉到本地看：
+贡献者的 PR 只含 `plugins/<id>/**`。**不要直接点 GitHub 的合并按钮**，拉到本地：
 
 ```bash
-git fetch https://github.com/<贡献者>/qq-bot-roost-plugins.git <分支>
+node scripts/merge-pr.mjs 2             # 拉分支 + 校正提交身份 + merge
+node scripts/merge-pr.mjs 2 --dry-run   # 只演一遍，不动仓库
+```
+
+脚本会把每个提交的 author / committer 校正成 **PR 发起人**的 GitHub 身份
+（`<id>+<login>@users.noreply.github.com`）。这不是为了好看：GitHub 的 Contributors
+按 commit 的 **author 邮箱**归户，贡献者在自己机器上带着别人的 `user.email` 提交时，
+这次贡献会记到邮箱主人头上，作者本人在仓库里一次提交都没有。
+
+PR 一旦动了 `index.json` / `index.json.sig` / `trust-public.pem`，脚本直接中止（见上面「签名与信任链」）。
+
+没有 PR、只是拿到一个目录时才手工放：
+
+```bash
 git checkout FETCH_HEAD -- plugins/<id>
 ```
 
