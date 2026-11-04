@@ -178,6 +178,8 @@ ROOST_TRUST_KEY=../bot/keys/trust-private.pem node scripts/build-index.mjs
 
 漏了 `ROOST_TRUST_KEY` → 静默不签名 → CI 验签红。
 
+**社区投稿的 `author` 要在这一步之前补好**：填投稿者的 GitHub 用户名，不填维护者。`build-index.mjs` 会保留手写的展示字段、不会替你改，填错了面板上就一直显示「by 维护者」。`credits` 另外记 PR 号和重签说明；改过 `index.json` 后必须重签，`.sig` 与 `index.json` 进同一个提交。
+
 ### 3. 验签 + 一致性
 
 ```bash
@@ -335,7 +337,7 @@ plugins/<插件id>/
 |---|---|---|
 | [@haibiandefengshu](https://github.com/haibiandefengshu) | `media-vision`（识图与看视频）、`pixiv-pid`（Pixiv 发图） | [PR #1](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/1)、[PR #2](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/2) |
 
-索引条目里的 `author` 写维护者、作者记在 `credits`，是签名链的要求（索引只能由维护者的私钥签），不代表抹掉署名。
+索引条目里的 `author` **一律写投稿者的 GitHub 用户名**，维护者不占署名；`credits` 只补充 PR 编号和「由维护者用离线私钥重签」的说明。签名链约束的是「这份索引由谁的私钥签」，**不约束 `author` 字段**——两者是两回事。以后所有社区投稿都按这条办，面板上显示的就是插件作者本人。
 
 也想放一个进来？见上面「[怎么提交插件](#怎么提交插件贡献者)」。
 

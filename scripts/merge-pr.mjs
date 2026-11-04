@@ -181,7 +181,8 @@ say(`
   1. 过一遍代码：node --check plugins/<id>/index.js
   2. 重建索引 + 签名：
        node scripts/build-index.mjs --key ../bot/keys/trust-private.pem
-  3. 在 index.json 里补 author / credits / addedAt / tags（脚本不覆盖这些字段）
+  3. 在 index.json 里补 credits / addedAt / tags（脚本不覆盖展示字段）；
+     author 一律填投稿者 @${login}，不要填维护者——署名归插件作者本人
   4. 重新签名（改过 index.json 必须重签）：
        node scripts/sign-index.mjs --key ../bot/keys/trust-private.pem
   5. 验：node scripts/build-index.mjs --check && node scripts/sign-index.mjs --verify --key trust-public.pem

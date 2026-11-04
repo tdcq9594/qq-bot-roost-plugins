@@ -103,6 +103,8 @@ async function readMeta(dir) {
  *   2. 展示字段（name / description / tags / author / commands / addedAt /
  *      credits）—— 手写的，往往比代码里的短描述更完整（比如 kun 的
  *      「24 个命令」）。脚本不该改文案，只给新插件补默认值。
+ *      其中 `author` 一律写插件作者本人：社区投稿写 PR 发起人的 GitHub 用户名，
+ *      维护者不占署名（签名链只约束「索引由谁的私钥签」，不约束这个字段）。
  *
  * 早期版本是整份覆盖，结果跑一次「更新索引」就把 tags 清空、把描述里的
  * 补充说明抹掉，看起来像升级，实际是数据丢失。
