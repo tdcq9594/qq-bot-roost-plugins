@@ -2,7 +2,7 @@
   "schema": 1,
   "repo": "tdcq9594/qq-bot-roost-plugins",
   "branch": "main",
-  "updated": "2026-11-03",
+  "updated": "2026-11-04",
   "plugins": [
     {
       "id": "ai-chat",
@@ -258,6 +258,28 @@
       "sha256": "b51f11c9308116135e61e813490039e7b161f3d6a865d8a2daad4d05e6f68d5a",
       "frameworkVersion": ">=0.6.0",
       "verified": "official"
+    },
+    {
+      "id": "media-vision",
+      "name": "识图与看视频",
+      "version": "1.0.1",
+      "description": "视频抽帧、大图压小，让会回话的 AI 真能看清消息里的图和视频",
+      "author": "tdcq9594",
+      "path": "plugins/media-vision",
+      "tags": [
+        "识图",
+        "视频",
+        "抽帧",
+        "ffmpeg",
+        "多模态"
+      ],
+      "commands": [
+        "识图"
+      ],
+      "addedAt": "2026-11-04",
+      "runtime": "node",
+      "sha256": "cbf3a6f713c1d6ae02155db80efa6cd76870680aa949b91be7714815641ff7fe",
+      "frameworkVersion": ">=0.6.13"
     },
     {
       "id": "render",
