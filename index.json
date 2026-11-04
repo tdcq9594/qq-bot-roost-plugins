@@ -283,6 +283,24 @@
       "frameworkVersion": ">=0.6.13"
     },
     {
+      "id": "pixiv-pid",
+      "name": "Pixiv 发图",
+      "version": "1.0.1",
+      "description": "群里出现「pid 12345678」就把那张 Pixiv 插画取回来发到会话，带缓存防重",
+      "author": "tdcq9594",
+      "credits": "插件由 haibiandefengshu 提交（PR #2），签名由维护者用离线私钥重签",
+      "path": "plugins/pixiv-pid",
+      "tags": [
+        "Pixiv",
+        "插画",
+        "发图"
+      ],
+      "addedAt": "2026-11-04",
+      "runtime": "node",
+      "sha256": "31907c937f2fbfe90272e12bcfd5f9a14bbb203cb8116ce410422a130455f0b2",
+      "frameworkVersion": ">=0.6.13"
+    },
+    {
       "id": "render",
       "name": "图片渲染",
       "version": "0.1.0",
