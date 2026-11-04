@@ -52,10 +52,41 @@ const DEFAULT_TIMEOUT_SEC = 90;
  */
 const MAX_SEGMENTS = 5;
 
+/**
+ * 框架等级 → 档位。
+ *
+ *   0 主人 / 1 管理员 / 2 群管 / 3 助手 / 其余（含 9999 NO_PERM）= 普通成员
+ *
+ * 为什么写死数字而不看 `levelName()` 的中文名：0-3 的语义在内核
+ * `levels.js` 里是固定的（「插件只能读不能改」），而中文文案改一个字，
+ * 按名字判断就会全部落到 member —— 那种错误不会报，只会静默降权。
+ *
+ * **2026-11-05 之前的版本是 `lv <= 1 ? 'admin' : 'member'`**，
+ * 把群管（2）和助手（3）一起折进了普通成员，主人在框架里特意配的等级
+ * 到 QQ 这边等于没配。
+ */
+function bucketOfLevel(lv) {
+  /**
+   * 空串 / null 必须先挡：`Number('')` 和 `Number(null)` 都是 0，
+   * 而 0 是主人。当前两个调用点都在 `Number.isFinite(lv)` 之后才进来，
+   * 所以现在碰不到——但这条判断留着，别让以后有人直接调它时 fail-open。
+   * 负数同理：不是合法等级，按「认不出来」处理。
+   */
+  if (lv === null || lv === undefined || lv === '') return '';
+  if (typeof lv !== 'number' && typeof lv !== 'string') return '';
+  const n = Number(lv);
+  if (!Number.isFinite(n) || n < 0) return '';
+  if (n <= 0) return 'owner';
+  if (n <= 1) return 'admin';
+  if (n <= 2) return 'manager';
+  if (n <= 3) return 'helper';
+  return 'member';
+}
+
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '4.4.2',
+  version: '4.4.3',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   /**
    * 4.3.22 起读 `msg.groupName`（群名不再退成发送者昵称）。
@@ -422,7 +453,9 @@ export default {
           bucket = 'owner';
         } else {
           const lv = await ctx.levelOf?.({ userId: openid, kind, groupId: d?.group_openid || '', raw: d });
-          if (Number.isFinite(lv)) bucket = lv <= 1 ? 'admin' : 'member';
+          // 用返回值判空：拿不到等级时 `bucketOfLevel` 返回空串，保持上面的 unknown（最严）
+          const b = bucketOfLevel(lv);
+          if (b) bucket = b;
         }
       } catch {
         /* 拿不到权限就按最严处理 */
@@ -779,8 +812,8 @@ export default {
         const lv = await ctx.levelOf?.(msg);
         if (Number.isFinite(lv)) {
           return {
-            // 框架里 0 = 主人、1 = 管理员，数字越小权限越高
-            bucket: lv <= 1 ? 'admin' : 'member',
+            // 四档：0 主人 / 1 管理员 / 2 群管 / 3 助手，其余是普通成员
+            bucket: bucketOfLevel(lv),
             level: lv,
             role: ctx.levelName?.(lv) ?? '',
           };
