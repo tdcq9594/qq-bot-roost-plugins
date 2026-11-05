@@ -2,7 +2,7 @@
   "schema": 1,
   "repo": "tdcq9594/qq-bot-roost-plugins",
   "branch": "main",
-  "updated": "2026-11-04",
+  "updated": "2026-11-05",
   "plugins": [
     {
       "id": "ai-chat",
@@ -200,6 +200,28 @@
       ],
       "addedAt": "2026-10-24",
       "verified": "official"
+    },
+    {
+      "id": "jm-comic",
+      "name": "禁漫下载",
+      "version": "1.0.0",
+      "description": "群里发禁漫 ID（jm123456 / 18comic 链接），后台下载整本、还原竖切打乱、合成 PDF 并发回会话",
+      "author": "haibiandefengshu",
+      "credits": "插件由 haibiandefengshu 提交（PR #3），签名由维护者用离线私钥重签",
+      "path": "plugins/jm-comic",
+      "tags": [
+        "漫画",
+        "下载",
+        "PDF",
+        "18comic"
+      ],
+      "commands": [
+        "jm"
+      ],
+      "addedAt": "2026-11-05",
+      "runtime": "node",
+      "sha256": "fb6e8f0d8a9952345f41581d312f29b90704dd061babb5f6228cebdef748d227",
+      "frameworkVersion": ">=0.6.13"
     },
     {
       "id": "kun",
