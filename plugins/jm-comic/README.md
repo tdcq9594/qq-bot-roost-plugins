@@ -52,7 +52,7 @@
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `enabled` | 开 | 总开关，关掉后命令也停 |
+| `enabled` | 开 | 总开关，关掉后命令也停 注：需开启dsh插件页面的上传文件功能|
 | `outputFormat` | `pdf` | `pdf` 或 `images` |
 | `descramble` | 开 | 还原竖切打乱；关掉会得到拼错的图，只用于排查 |
 | `pdfQuality` | 85 | PDF 内 JPEG 质量 |
