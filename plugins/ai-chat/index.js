@@ -154,7 +154,7 @@ function bump(k, reason) {
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '4.4.3',
+  version: '4.4.4',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   /**
    * 4.3.22 起读 `msg.groupName`（群名不再退成发送者昵称）。
