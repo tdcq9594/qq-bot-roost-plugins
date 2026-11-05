@@ -1,6 +1,4 @@
 // jm-comic 的 PDF 合成：把一串 JPEG 写成一个 PDF，不依赖任何 npm 包。
-//
-// 为什么自己写：市场要求零依赖；PDF 里嵌 JPEG 只需要 /DCTDecode —— 直接把
 // 原始 JPEG 字节当作图像流塞进去，不用解码、不用 zlib、体积也最小。
 // 参考 Pillow 的行为：每张图一页，页面尺寸 = 像素 / 150dpi * 72pt。
 

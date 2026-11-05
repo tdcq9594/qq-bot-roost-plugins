@@ -2,15 +2,6 @@
 //
 // 群里出现「jm123456」这类 ID（或 18comic 的 album/photo 链接），机器人就把这本
 // 从站点拉下来：还原竖切打乱 → 合成 PDF → 把文件发回提出请求的会话。
-//
-// 与 QQ Agent 版（jm-suomingor）的差别：
-//   · 这里是 roost 的内建插件，注册的是「命令 + 关键词」，没有 LLM 工具层；
-//   · 图像处理用 ffmpeg（crop + vstack），PDF 由本插件的 pdf.js 手写生成，
-//     所以不需要 Python/Pillow —— 市场规范要求零 npm 依赖；
-//   · 上传走 roost 自己的富媒体通道（msg.replyFile），>5MB 自动分片。
-//
-// 站点协议（签名/解密/域名池）在 engine.js；切块数 N 与还原滤镜在 image.js。
-
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 

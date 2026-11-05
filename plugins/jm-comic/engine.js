@@ -82,7 +82,6 @@ export function suffixOf(name, fallback = '.jpg') {
 
 /**
  * 严格判断"这个文件名是不是一张图"——只看真实扩展名，不做任何回退猜测。
- * ⚠️ 不要用 `IMAGE_SUFFIXES.includes(suffixOf(name))`：suffixOf 会把不认识的
  * 扩展名回退成 .jpg，于是 x.pdf 也算图片（按扩展名删文件时会把 PDF 删掉）。
  */
 export function isImageFileName(name) {
@@ -100,7 +99,7 @@ export function imageFileName(rawName, index) {
 
 /**
  * 把漫画 ID 归一化：从 "jm123456" / "JM-123456" / 链接里取出纯数字。
- * ⚠️ 必须带数字边界断言，否则 "123456789012" 会被截成 "123456789" 去联网。
+ * 必须带数字边界断言，否则 "123456789012" 会被截成 "123456789" 去联网。
  */
 export function normalizeAlbumId(raw) {
   const s = String(raw ?? '').trim();
