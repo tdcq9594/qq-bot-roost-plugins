@@ -148,7 +148,7 @@ export default {
   frameworkVersion: '>=0.6.13',
   priority: 60,
   config: {
-    enabled: { type: 'boolean', default: true, label: '启用下载', desc: '总开关；关掉后命令和关键词都不响应' },
+    enabled: { type: 'boolean', default: true, label: '启用下载', desc: '总开关；关掉后命令和关键词都不响应 注：需在roost-能力 打开“发文件”功能' },
     outputFormat: {
       type: 'select',
       default: 'pdf',
