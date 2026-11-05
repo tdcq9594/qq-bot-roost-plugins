@@ -170,6 +170,10 @@ git grep -Il $'\r' -- 'plugins/**'                     # 不能有 CRLF
 grep -rn "eval(\|new Function\|child_process" plugins/<id>/*.js   # 跑外部命令的要人工看
 ```
 
+**顺手补 README 末尾的「贡献者」表**（每个 PR 都要补，别漏）：同一投稿人已有行就往后追加插件名，
+没有就新起一行，插件名后面括号写中文名，提交列放 PR 链接。这一步不影响 CI，
+但漏了作者在仓库里就查不到自己——署名是收投稿的一部分。
+
 ### 2. 重建索引 + 签名
 
 ```bash
@@ -335,7 +339,7 @@ plugins/<插件id>/
 
 | 贡献者 | 插件 | 提交 |
 |---|---|---|
-| [@haibiandefengshu](https://github.com/haibiandefengshu) | `media-vision`（识图与看视频）、`pixiv-pid`（Pixiv 发图） | [PR #1](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/1)、[PR #2](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/2) |
+| [@haibiandefengshu](https://github.com/haibiandefengshu) | `media-vision`（识图与看视频）、`pixiv-pid`（Pixiv 发图）、`jm-comic`（禁漫下载） | [PR #1](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/1)、[PR #2](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/2)、[PR #3](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/3) |
 
 索引条目里的 `author` **一律写投稿者的 GitHub 用户名**，维护者不占署名；`credits` 只补充 PR 编号和「由维护者用离线私钥重签」的说明。签名链约束的是「这份索引由谁的私钥签」，**不约束 `author` 字段**——两者是两回事。以后所有社区投稿都按这条办，面板上显示的就是插件作者本人。
 
