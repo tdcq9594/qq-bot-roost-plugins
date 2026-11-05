@@ -78,6 +78,43 @@ ok('「只在 @ 时回复」模式下普通聊天不理', (() => {
   return r.go === false && /只在/.test(r.reason);
 })());
 
+ok('「只在 @ 时」模式下，免@窗口 / 命令不算被叫', (() => {
+  /**
+   * 线上真实 bug：`addressed` 是 `mentioned || isCommand || sticky` 的合并布尔，
+   * 而 sticky 是「@ 过一次或发过命令」之后 3 分钟的免 @ 窗口。
+   * 合并判断的后果：设了「只在 @ 时」，只要 @ 过一次或发过一条别的插件的命令
+   * （比如「扔骰子」），接下来 3 分钟每句都被当成在叫她——设置看起来完全失效。
+   */
+  const r = shouldConsider(group({ addressed: true }), conf({ decide: 'mention' }), {});
+  return r.go === false;
+})());
+
+ok('「@ 之后一段时间」：@ 一次打开窗口，窗口内普通消息也接', (() => {
+  const st = {};
+  const r1 = shouldConsider(group({ mentioned: true }), conf({ decide: 'window', windowMin: 3 }), st);
+  if (!(r1.go === true && r1.force === true)) return false;
+  if (!(st.windowUntil > Date.now())) return false;
+  const r2 = shouldConsider(group({ content: '接着说' }), conf({ decide: 'window', windowMin: 3 }), st);
+  return r2.go === true && r2.force === false;
+})());
+
+ok('「@ 之后一段时间」：窗口过了就恢复安静', (() => {
+  const st = { windowUntil: Date.now() - 1 };
+  const r = shouldConsider(group({ content: '现在还能听到吗' }), conf({ decide: 'window', windowMin: 3 }), st);
+  return r.go === false && /窗口/.test(r.reason);
+})());
+
+ok('「@ 之后一段时间」：命令不能打开窗口（扔骰子不该让她句句接话）', (() => {
+  const st = {};
+  const r = shouldConsider(group({ addressed: true, content: '扔骰子' }), conf({ decide: 'window', windowMin: 3 }), st);
+  return r.go === false && !st.windowUntil;
+})());
+
+ok('「AI 自己判断」模式下，免@窗口仍然算被叫（行为不变）', (() => {
+  const r = shouldConsider(group({ addressed: true }), conf(), {});
+  return r.go === true && r.force === true;
+})());
+
 ok('普通消息交给模型判断（不强制）', (() => {
   const r = shouldConsider(group(), conf(), {});
   return r.go === true && r.force === false;

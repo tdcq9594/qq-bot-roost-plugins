@@ -82,11 +82,21 @@ export function shouldConsider(msg, c, state = {}) {
   // 私聊一律理——用户专门点开来跟你说话，没有「打扰」的问题
   if (msg.kind === 'c2c') return { go: true, force: true, reason: '私聊' };
 
+  const now = Date.now();
+  /** 「@ 之后」窗口时长（毫秒）。只有 `window` 模式用得上 */
+  const winMs = Math.max(1, Number(c.windowMin) || 3) * 60_000;
+
   /**
-   * 群聊里明确在叫我的：@ 了、或者回复了我的消息。
-   * 这两种情况再让模型判断「要不要接」就太蠢了。
+   * 真 @ 了：任何模式下都直接接，不再让模型判断「要不要接」。
+   *
+   * `window` 模式顺手把窗口续上——**窗口只由真 @ 打开**，
+   * 不由「命令」打开（以前 `bot.js` 的 sticky 是 `mentioned || isCommand`，
+   * 于是发一条「扔骰子」也能让她接下来三分钟句句接话，那是 bug）。
    */
-  if (msg.mentioned || msg.addressed) return { go: true, force: true, reason: '被 @ 或回复' };
+  if (msg.mentioned) {
+    if (c.decide === 'window') state.windowUntil = now + winMs;
+    return { go: true, force: true, reason: '被 @' };
+  }
 
   // 别的插件的指令到不了这里（框架在分派阶段就 return 了），
   // 但用户可能把前缀改成别的东西，所以再兜一道
@@ -100,13 +110,30 @@ export function shouldConsider(msg, c, state = {}) {
   }
 
   /**
-   * `decide: 'mention'` 是「只在被叫到时说话」模式。
-   * 适合不希望机器人插话的群——省 token，也省心。
+   * 三种模式的收敛点（`ai` 之外的两个在这里挡住）。
+   *
+   *   · `mention` —— 只有真 @ 才接。**不认**框架的「免 @ 窗口」：
+   *     那个窗口是 `mentioned || isCommand || sticky` 的合并布尔
+   *     （`message.js:266`），认它就等于「@ 过一次之后句句都接」，
+   *     用户设的「只在被 @ 时」形同虚设（线上真实反馈）。
+   *   · `window`  —— @ 之后 `windowMin` 分钟内都接；过点恢复安静。
+   *     窗口状态放在 `state`（per-chat 的 pace 对象）里，不依赖框架的 sticky。
    */
-  if (c.decide === 'mention') return { go: false, reason: '当前是「只在 @ 时回复」模式' };
+  if (c.decide === 'mention') return { go: false, reason: '当前是「只在被 @ 时回复」模式' };
+  if (c.decide === 'window') {
+    if (state.windowUntil && now < state.windowUntil) {
+      return { go: true, force: false, reason: '在 @ 之后的窗口内' };
+    }
+    return { go: false, reason: '不在 @ 之后的窗口内' };
+  }
+
+  /**
+   * `ai` 模式：框架的「免 @ 窗口 / 命令」仍然算在叫她。
+   * 这个模式本来就每条都看，force 只是让它绕开情绪闸门和配额。
+   */
+  if (msg.addressed) return { go: true, force: true, reason: '在免@窗口内 / 命令' };
 
   // 冷却：刚回过就别急着再回，否则一个人能跟它刷屏
-  const now = Date.now();
   if (state.lastReplyAt && now - state.lastReplyAt < c.cooldownSec * 1000) {
     /**
      * 冷却期内**不丢消息**，攒着。

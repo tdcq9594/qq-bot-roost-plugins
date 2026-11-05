@@ -4,7 +4,7 @@
  * 三件事：
  *   1. **切段**——QQ 单条有长度上限，长回答硬发会被平台截断（或者直接失败）
  *   2. **不切坏 Markdown**——代码块、列表被拦腰截断，渲染出来是乱的
- *   3. **被动回复次数有上限**——同一条消息最多回 5 次（`msg_seq` 1–5），
+ *   3. **被动回复次数有上限**——按场景取（群聊 5 / 单聊 4，见框架 `outbound.js`），
  *      切太多段会撞墙，所以段数也要封顶
  */
 
@@ -269,7 +269,8 @@ export async function sendMedia(msg, items, { log = () => {}, max = MAX_MEDIA } 
  * 发回复。
  *
  * 第一段走被动回复（带 msg_id，不消耗主动额度），后续段同样走 `msg.reply`——
- * 框架会自动递增 `msg_seq`，只要不超过 5 次就行（`MAX_CHUNKS` 就是为此留的余量）。
+ * 框架会自动递增 `msg_seq`，上限按场景取（群聊 5 / 单聊 4，见框架
+ * `outbound.js` 的 `PASSIVE_MAX_REPLIES`）；`MAX_CHUNKS` 是为此留的余量。
  *
  * `markdown` 开着时第一段用 markdown 消息类型发；它内部失败会返回 null，
  * 这时降级成纯文本——不降级的话用户什么都收不到，以为机器人挂了。
@@ -361,7 +362,7 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
    * 但「模型决定分几条说」要的是**几条独立消息**——攒批会把它们吞成一条。
    *
    * `replyNow` 是被动回复（带 msgId），不占主动消息配额；
-   * 上限是官方给的「同一条消息最多回 5 次」，所以段数由调用方先卡住。
+   * 上限按场景取（群聊 5 / 单聊 4），所以段数由调用方先卡住。
    */
   const emit = immediate && typeof msg.replyNow === 'function' ? msg.replyNow : msg.reply;
   /**

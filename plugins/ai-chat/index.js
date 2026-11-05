@@ -28,7 +28,7 @@
 import { createAdapter } from './adapter/index.js';
 import { createBridge } from './adapter/bridge.js';
 import { buildUserContent } from './inbound.js';
-import { sendReply, sendMedia, buildKeyboard, MAX_MEDIA } from './outbound.js';
+import { sendReply, sendMedia, buildKeyboard } from './outbound.js';
 import { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseDuration, parseButton, textOf, isFromBot, SKIP_MARK, DEFAULT_IGNORE } from './decide.js';
 import { ChatStore, PaceStore } from './session.js';
 import { createMerger } from './merge.js';
@@ -48,9 +48,28 @@ const DEFAULT_TIMEOUT_SEC = 90;
  *
  * 宿主管自己的上限（`dsh-roost` 的 `qqTools.maxParts`，默认 3），
  * 这里只是**兜底硬顶**——webhook 那类宿主万一一次塞几十段，
- * 不能让它把群刷爆。QQ 被动回复本身也只让回 5 次（msg_seq 1–5）。
+ * 不能让它把群刷爆。QQ 被动回复上限按场景取（群聊 5 次 / 单聊 4 次）。
  */
 const MAX_SEGMENTS = 5;
+
+/**
+ * 同一条用户消息能被动回几次：**群聊 5、单聊 4**。
+ *
+ * 框架 `bot/src/outbound.js` 的 `PASSIVE_MAX_REPLIES` 已是这个口径，按 kind
+ * 精确拦截（超了抛 40034128 或降级成主动消息）。这里以前一律拿 `MAX_SEGMENTS`
+ * 当预算，单聊就多算一格：本地以为还有一格、框架已到上限，最后一格静默降级，
+ * 白烧当天主动额度，群里没 `group_push` 时直接失败，表现是「最后一张图丢了」。
+ *
+ * `MAX_SEGMENTS` 继续保留：它是**段数硬顶**兼这里的群聊默认值，别删。
+ * 预算一律走 `maxSegmentsOf(msg)`，不要在别处直接引用那个常量。
+ */
+const PASSIVE_REPLY_MAX = { group: MAX_SEGMENTS, c2c: 4 };
+
+/** 按消息场景取被动回复预算；未知场景按群聊兜底 */
+export function maxSegmentsOf(msg) {
+  const kind = String(msg?.kind ?? '');
+  return PASSIVE_REPLY_MAX[kind] ?? PASSIVE_REPLY_MAX.group;
+}
 
 /**
  * 框架等级 → 档位。
@@ -81,6 +100,55 @@ function bucketOfLevel(lv) {
   if (n <= 2) return 'manager';
   if (n <= 3) return 'helper';
   return 'member';
+}
+
+/**
+ * 「她怎么不理人」的可观测性计数。
+ *
+ * 全是**只增不改的计数**，不参与任何判断——加计数不改变接话行为。
+ * 以前 `paceSt.busy` 静默丢消息、规则门拒消息、配额挡消息都没有痕迹，
+ * 排查「群里说了 184 句、日记只有 24 轮」只能靠猜。
+ *
+ * 模块级变量：`dashboard()` 是同步的、拿不到 ctx（框架只传插件对象），
+ * 所以数字只能挂在这里；落盘由 `setup()` 里注入的 `dashSave` 负责。
+ */
+const dash = {
+  seen: 0,          // 进入 handle 的消息（分母）
+  forwarded: 0,     // 真正跑了一轮模型
+  ruleBlocked: 0,   // shouldConsider 拒（mention/窗口/空/指令前缀）
+  quotaBlocked: 0,  // 每分钟配额用满
+  moodBlocked: 0,   // 社交意愿低
+  busyDropped: 0,   // 等上一轮超时，仍然丢
+  busyWaited: 0,    // 等上一轮跑完后正常继续（不是丢，不进分母）
+  claimed: 0,       // 别的插件接过
+  merged: 0,        // 合并窗口里被并进别的批次（不算丢）
+  bots: 0,          // 对方是机器人
+  noDsh: 0,         // 没连上 DSH
+  failed: 0,        // 进了一轮但模型调用抛错
+  reasons: {},      // 拒绝原因 → 次数
+  since: Date.now(),
+};
+let dashSave = null;
+let dashLoaded = false;
+
+/** 把带动态数字的原因收敛成一类，否则「冷却还剩 7 秒」会占掉一行 */
+function normReason(r) {
+  const t = String(r || '未说明');
+  if (/每分钟最多/.test(t)) return '每分钟配额用满';
+  if (/^以「/.test(t)) return '像别的插件的指令（前缀）';
+  if (/冷却中/.test(t)) return '冷却中（攒着）';
+  if (/窗口/.test(t)) return '不在 @ 之后的窗口内';
+  return t;
+}
+
+function bump(k, reason) {
+  if (k in dash && typeof dash[k] === 'number') dash[k] += 1;
+  if (reason) {
+    const r = normReason(reason);
+    dash.reasons[r] = (dash.reasons[r] || 0) + 1;
+  }
+  /** 10 秒节流由 dashSave 内部管；这里不管成功失败，写不进去不影响接话 */
+  dashSave?.();
 }
 
 export default {
@@ -115,10 +183,34 @@ export default {
       default: 'ai',
       options: [
         { value: 'ai', label: 'AI 自己判断（读全量消息）' },
-        { value: 'mention', label: '只在被 @ 或回复时说话' },
+        { value: 'mention', label: '只有被 @ 时说话' },
+        { value: 'window', label: '@ 之后一段时间内都接话' },
       ],
       label: '什么时候接话',
-      desc: '「AI 自己判断」= 群里每条消息都看一眼，该接才接；「只在被叫到时」= 其余消息完全不理，最省 token',
+      /**
+       * 三个模式的边界要写清，否则用户分不出「只在被 @」和「@ 之后一段时间」：
+       *
+       *   · `ai`      —— 每条都看一眼，模型决定接不接（最贵、最自然）；
+       *   · `mention` —— 只有真 @ / 回复才接，其余一律不理（最省）；
+       *   · `window`  —— @ 一次之后 `windowMin` 分钟内所有消息都接，
+       *                  过了窗口回到「不理」。
+       *
+       * 为什么单开一个 `window`：框架本来就有「免 @ 窗口」（@ 一次或发命令后
+       * 180 秒内都算被叫，见 `message.js` 的 `addressed`）。它以前**隐式**作用于
+       * 所有模式，于是设了「只在被 @」也会被它绕过——线上真实反馈。
+       * 现在把它变成显式选项，时长也交给人配。
+       */
+      desc: '「AI 自己判断」= 每条都看一眼，该接才接；'
+        + '「只有被 @ 时」= 其余一律不理，最省；'
+        + '「@ 之后一段时间」= 叫一次之后那段时间内接着聊，过点恢复安静（时长见下一项）',
+    },
+    windowMin: {
+      type: 'number',
+      default: 3,
+      min: 1,
+      max: 120,
+      label: '「@ 之后」窗口（分钟）',
+      desc: '只在「@ 之后一段时间内都接话」模式下生效。@ 或回复一次，接下来这么多分钟内她继续接话',
     },
     cooldownSec: {
       type: 'number',
@@ -261,6 +353,45 @@ export default {
   },
 
   /** @param {object} ctx Roost 插件上下文 */
+  /**
+   * 面板「设置 → 运行数据」页。框架通过 `/api/plugins/dashboard` 一次性收走，
+   * 前端按 `metrics` + `note` 排版——不用改框架，也不用改前端。
+   *
+   * 意图：把「为什么没搭话」从猜变成看数字。尤其 `busyDropped`，
+   * 它是全链路里唯一**连日志都没有**的丢弃点（debug 关着时）。
+   */
+  dashboard() {
+    const top = Object.entries(dash.reasons)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([r, n]) => `${r}  ${n}`)
+      .join('\n');
+    const lost = dash.ruleBlocked + dash.quotaBlocked + dash.moodBlocked + dash.busyDropped;
+    /** 每个 return / 异常分支都有对应计数，这里才减得干净（负数说明漏计，别夹掉） */
+    const unaccounted = dash.seen - dash.forwarded - dash.failed - lost
+      - dash.claimed - dash.merged - dash.bots - dash.noDsh;
+    return {
+      metrics: [
+        { label: '看到消息', value: dash.seen, unit: '条', hint: '进入判定的入站消息（分母）' },
+        { label: '转发给 DSH', value: dash.forwarded, unit: '条', hint: '真的跑了一轮模型' },
+        { label: '规则挡掉', value: dash.ruleBlocked, unit: '条', hint: '只在被 @ / 窗口 / 空消息 / 指令前缀' },
+        { label: '配额挡掉', value: dash.quotaBlocked, unit: '条', hint: '每分钟最多 N 条用满' },
+        { label: '忙态丢掉', value: dash.busyDropped, unit: '条', hint: '等上一轮超时才丢，正常应很少' },
+        { label: '忙态等到', value: dash.busyWaited, unit: '条', hint: '等上一轮跑完后正常继续，不是丢' },
+        { label: '情绪闸门', value: dash.moodBlocked, unit: '条', hint: '社交意愿低，只接明确被叫的' },
+        { label: '别的插件接了', value: dash.claimed, unit: '条' },
+        { label: '合并进批次', value: dash.merged, unit: '条', hint: '不是丢，被并进同一轮' },
+        { label: '机器人消息', value: dash.bots, unit: '条' },
+        { label: '没连上 DSH', value: dash.noDsh, unit: '条' },
+        { label: '调用失败', value: dash.failed, unit: '条', hint: '进了一轮，模型没跑成' },
+        { label: '未归类', value: unaccounted, unit: '条', hint: '正常应为 0；负数说明有重复计数' },
+      ],
+      note:
+        `统计起点：${new Date(dash.since).toLocaleString('zh-CN', { hour12: false })}（会落盘，重启不清零）\n\n` +
+        `拒绝原因 Top：\n${top || '（还没有被挡的消息）'}`,
+    };
+  },
+
   setup(ctx) {
     /**
      * 启动时打一行能力标记。
@@ -274,6 +405,74 @@ export default {
      */
     ctx.logger.info(`[ai-chat] 已加载 ${this?.version ?? '?'}（多段直发：segs + immediate）`);
 
+    /**
+     * 运行数据落盘。`dashboard()` 拿不到 ctx，所以数字在模块级 `dash` 上；
+     * 这里把上次的读回来、之后按 10 秒节流写回，重启不清零。
+     *
+     * 全链路 try/catch：`ctx.storage` 在某些老框架版本里可能没有，
+     * 计数是增强功能，绝不能因为写不进去就让整个插件起不来。
+     */
+    if (!dashLoaded) {
+      dashLoaded = true;
+      /**
+       * 恢复开始前的基线。
+       *
+       * `ctx.storage.get` 是 **async**（要 `await fs.readFile`），从 setup
+       * 到磁盘读回之间确实可能已经进过消息。那时 `bump()` 已经把数加上了，
+       * 直接拿存档覆盖 `dash` 会把这批增量整个抹掉——表现为「刚启动那几句
+       * 不算数」，而且拒绝原因明细也一起被顶掉。
+       *
+       * 所以先记基线，恢复完再把「窗口内的增量」加回去。
+       * `since` 不参与：它就是要用存档里的旧起点。
+       */
+      const dashBase = { ...dash, reasons: { ...dash.reasons } };
+      try {
+        Promise.resolve(ctx.storage?.get?.('dashboard', null))
+          .then((u) => {
+            if (!u || typeof u !== 'object') return;
+            const delta = {};
+            for (const [k, v] of Object.entries(dash)) {
+              if (typeof v === 'number' && k !== 'since') delta[k] = v - (Number(dashBase[k]) || 0);
+            }
+            const deltaReasons = {};
+            for (const [r, n] of Object.entries(dash.reasons)) {
+              const d = n - (Number(dashBase.reasons[r]) || 0);
+              if (d > 0) deltaReasons[r] = d;
+            }
+            for (const [k, v] of Object.entries(u)) {
+              if (k === 'reasons' && v && typeof v === 'object') {
+                dash.reasons = { ...v };
+              } else if (typeof dash[k] === typeof v && typeof v !== 'object') {
+                dash[k] = v;
+              }
+            }
+            for (const [k, d] of Object.entries(delta)) {
+              if (typeof dash[k] !== 'number') continue;
+              /**
+               * 旧存档里**没有这个键**时（新增列 / 老版本存档，`failed` /
+               * `bots` / `noDsh` 都是这次才加的），它没被上面的循环覆盖，
+               * 仍留着窗口内的值。此时再 `+= delta` 会翻倍。
+               * 缺键就先回到基线，再加增量。
+               */
+              if (!(k in u)) dash[k] = Number(dashBase[k]) || 0;
+              dash[k] += d;
+            }
+            for (const [r, n] of Object.entries(deltaReasons)) {
+              dash.reasons[r] = (Number(dash.reasons[r]) || 0) + n;
+            }
+          })
+          .catch(() => {});
+      } catch {}
+    }
+    let lastDashSave = 0;
+    dashSave = () => {
+      if (Date.now() - lastDashSave < 10_000) return;
+      lastDashSave = Date.now();
+      try {
+        Promise.resolve(ctx.storage?.set?.('dashboard', { ...dash })).catch(() => {});
+      } catch {}
+    };
+
     const num = (v, def, min = 0) => {
       const n = Number(v);
       return Number.isFinite(n) && n >= min ? n : def;
@@ -283,7 +482,8 @@ export default {
     const conf = () => {
       const c = ctx.config ?? {};
       return {
-        decide: c.decide === 'mention' ? 'mention' : 'ai',
+        decide: ['mention', 'window'].includes(c.decide) ? c.decide : 'ai',
+        windowMin: num(c.windowMin, 3, 1),
         cooldownSec: num(c.cooldownSec, 20),
         mergeWaitSec: num(c.mergeWaitSec, 1.5, 0),
         mergeMaxSec: num(c.mergeMaxSec, 6, 1),
@@ -1039,6 +1239,7 @@ export default {
      */
     async function handle(msg) {
       const c = conf();
+      bump('seen');
 
       /**
        * 机器人发的消息不接。
@@ -1050,6 +1251,7 @@ export default {
        * 想让它俩聊就把「接机器人的话」打开（`answerBots`）。
        */
       if (!c.answerBots && isFromBot(msg)) {
+        bump('bots', '对方是机器人');
         if (c.debug) {
           ctx.logger.debug(`[ai-chat] 不接（对方是机器人）：${String(msg.content).slice(0, 30)}`);
         }
@@ -1067,6 +1269,7 @@ export default {
        * 但它回过之后我再去接一句，群里就是两个人同时说话。
        */
       if (msg.claimedBy || msg.replied) {
+        bump('claimed', '别的插件接过了');
         if (c.debug) ctx.logger.debug(`[ai-chat] 已被 ${msg.claimedBy || '别的插件'} 接过，不重复回答`);
         return;
       }
@@ -1075,6 +1278,9 @@ export default {
       const gate = shouldConsider(msg, c, paceSt);
 
       if (!gate.go) {
+        /** 配额单独一类：它和「设了只在被 @ 时」是完全不同的两种原因 */
+        const quota = /每分钟最多/.test(String(gate.reason));
+        bump(quota ? 'quotaBlocked' : 'ruleBlocked', gate.reason);
         if (c.debug) ctx.logger.debug(`[ai-chat] 不接（${gate.reason}）：${String(msg.content).slice(0, 30)}`);
         return;
       }
@@ -1086,6 +1292,7 @@ export default {
        * 被 @ / 被点名的（`gate.force`）不受影响：那是明确在叫它。
        */
       if (!gate.force && (await isLowMood())) {
+        bump('moodBlocked', '社交意愿低');
         if (c.debug) ctx.logger.debug('[ai-chat] 不接（社交意愿低）');
         return;
       }
@@ -1098,6 +1305,7 @@ export default {
        * 缺的是 DSH 那边的地址（dsh-roost 没装 / 没启动）。
        */
       if (!c.dshUrl) {
+        bump('noDsh', '没连上 DSH');
         if (gate.force) {
           await msg
             .reply(`还没连上 DSH。\n装一下 dsh-roost 插件，或者在设置里填 DSH 地址（默认 http://127.0.0.1:17321）。`)
@@ -1129,25 +1337,77 @@ export default {
         // 冷却期攒着的消息，压到冷却结束再一起交
         delayMs: gate.cooldownLeftMs || 0,
       });
-      if (!batch) return;
+      if (!batch) {
+        bump('merged', '合并进别的批次');
+        return;
+      }
 
       // 之后一律用批次里最后那条消息（msg_id 最新，回复窗口最稳）
       msg = batch.msg;
 
       // 攒的这段时间里，别的插件可能已经回了
-      if (msg.claimedBy || msg.replied) return;
-
-      // 同一个会话同时只跑一轮：刷屏时不要并发一堆请求
-      if (paceSt.busy) {
-        if (c.debug) ctx.logger.debug(`[ai-chat] ${msg.chatId} 上一轮还没完，跳过`);
+      if (msg.claimedBy || msg.replied) {
+        bump('claimed', '合并期间被别的插件接过了');
         return;
       }
 
+      // 同一个会话同时只跑一轮：刷屏时不要并发一堆请求
+      if (paceSt.busy) {
+        /**
+         * **等这一轮跑完，而不是把消息丢掉。**
+         *
+         * 真机实测（17:38:37–39 连发 5 条）：一轮耗时 4.2 秒，这 5 条全撞在
+         * `paceSt.busy` 上被静默吃掉，连「上一条还在想」都不回，运行数据里
+         * 「忙态丢掉」直接 +5。宿主侧的排队在**投递之后**，根本接不到这些消息。
+         *
+         * 三条边界：
+         *   · 150ms 轮询，每轮都真的 sleep，不会自旋打满 CPU；
+         *   · 上限 30 秒（远小于 QQ 的 180 秒被动回话窗口），等超时才算丢；
+         *   · 多条同时等会自然串行：第一个同步拿到 `busy=true`，其余在下一个
+         *     tick 看到仍旧忙，继续等下一轮，不会一起冲进模型。
+         */
+        const deadline = Date.now() + Math.min(30_000, (Number(c.timeoutSec) || 150) * 1000);
+        while (paceSt.busy && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 150));
+        }
+        if (paceSt.busy) {
+          bump('busyDropped', '等上一轮超时，仍然丢弃');
+          if (c.debug) ctx.logger.debug(`[ai-chat] ${msg.chatId} 等上一轮超时，跳过`);
+          return;
+        }
+        /** 只记「等过」，不占分母——这条消息接下来会正常计入某一类结果 */
+        bump('busyWaited');
+        if (c.debug) ctx.logger.debug(`[ai-chat] ${msg.chatId} 等上一轮结束，继续`);
+        /** 等的这段时间里，别的插件可能已经回过话了 */
+        if (msg.claimedBy || msg.replied) {
+          bump('claimed', '等待期间被别的插件接过了');
+          return;
+        }
+      }
+
       paceSt.busy = true;
-      paceSt.controller = new AbortController();
-      const s = store.get(msg.chatId);
-      const started = Date.now();
+      let s = null;
       let timer = null;
+      /** 模型这一轮到底跑没跑成：用来防止 forwarded 和 failed 双计 */
+      let modelRan = false;
+      const started = Date.now();
+      /**
+       * 初始化必须自己有一层 try。
+       *
+       * 原来 `store.get()` 在**主 try 之外**，它一抛异常就绕过了 finally 里的
+       * `paceSt.busy = false`——这个会话从此永久忙，后面每条都白等 30 秒再被丢，
+       * 而且 `seen` 加了却不落任何结果类，面板分母会对不上。审校抓到的 P1。
+       */
+      try {
+        paceSt.controller = new AbortController();
+        s = store.get(msg.chatId);
+      } catch (e) {
+        paceSt.busy = false;
+        paceSt.controller = null;
+        bump('failed');
+        ctx.logger.warn(`[ai-chat] 起轮失败：${e.message}`);
+        return;
+      }
 
       try {
         // 超时：到点直接中断，别让用户干等
@@ -1256,10 +1516,16 @@ export default {
           batch,
         });
 
+        /** 到这里才真跑过一轮模型：上面的 await 任一抛错都会进 catch，不计数 */
+        bump('forwarded');
+        modelRan = true;
         const { text: cleaned, actions } = parseActions(text);
         const confirm = await runActions(msg, actions);
-        /** 富媒体（图片 / 语音）单独发，不混进文本 */
-        const media = actions.filter((a) => a.type === 'image' || a.type === 'voice');
+        /**
+         * 富媒体（图片 / 语音）单独发，不混进文本。
+         * `let`：下面还要把分段 `qq_send` 参数里的动作并进来（见 segMedia）。
+         */
+        let media = actions.filter((a) => a.type === 'image' || a.type === 'voice');
         /**
          * 「把这句话念出来」的内容。
          *
@@ -1301,7 +1567,7 @@ export default {
          * 模式下检查，被叫到时模型一旦输出 `<skip>` 就会直接漏到群里。
          */
         if (isSkip(cleaned) && !confirm && !media.length && !files.length && !say) {
-          if (s.messages.at(-1)?.role === 'user') s.messages.pop();
+          if (s?.messages?.at(-1)?.role === 'user') s.messages.pop();
           // 被明确叫到却不吭声是反常的，留条 info 方便排查「@ 了没反应」
           if (gate.force) ctx.logger.info(`[ai-chat] ${msg.chatId.slice(0, 8)} 被叫但模型选择不回`);
           else if (c.debug) ctx.logger.debug(`[ai-chat] ${msg.chatId} 模型判断不接话`);
@@ -1336,7 +1602,10 @@ export default {
          * **还要过一遍 `parseActions`**：`<<mood:>>` / `<<remember:>>` 这类
          * 标记如果写在 `qq_send` 的参数里，宿主那边（dsh-roost）不一定拦得住，
          * 而这里直接按 `parts` 发原文——不摘就成了「标记原样出现在群里」。
-         * 动作本身已经在上面对整段 `text` 解析时收集过了，这里只借用它的清理能力。
+         *
+         * 以前这里只取 `.text`、把解析出来的 `actions` 丢了，于是「分两段说、
+         * 第二段带图」时 `media` 为空，文字到了图一张都不发（日志连 sendMedia
+         * 都没有）。现在把每段的动作也带下去交给 `segMedia` 统一收集。
          */
         /**
          * **幂等键必须在过滤之前和文本绑定**。
@@ -1347,10 +1616,14 @@ export default {
          */
         const paired =
           Array.isArray(parts) && parts.length > 1
-            ? parts.map((p, i) => ({
-                text: parseActions(stripSkip(String(p ?? ''))).text.trim(),
-                requestId: String(requestIds?.[i] ?? '').trim(),
-              }))
+            ? parts.map((p, i) => {
+                const parsed = parseActions(stripSkip(String(p ?? '')));
+                return {
+                  text: parsed.text.trim(),
+                  requestId: String(requestIds?.[i] ?? '').trim(),
+                  actions: Array.isArray(parsed.actions) ? parsed.actions : [],
+                };
+              })
             : null;
         /**
          * 超过 `MAX_SEGMENTS` 的段**发不出去**，必须明确结算成失败。
@@ -1372,6 +1645,19 @@ export default {
         const segs = kept ? kept.map((x) => x.text) : null;
         /** 和 `segs` 一一对应；空串表示这一段没有幂等键 */
         const segIds = kept ? kept.map((x) => x.requestId) : [];
+        /**
+         * 分段里的富媒体动作并进 `media`。
+         *
+         * 必须在下面「什么都没有就不发」的早退判断**之前**定型：否则空 media
+         * 直接 return，分段里的图片标记又白丢。只取被保留的段——被段数硬顶
+         * 截断的段没发出去，它的图也不该发。
+         */
+        if (kept) {
+          const segMedia = kept.flatMap(
+            (x) => (x.actions || []).filter((a) => a.type === 'image' || a.type === 'voice'),
+          );
+          if (segMedia.length) media = media.concat(segMedia);
+        }
         /**
          * 动作产生的补充话（比如「记下了」）跟着**最后一段**走。
          *
@@ -1411,7 +1697,7 @@ export default {
         const prevSent = lastSent.get(msg.chatId);
 
         /**
-         * 被动回复总次数预算：官方「同一条消息最多回 5 次」（`msg_seq` 1–5）。
+         * 被动回复总次数预算：官方上限按场景取（群聊 5 / 单聊 4），见 `maxSegmentsOf(msg)`。
          *
          * **文本、图片、文件共用这一个预算**。以前这个变量只写在多段分支里，
          * 而媒体在分支外发——5 段文本 + 3 张图＝8 次请求，超出的部分
@@ -1420,7 +1706,7 @@ export default {
          *
          * 所以预算提到外面，后面每发一条都从同一个池子里扣。
          */
-        let budget = MAX_SEGMENTS;
+        let budget = maxSegmentsOf(msg);
 
         if (segs?.length) {
           /**
@@ -1430,7 +1716,7 @@ export default {
            * 而"分两段说"通常总共才十几个字，会被合并成一条——
            * 模型对"发几条"的控制就完全失效了，那 `qq_send` 调几次都一个样。
            *
-           * 被动回复总次数预算：官方「同一条消息最多回 5 次」（`msg_seq` 1–5）。
+           * 被动回复总次数预算：官方上限按场景取（群聊 5 / 单聊 4），见 `maxSegmentsOf(msg)`。
            * `MAX_SEGMENTS` 只限了段数，没限**每段再被切几块**——某段特别长时
            * `planChunks` 会再拆开，加起来就超过 5 次，框架这时会**静默降级成主动消息**
            * （见 `src/outbound.js` 的 `downgrade`），白白消耗当天主动额度。
@@ -1511,7 +1797,7 @@ export default {
          * 最后一格吃掉，文件一个都发不出去——而宿主早在轮中就回了 `ok:true`、
          * 模型也跟人说了「发你了」。少一张图没人会怪，少一个文件就是事故。
          *
-         * 两者**共用同一个 `budget`**（被动回复总共 5 次）。超了宁可少发，
+         * 两者**共用同一个 `budget`**（按 `maxSegmentsOf(msg)` 分场景取）。超了宁可少发，
          * 也不能让框架把剩下的偷偷降级成主动消息——那既烧当天额度，
          * 群里没有 `group_push` 授权时还会直接失败。
          */
@@ -1532,7 +1818,12 @@ export default {
               log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
             });
             if (media.length > (sentN || 0)) {
-              ctx.logger.warn(`[ai-chat] ${media.length - (sentN || 0)} 个附件没发出去（预算 ${mediaRoom} 格 / 上限 ${MAX_MEDIA}）`);
+              /**
+               * 实际生效的上限是传进 sendMedia 的 `mediaRoom`。以前这里打印的是
+               * `MAX_MEDIA`（未传 max 时的默认值），排查时会误以为附件是被 3 格
+               * 硬顶裁掉的，方向全错。报真正生效的值与发出数量即可。
+               */
+              ctx.logger.warn(`[ai-chat] ${media.length - (sentN || 0)} 个附件没发出去（本次上限 ${mediaRoom} 格，发出 ${sentN || 0} 个）`);
             }
             /**
              * 按**占用过的次数**扣，不是「成功几个」。
@@ -1644,6 +1935,14 @@ export default {
           );
         }
       } catch (e) {
+        /**
+         * 只在**模型没跑成**时记 failed。
+         *
+         * `modelRan` 之后的发送环节（`emit` / `replyVoice`）也可能抛错，
+         * 但那时这一轮确实跑过模型、已经计了 forwarded；再计 failed
+         * 会让分母变负（seen - forwarded - failed = -1）。
+         */
+        if (!modelRan) bump('failed');
         const name = e?.name ?? '';
         if (name === 'AbortError') {
           if (c.debug) ctx.logger.info(`[ai-chat] ${msg.chatId} 已中断`);
@@ -1656,7 +1955,7 @@ export default {
           if (gate.force) await msg.reply(`出错了：${friendly}`).catch(() => {});
         }
         // 失败就把这轮的提问撤掉，免得下一轮带着「没答上的问题」继续
-        if (s.messages.at(-1)?.role === 'user') s.messages.pop();
+        if (s?.messages?.at(-1)?.role === 'user') s.messages.pop();
       } finally {
         if (timer) clearTimeout(timer);
         paceSt.busy = false;
