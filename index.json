@@ -2,7 +2,7 @@
   "schema": 1,
   "repo": "tdcq9594/qq-bot-roost-plugins",
   "branch": "main",
-  "updated": "2026-11-05",
+  "updated": "2026-11-06",
   "plugins": [
     {
       "id": "ai-chat",
@@ -71,21 +71,22 @@
     {
       "id": "demo-x",
       "name": "演示插件",
-      "version": "0.1.0",
-      "description": "入门示例：一个命令 + 一份配置 + 一份菜单，照着改就能写自己的插件",
+      "version": "0.2.0",
+      "description": "读完源码就能写插件：分步教程、可复制骨架、全接口可运行示例",
       "tags": [
         "示例",
         "入门"
       ],
       "runtime": "node",
       "path": "plugins/demo-x",
-      "sha256": "fc1071eb3fb0d45fc5ad4625d8760630370779d7f6254ad4f7837b8fbb8947fe",
+      "sha256": "8a85a2b73e06f3bd842bd2a120027263cc6c889ad8be645098f0f338aa71c95f",
       "author": "tdcq9594",
       "commands": [
-        "hello"
+        "demo"
       ],
       "addedAt": "2026-10-24",
-      "verified": "official"
+      "verified": "official",
+      "frameworkVersion": ">=1.0.0"
     },
     {
       "id": "dice",
