@@ -94,11 +94,11 @@ jobs:
           # 否则会出现：框架 master 有插件依赖的新能力但还没发布 → 插件 CI 假绿，
           # 用户装到旧版运行时坏；或 master 瞬时坏掉 → 插件 CI 假红。
           # **每次发框架新版都要改这里**（或设仓库 Variables 的 FRAMEWORK_REF 覆盖）。
-          # 当前对应框架 v1.0.9（v1.0.9 起发图占位空格可在面板配置；v1.0.7 起有
-          # msg_type=8 图文卡片 replyTuwen；v1.0.6 起富媒体发图不再带占位空格；
-          # v1.0.4 起消息带 uin / userAliases，被动回复上限群 5 / 单聊 4，
-          # ai-chat 4.4.4 依赖它）。v1.0.8 修的是 1.0.7 实例锁判活回归，接口无变化。
-          ref: ${{ vars.FRAMEWORK_REF || 'v1.0.9' }}
+          # 当前对应框架 v1.0.10（面板 WebUI 重构，接口无变化；v1.0.9 起发图占位空格
+          # 可在面板配置；v1.0.7 起有 msg_type=8 图文卡片 replyTuwen；v1.0.6 起富媒体
+          # 发图不再带占位空格；v1.0.4 起消息带 uin / userAliases，被动回复上限
+          # 群 5 / 单聊 4，ai-chat 4.4.4 依赖它）。v1.0.8 修的是 1.0.7 实例锁判活回归。
+          ref: ${{ vars.FRAMEWORK_REF || 'v1.0.10' }}
 
       - name: 跑插件测试
         shell: bash
