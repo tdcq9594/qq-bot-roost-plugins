@@ -227,19 +227,68 @@ test('没开团的群里，TRPG 专属命令仍然接住并投递', async () => 
   ctx.__teardown();
 });
 
-test('开团之后，普通发言也归守密人（不用每条 @）', async () => {
+test('probeState 关（默认）：/trpg start 记过的群，普通发言也归守密人', async () => {
   const ctx = makeCtx({ token: 't0k3n' });
-  dsh.running = true;
+  dsh.running = false; // 远端状态不重要：默认关着探测，只看本地名单
   dsh.received.length = 0;
   plugin.setup(ctx);
+
+  // 先开团，本地名单记下这个群
+  await runMw(ctx, makeMsg('/trpg start'));
+  await settle();
 
   const msg = makeMsg('我拿铁丝去撬抽屉');
   assert.equal(await runMw(ctx, msg), false, '开团中普通发言要被接住');
   await settle();
-  assert.ok(dsh.received.some((e) => /铁丝/.test(e.text)));
+  assert.ok(dsh.received.some((e) => /铁丝/.test(e.text)), '行动要投递给 dsh-trpg');
+
+  ctx.__teardown();
+});
+
+test('probeState 关（默认）：/trpg pause 之后普通发言交回普通聊天', async () => {
+  const ctx = makeCtx({ token: 't0k3n' });
+  dsh.running = false;
+  plugin.setup(ctx);
+
+  await runMw(ctx, makeMsg('/trpg start'));
+  await settle();
+  await runMw(ctx, makeMsg('/trpg pause'));
+  await settle();
+
+  assert.equal(await runMw(ctx, makeMsg('随便聊两句')), true, '暂停后不能继续吞消息，否则 ai-chat 收不到');
+
+  ctx.__teardown();
+});
+
+test('probeState 打开时以 dsh-trpg 的 /trpg/state 为准', async () => {
+  const ctx = makeCtx({ token: 't0k3n', probeState: true });
+  dsh.running = true;
+  dsh.received.length = 0;
+  plugin.setup(ctx);
+
+  const msg = makeMsg('我推开门走进去');
+  assert.equal(await runMw(ctx, msg), false, '远端说在跑团，普通发言要被接住');
+  await settle();
+  assert.ok(dsh.received.some((e) => /推开门/.test(e.text)));
 
   ctx.__teardown();
   dsh.running = false;
+});
+
+test('probeState 关时不会去打 /trpg/state（旧版 dsh-trpg 在这个端点上会崩宿主）', async () => {
+  const ctx = makeCtx({ token: 't0k3n' });
+  let stateHits = 0;
+  const saved = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('/trpg/state')) stateHits += 1;
+    return saved(url, init);
+  };
+  plugin.setup(ctx);
+  await runMw(ctx, makeMsg('/st 亚瑟 hp12'));
+  await settle();
+  assert.equal(stateHits, 0, 'probeState 关闭时一个 /trpg/state 请求都不该发');
+  globalThis.fetch = saved;
+  ctx.__teardown();
 });
 
 test('dsh-trpg 不可达时，命令进 Outbox 而不是丢消息', async () => {

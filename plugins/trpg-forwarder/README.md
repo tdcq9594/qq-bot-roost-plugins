@@ -41,7 +41,7 @@
 | `timeoutMs` | `3000` | 单次投递超时 |
 | `maxAttempts` | `6` | 投递最多重试次数，超了丢事件并告警 |
 | `logReply` | 开 | 每次直发写一条 debug 日志 |
-| `probeState` | 关 | 是否向 `dsh-trpg` 查询群状态。旧版 `dsh-trpg` 在 `/trpg/state` 上会崩宿主，所以默认关闭，靠 `/trpg start\|pause` 的本地名单兜底 |
+| `probeState` | 关 | 是否向 `dsh-trpg` 查询群状态（5 秒缓存）。**关着**＝只看本地名单（`/trpg start` 记、`/trpg pause\|end` 清），零网络请求；**打开**＝以 DSH 侧状态为准，能感知「在面板或别处改了状态」，但每秒活跃群会多一次本地往返，且旧版 `dsh-trpg` 在 `/trpg/state` 上会崩宿主 |
 
 ---
 
@@ -62,6 +62,24 @@
 # 另一半在不在
 curl -H "x-trpg-token: 你的令牌" http://127.0.0.1:17322/trpg/health
 ```
+
+## 部署前提：面板设了访问密钥时
+
+本插件的下行端点 `/api/plugins/trpg-forwarder/r/send` 挂在面板的鉴权之后
+（`src/web/server.js` 里所有 `/api/plugins/<id>/r/*` 都要先过 `authorized()`）。
+
+| 面板 `webui.accessKey` | 结果 |
+|---|---|
+| 空（本机默认） | 直连可用，不需要额外配置 |
+| 已设 | `dsh-trpg` 调 `/send` 会收到 `401 {"error":"访问密钥无效"}` |
+
+设了密钥时，要在 `dsh-trpg` 设置页填 `roostAccessKey`（或改它的 config.json），
+插件会给 `/send` 请求带上 `x-access-key` 头。
+
+> 注意区分两个错误码：`访问密钥无效` = 面板密钥没配；`bad_token` = 共享令牌对不上。
+> 两者修法完全不同，日志里别混着看。
+
+---
 
 | 现象 | 原因 |
 |---|---|
