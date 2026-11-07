@@ -69,6 +69,28 @@
       "verified": "official"
     },
     {
+      "id": "comfy-draw",
+      "name": "本地绘图 (ComfyUI)",
+      "version": "1.0.2",
+      "description": "发「ai绘图+一只猫」，它就用你电脑上的 ComfyUI 画出来并直接发到会话",
+      "author": "haibiandefengshu",
+      "credits": "插件由 haibiandefengshu 提交（PR #4），签名由维护者用离线私钥重签",
+      "path": "plugins/comfy-draw",
+      "tags": [
+        "AI 绘图",
+        "ComfyUI",
+        "本地",
+        "出图"
+      ],
+      "commands": [
+        "绘图"
+      ],
+      "addedAt": "2026-11-07",
+      "runtime": "node",
+      "sha256": "1d1d582e8495359325c1135c9df94872d742bdd5bab2528975ffba056f388bc9",
+      "frameworkVersion": ">=0.6.13"
+    },
+    {
       "id": "demo-x",
       "name": "演示插件",
       "version": "0.2.0",
@@ -341,6 +363,28 @@
       ],
       "addedAt": "2026-10-24",
       "verified": "official"
+    },
+    {
+      "id": "trpg-forwarder",
+      "name": "跑团转发器",
+      "version": "0.4.1",
+      "description": "把群消息桥给本机 dsh-trpg，再把骰点与剧情直发回群；单独装它不会回复",
+      "author": "haibiandefengshu",
+      "credits": "插件由 haibiandefengshu 提交（PR #5），签名由维护者用离线私钥重签",
+      "path": "plugins/trpg-forwarder",
+      "tags": [
+        "跑团",
+        "TRPG",
+        "转发",
+        "DSH"
+      ],
+      "commands": [
+        "trpg"
+      ],
+      "addedAt": "2026-11-07",
+      "runtime": "node",
+      "sha256": "1f73b818992c9bdde1450b44bb046a135f7715f6abd5298cf86cbc2d5830d471",
+      "frameworkVersion": ">=1.0.0"
     }
   ]
 }

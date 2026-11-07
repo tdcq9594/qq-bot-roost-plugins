@@ -339,7 +339,7 @@ plugins/<插件id>/
 
 | 贡献者 | 插件 | 提交 |
 |---|---|---|
-| [@haibiandefengshu](https://github.com/haibiandefengshu) | `media-vision`（识图与看视频）、`pixiv-pid`（Pixiv 发图）、`jm-comic`（禁漫下载） | [PR #1](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/1)、[PR #2](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/2)、[PR #3](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/3) |
+| [@haibiandefengshu](https://github.com/haibiandefengshu) | `media-vision`（识图与看视频）、`pixiv-pid`（Pixiv 发图）、`jm-comic`（禁漫下载）、`comfy-draw`（本地绘图）、`trpg-forwarder`（跑团转发器） | [PR #1](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/1)、[PR #2](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/2)、[PR #3](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/3)、[PR #4](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/4)、[PR #5](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/5) |
 
 索引条目里的 `author` **一律写投稿者的 GitHub 用户名**，维护者不占署名；`credits` 只补充 PR 编号和「由维护者用离线私钥重签」的说明。签名链约束的是「这份索引由谁的私钥签」，**不约束 `author` 字段**——两者是两回事。以后所有社区投稿都按这条办，面板上显示的就是插件作者本人。
 
