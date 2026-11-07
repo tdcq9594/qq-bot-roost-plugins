@@ -25,7 +25,7 @@ const ok = (name, cond, detail = '') => {
   }
 };
 
-const { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseDuration, parseButton, textOf, isFromBot, SKIP_MARK } = await import(
+const { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseDuration, parseButton, textOf, isFromBot, SKIP_MARK, normalizeSource } = await import(
   pathToFileURL(path.join(PLUGIN, 'decide.js'))
 );
 
@@ -232,8 +232,8 @@ ok('剥标记: 没有标记时原样返回', stripSkip('今天确实挺热的') 
 
 {
   /**
-   * 模型不该写 `<<file:>>`（发文件要走 `qq_send_file` 工具），但它和
-   * `<<image:>>` 长得一样，手滑写出来很正常。**认识它**的唯一目的就是
+   * 模型不该写 `<<file:>>`（发文件要走 `qq_send_file` 工具），但它和别的
+   * 「名字 + 路径」标记长得一样，手滑写出来很正常。**认识它**的唯一目的就是
    * 别让那串路径原文漏到群里——`parseActions` 是白名单式摘除，不认识就原样留着。
    */
   const r = parseActions('发你了 <<file: C:\\Users\\me\\报告.docx>>');
@@ -254,8 +254,8 @@ ok('剥标记: 没有标记时原样返回', stripSkip('今天确实挺热的') 
    * 标记原样放行了，所以这里必须认，否则两边都没人摘。
    */
   const r = parseActions('<<image：a.png>>');
-  ok('动作: 全角冒号也认', r.actions[0]?.type === 'image' && r.actions[0].value === 'a.png', JSON.stringify(r.actions));
-  ok('动作: 全角标记同样摘干净', r.text === '', JSON.stringify(r.text));
+  ok('就地图: 全角冒号也认', r.text === '![](a.png)', JSON.stringify(r.text));
+  ok('就地图: 不产生 image 动作（留给框架排版）', r.actions.length === 0);
 }
 
 {
@@ -284,10 +284,58 @@ ok('剥标记: 没有标记时原样返回', stripSkip('今天确实挺热的') 
 }
 
 {
-  const r = parseActions('画好了 <<image: D:/out/cat.png>>');
-  ok('动作: 解析出 image', r.actions.length === 1 && r.actions[0].type === 'image');
-  ok('动作: image 带路径', r.actions[0].value === 'D:/out/cat.png', r.actions[0].value);
-  ok('动作: 正文只剩「画好了」', r.text === '画好了', JSON.stringify(r.text));
+  /** 两种标记的分工：`<<image:>>` 就地（转成框架的 `![](路径)`），`<<image-alone:>>` 单独发一条 */
+  const inline = parseActions('画好了 <<image: D:/out/cat.png>> 你看');
+  ok('就地图: 换成框架认的 markdown 图片', inline.text === '画好了 ![](D:/out/cat.png) 你看', JSON.stringify(inline.text));
+  ok('就地图: 不产生 image 动作（位置交给框架排版）', inline.actions.length === 0);
+
+  const alone = parseActions('画好了 <<image-alone: D:/out/cat.png>>');
+  ok('单独图: 抽成 image 动作', alone.actions.length === 1 && alone.actions[0].type === 'image');
+  ok('单独图: 带路径', alone.actions[0].value === 'D:/out/cat.png', alone.actions[0].value);
+  ok('单独图: 正文只剩「画好了」', alone.text === '画好了', JSON.stringify(alone.text));
+
+  // 路径带右括号：框架的 `\(([^)]*)\)` 装不下，退回单独发，别静默丢图
+  const paren = parseActions('前 <<image: D:/下载/截图(1).png>> 后');
+  ok('括号路径: 退回单独发', paren.actions.length === 1 && paren.actions[0].value === 'D:/下载/截图(1).png', JSON.stringify(paren.actions));
+  ok('括号路径: 正文不留半截语法', !paren.text.includes('![]('), JSON.stringify(paren.text));
+
+  // 模型讲解写法时写的是占位词，不像路径 → 原样留着，别把句子吃掉
+  const doc = parseActions('同条写 <<image: 图片路径>>，单独写 <<image-alone: 图片路径>>。');
+  ok('讲解写法: 占位词不当指令', doc.actions.length === 0, JSON.stringify(doc.actions));
+  ok('讲解写法: 整句完整保留', doc.text === '同条写 <<image: 图片路径>>，单独写 <<image-alone: 图片路径>>。', JSON.stringify(doc.text));
+
+  /**
+   * `file:///C:/…` 必须换回本地路径。
+   *
+   * 不换的话框架把它当远程引用原样塞进 markdown，QQ 拉不到、也不报错——
+   * 用户收到一条没有图的消息，日志里什么都看不到。
+   */
+  const fileUrl = parseActions('前 <<image: file:///C:/a/b.png>> 后');
+  ok('file:///: 换成本地路径', fileUrl.text === '前 ![](C:/a/b.png) 后', JSON.stringify(fileUrl.text));
+  ok('file:///: 百分号编码也解开', parseActions('<<image: file:///C:/a%20b/c.png>>').text === '![](C:/a b/c.png)');
+  ok('file:///: 单独发图那条路同样处理',
+    parseActions('<<image-alone: file:///C:/a.png>>').actions[0]?.value === 'C:/a.png');
+  ok('其它协议不动', normalizeSource('https://x/a.png') === 'https://x/a.png'
+    && normalizeSource('qqbot-media://image/v1/x') === 'qqbot-media://image/v1/x');
+
+  // 代码块里的标记只是示例，不执行
+  const fenced = parseActions('示例：\n```\n<<image: D:/out/cat.png>>\n```\n完');
+  ok('代码块: 标记不当作图', fenced.actions.length === 0 && !fenced.text.includes('![]('), JSON.stringify(fenced.text));
+
+  /**
+   * 无捕获组的标记（`<<clear>>`）走的是同一个 `take()`。
+   *
+   * 曾经按「一定有捕获组」取回调参数，导致偏移量取到的是整串、`inCode()`
+   * 恒假 —— 模型在代码块里举例「用 <<clear>> 可以清空」，会话上下文就被
+   * 真的清掉了。这条断言钉住「代码块里的示例一律不执行」对**所有**标记成立。
+   */
+  const codeClear = parseActions('写法示例：\n```\n<<clear>>\n```\n就这样');
+  ok('代码块: 无值标记（clear）也不执行', codeClear.actions.length === 0, JSON.stringify(codeClear.actions));
+  ok('代码块: clear 示例原样留在正文', codeClear.text.includes('<<clear>>'), JSON.stringify(codeClear.text));
+  const inlineClear = parseActions('行内 `<<clear>>` 说明');
+  ok('行内代码: clear 不执行', inlineClear.actions.length === 0, JSON.stringify(inlineClear.actions));
+  // 正文里真写的 clear 仍然执行，别把正常用法一起关掉
+  ok('正文: clear 照常执行', parseActions('真的清空 <<clear>>').actions[0]?.type === 'clear');
 }
 
 {
@@ -296,8 +344,8 @@ ok('剥标记: 没有标记时原样返回', stripSkip('今天确实挺热的') 
 }
 
 {
-  // 图片和文字标记能共存
-  const r = parseActions('记一下 <<remember: 喜欢猫>> <<image: a.png>>');
+  // 图片（单独发）和文字标记能共存
+  const r = parseActions('记一下 <<remember: 喜欢猫>> <<image-alone: a.png>>');
   ok('动作: 文本动作和媒体动作共存', r.actions.length === 2);
   ok('动作: 类型对', r.actions.map((a) => a.type).join() === 'remember,image');
 }

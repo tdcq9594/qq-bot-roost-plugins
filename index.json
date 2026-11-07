@@ -2,12 +2,12 @@
   "schema": 1,
   "repo": "tdcq9594/qq-bot-roost-plugins",
   "branch": "main",
-  "updated": "2026-11-06",
+  "updated": "2026-11-07",
   "plugins": [
     {
       "id": "ai-chat",
       "name": "AI 对话",
-      "version": "4.4.4",
+      "version": "4.4.5",
       "description": "把大模型接进群聊和私聊，不用 @ 也不用指令——它自己判断该不该接话；支持撤回、按钮、私聊流式，每会话独立上下文",
       "tags": [
         "AI",
@@ -17,7 +17,7 @@
       "frameworkVersion": ">=0.9.12",
       "runtime": "node",
       "path": "plugins/ai-chat",
-      "sha256": "9c5dc220c32913ad66cdb702b32de2ef8c1324589a460b2bc0da496c8fbc459d",
+      "sha256": "3c2c2ccb8a773c62519c47f3b1938b54ad648dd21e03baff2c15a88b92eec817",
       "author": "tdcq9594",
       "addedAt": "2026-10-24",
       "verified": "official"
@@ -56,7 +56,7 @@
       "frameworkVersion": ">=0.6.13",
       "runtime": "node",
       "path": "plugins/anime-img",
-      "sha256": "a75bf5f0ff9a30bc1fdf727dd71877e5f348cced3634bfc45c336ce475b892ef",
+      "sha256": "ed937ba925c21338d0f20ef70093f9c0e53c5f61bbcda6f8c172724747389819",
       "author": "tdcq9594",
       "commands": [
         "来张图",
@@ -278,7 +278,7 @@
       ],
       "addedAt": "2026-10-23",
       "credits": "玩法设计来自 Agam《简单的养鲲游戏》(CQP, 2020)",
-      "sha256": "b51f11c9308116135e61e813490039e7b161f3d6a865d8a2daad4d05e6f68d5a",
+      "sha256": "ec3db19b54f23bdafd785041062046af33a0e0a9db815ea0276bff0cecc888e9",
       "frameworkVersion": ">=0.6.0",
       "verified": "official"
     },

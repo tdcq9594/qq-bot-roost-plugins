@@ -232,10 +232,20 @@ export function isSkip(text) {
  *   <<forget: 关键词>>   忘掉一件事
  *   <<persona: 内容>>    改这个会话的人设
  *   <<clear>>            清空这个会话的上下文
- *   <<image: 地址或路径>> 发一张图（表情包、生成的图都走这条）
+ *   <<image: 地址或路径>>       就地插图（图文同条，按标记位置排版）
+ *   <<image-alone: 地址或路径>> 单独发一条图片消息（文字与图各占一条）
  *   <<voice: 地址或路径>> 发一条语音
  *   <<close: 收在哪 | 下次怎么接>> 给这段对话收个尾（这里只摘，执行在 DSH 宿主）
  *   <<silence: 2h>>      自己安静一阵子（30m / 2h / 1d，不写单位按分钟）
+ *
+ * **两种发图方式，语义不同，别混**：
+ *   · `<<image: 路径>>` 留在正文原位 → 这里把它换成 `![](路径)`，由框架
+ *     `msg.replyAuto()` 按位置排版，图片和文字在**同一条**消息里；
+ *   · `<<image-alone: 路径>>` → 抽成 image 动作，正文先发、图片**单独一条**紧跟。
+ *
+ * 为什么模型侧不用标准 `![alt](路径)`：那种语法太常见，模型讲解「怎么发图」
+ * 时会自然写出来，然后被当真指令执行（实测）。标记是内部协议，讲解时
+ * 不会被自然写出；代码块里的标记也不执行。
  *
  * @param {string} text
  * @returns {{ text: string, actions: Array<{type:string, value?:string}> }}
@@ -244,9 +254,30 @@ export function parseActions(text) {
   const actions = [];
   let out = String(text ?? '');
 
+  /**
+   * 代码块 / 行内代码里的标记**不执行**。
+   *
+   * 不做的后果（2026-11-07 子智能体实测）：模型讲解「怎么发图」时会把示例
+   * 原样写出来，示例就被当成真指令——图片被真的发出去，或正文里那半句
+   * 被替换成「读不到」提示，用户看到的是病句。
+   *
+   * 两条保守规则，宁可少屏蔽也不要误吞正文：围栏必须有闭合才认，
+   * 行内代码必须同一行内成对。
+   */
   const take = (re, type, hasValue = true) => {
-    out = out.replace(re, (_, v) => {
-      actions.push(hasValue ? { type, value: String(v).trim() } : { type });
+    const ranges = codeRanges(out);
+    /**
+     * 回调参数**不能按「一定有捕获组」取**：`replace` 的实参形状是
+     * `(匹配, 组1…组n, 偏移, 原串)`。
+     * `<<clear>>` 那条正则没有捕获组，写成 `(m, v, offset)` 会把「偏移」
+     * 收进 `v`、把「原串」收进 `offset`，`inCode()` 拿到字符串恒假 ——
+     * 模型在代码块里举例 `<<clear>>` 就会真的把会话上下文清掉（实测）。
+     * 所以按位置从尾部取：倒数第二个永远是偏移。
+     */
+    out = out.replace(re, (...args) => {
+      const offset = args[args.length - 2];
+      if (typeof offset === 'number' && inCode(offset, ranges)) return args[0];
+      actions.push(hasValue ? { type, value: String(args[1]).trim() } : { type });
       return '';
     });
   };
@@ -259,12 +290,31 @@ export function parseActions(text) {
   take(/<<replace[:：]\s*([\s\S]*?)>>/gi, 'replace');
   take(/<<persona[:：]\s*([\s\S]*?)>>/gi, 'persona');
   take(/<<clear>>/gi, 'clear', false);
-  // 富媒体：图片（表情包/生图都走这条）和语音
-  take(/<<image[:：]\s*([\s\S]*?)>>/gi, 'image');
+  /**
+   * `<<image-alone: 路径>>` = **单独发一条图**：抽成动作，正文发完由
+   * `sendMedia` 另发一条。
+   *
+   * 要「图文同条」写 `<<image: 路径>>` —— 那个**不能**在这里抽：它的位置
+   * 就是图要出现的位置，抽掉位置信息图只能被堆到末尾。它在最后一步
+   * 被转成框架认的 `![](路径)`（见 `convertInlineImages`）。
+   *
+   * **值不像路径就原样留着**：模型讲解写法时会写 `<<image-alone: 图片路径>>`
+   * 这种占位词，抽走的话正文就少一截（实测会变成「单独发一条图——写 ，话照常…」）。
+   */
+  {
+    const ranges = codeRanges(out);
+    out = out.replace(/<<image-alone[:：]\s*([^<>]*?)>>/gi, (m, v, offset) => {
+      if (inCode(offset, ranges)) return m;
+      const p = normalizeSource(String(v ?? '').trim());
+      if (!looksLikeSource(p)) return m;
+      actions.push({ type: 'image', value: p });
+      return '';
+    });
+  }
   take(/<<voice[:：]\s*([\s\S]*?)>>/gi, 'voice');
   /**
    * `<<file: 路径>>`：模型**不该**写这个（发文件要走 `qq_send_file` 工具），
-   * 但它长得和 `<<image:>>` 一模一样，手滑写出来很正常。
+   * 它和图片标记是同一类「名字 + 路径」的形状，手滑写出来很正常。
    *
    * **只摘不执行**：真正的路径校验和发送都在 dsh-roost 那边（只有它知道
    * 谁能发、能发什么、文件是否存在）。这里认识它的唯一目的是——
@@ -312,12 +362,157 @@ export function parseActions(text) {
    * dsh-roost 的 `applyMemoryMarkers` 另一套）。哪一边加了新标记、另一边没跟上，
    * `<<xxx:...>>` 就会漏进群。`mood` 已经这么漏过一次了。
    * 只匹配「字母开头 + 可选冒号值」的形状，普通文本里的尖括号不会误伤。
+   *
+   * 两个例外：
+   *   · 代码块里的标记不动——那是模型在举例；
+   *   · `<<image: 路径>>` 不摘——它是「就地插图」，下一步要转成 `![](路径)`。
    */
-  out = out.replace(/<<[a-z][a-z-]{0,20}(?:[:：][^<>]{0,2000})?>>/gi, '');
+  {
+    const ranges = codeRanges(out);
+    out = out.replace(/<<[a-z][a-z-]{0,20}(?:[:：][^<>]{0,2000})?>>/gi, (m, offset) => {
+      if (inCode(offset, ranges)) return m;
+      if (/^<<\s*image(?:-alone)?\s*[:：]/i.test(m)) return m;
+      return '';
+    });
+  }
+
+  /**
+   * 最后一步：把「就地插图」标记换成框架认的 markdown 图片。
+   *
+   * **这一层是模型协议与框架能力的分界线**：模型只见 `<<image: 路径>>`，
+   * 框架只见 `![](路径)`。换掉 `![]()` 当模型语法的原因是它太常见——模型
+   * 讲解发图时会自然写出，然后被当真指令执行；标记是内部协议，讲解时
+   * 不会被自然写出，路径里的括号 / 引号 / 空格也不会再和语法打架。
+   */
+  out = convertInlineImages(out, (p) => {
+    actions.push({ type: 'image', value: p });
+    return '';
+  });
 
   // 摘掉标记后可能留下多余空行，收一下
   out = out.replace(/\n{3,}/g, '\n\n').trim();
   return { text: out, actions };
+}
+
+/**
+ * 找出「不该解析」的代码区间：``` 围栏与行内 `…`。
+ *
+ * @param {string} text
+ * @returns {Array<[number, number]>}
+ */
+export function codeRanges(text) {
+  const s = String(text ?? '');
+  const ranges = [];
+  const fence = /^[ \t]*(`{3,})[^\n]*\n[\s\S]*?^[ \t]*\1[ \t]*$/gm;
+  for (const m of s.matchAll(fence)) ranges.push([m.index, m.index + m[0].length]);
+  const inline = /`[^`\n]+`/g;
+  for (const m of s.matchAll(inline)) {
+    const at = m.index ?? 0;
+    if (ranges.some(([a, b]) => at >= a && at < b)) continue;
+    ranges.push([at, at + m[0].length]);
+  }
+  return ranges;
+}
+
+const inCode = (at, ranges) => ranges.some(([a, b]) => at >= a && at < b);
+
+/**
+ * 这个值像不像「真能拿去的图/语音地址」。
+ *
+ * 模型讲解写法时会写出 `<<image: 图片路径>>` 这种占位词，它不像路径。
+ * 判据只认形状（协议头 / 盘符 / 分隔符 / 图片扩展名），不做文件存在性检查——
+ * 存在性归框架，这里只负责「这是指令还是举例」。
+ */
+const SOURCE_PREFIX = /^(?:[a-z][a-z0-9+.-]*:\/\/|\\\\|\/|[a-z]:[\\/]|\.{1,2}[\\/])/i;
+const IMAGE_EXT_TAIL = /\.(png|jpe?g|gif|webp|bmp)(?:[?#].*)?$/i;
+export function looksLikeSource(p) {
+  const s = String(p ?? '').trim();
+  if (!s) return false;
+  return SOURCE_PREFIX.test(s) || IMAGE_EXT_TAIL.test(s);
+}
+
+/**
+ * 把 `file:///C:/…` 还原成本地路径。
+ *
+ * 不做的后果是**静默失败**：框架把带 scheme 的一律当远程引用，`file:///…`
+ * 会原样进 markdown，QQ 拉不到、也不报错——用户看到一条没有图的消息，
+ * 日志里干干净净。模型偶尔会这么写（尤其被问「路径怎么写」之后）。
+ *
+ * 只在明确是 `file://` 时动，其它协议（http/https/qqbot-media）一概不碰；
+ * 百分号编码解不开就退回原串，交给后面的存在性检查去降级。
+ *
+ * @param {string} p
+ * @returns {string}
+ */
+export function normalizeSource(p) {
+  const s = String(p ?? '').trim();
+  const m = /^file:\/\/(?:\/)?(.+)$/i.exec(s);
+  if (!m) return s;
+  const raw = m[1];
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+/**
+ * 就地插图标记 → 框架认的 `![](路径)`；代码块里的原样保留。
+ *
+ * `onUnsupported` 处理**表达式装不下的路径**：框架的图片正则用
+ * `\(([^)]*)\)`，路径里带右括号（Windows 下载目录的 `截图(1).png`）会被
+ * 截断成 `截图(1`，然后报「读不到」。这种路径退回「单独发一条图」，
+ * 至少图能发出去，不会静默消失。回调返回替换文本（通常是空串）。
+ *
+ * @param {string} text
+ * @param {(path:string)=>string} [onUnsupported]
+ */
+export function convertInlineImages(text, onUnsupported = null) {
+  const s = String(text ?? '');
+  const ranges = codeRanges(s);
+  return s.replace(/<<\s*image\s*[:：]\s*([^<>]*?)>>/gi, (m, src, offset) => {
+    if (inCode(offset, ranges)) return m;
+    const p = normalizeSource(String(src ?? '').trim());
+    if (!p) return '';
+    if (!looksLikeSource(p)) return m; // 占位词（讲解写法）：留着，别当指令
+    if (p.includes(')') && typeof onUnsupported === 'function') return String(onUnsupported(p) ?? '');
+    return `![](${p})`;
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* 通用图文出口的接入辅助（框架 msg.replyAuto 的首个消费者，不是能力边界） */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 正文里有没有需要框架排版的图（有就交给 `msg.replyAuto()`）。
+ *
+ * 判断的是**转换之后**的 `![](路径)` —— `parseActions()` 已经把模型写的
+ * `<<image: 路径>>` 换成了它，所以后面的逻辑不用再认识标记。
+ */
+const INLINE_IMAGE_RE = /!\[[^\]]*\]\([^)]*\)/;
+export function hasInlineImage(text) {
+  return INLINE_IMAGE_RE.test(String(text ?? ''));
+}
+
+/**
+ * 把正文里的图片节点**抽出来**变成 image 动作，正文里只留干净文字。
+ *
+ * 用得上的是**没有 `msg` 对象**的通道（宿主主动搭话 / `/send`）：
+ * 那边根本发不了图，抽掉只为不泄漏本地路径。正常回复一律走
+ * `msg.replyAuto()`，它现在支持 keyboard，带按钮也不用再抽图。
+ *
+ * 输入是 `parseActions()` 转换后的 `![](路径)`（模型标记已经换成它了）。
+ * 这里产出的是**内部动作**，只在插件内部流转，不是任何对外语法。
+ */
+export function extractInlineImages(text) {
+  const images = [];
+  const out = String(text ?? '').replace(/!\[[^\]]*\]\(([^)]*)\)/g, (_m, src) => {
+    const u = String(src ?? '').trim();
+    if (u) images.push({ type: 'image', value: u });
+    return '';
+  });
+  return { text: out, images };
 }
 
 /**

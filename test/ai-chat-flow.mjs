@@ -421,6 +421,37 @@ const baseConf = (over = {}) => () => ({
   const n3 = await sendMedia(msg, Array.from({ length: 6 }, (_, i) => ({ type: 'image', value: `a${i}.png` })));
   ok('媒体: 数量封顶', n3 === MAX_MEDIA, String(n3));
 
+  const dedupeCalls = [];
+  const dedupeMsg = {
+    replyImage: async (src) => { dedupeCalls.push(['image', src]); return { ok: 1 }; },
+    replyVoice: async (src) => { dedupeCalls.push(['voice', src]); return { ok: 1 }; },
+  };
+  const n4 = await sendMedia(dedupeMsg, [
+    { type: 'image', value: 'C:/same.png' },
+    { type: 'image', value: ' C:/same.png ' },
+    { type: 'image', value: 'C:/next.jpg' },
+  ], { max: 2 });
+  ok('媒体: 同轮同类型同路径去重且不挤掉后图',
+    n4 === 2 && JSON.stringify(dedupeCalls) === JSON.stringify([
+      ['image', 'C:/same.png'], ['image', 'C:/next.jpg'],
+    ]), JSON.stringify(dedupeCalls));
+
+  const n5 = await sendMedia(dedupeMsg, [{ type: 'image', value: 'C:/same.png' }]);
+  ok('媒体: 跨轮相同路径仍可再次发送', n5 === 1 && dedupeCalls.at(-1)?.[1] === 'C:/same.png');
+
+  const typeCalls = [];
+  const typeMsg = {
+    replyImage: async (src) => { typeCalls.push(['image', src]); return { ok: 1 }; },
+    replyVoice: async (src) => { typeCalls.push(['voice', src]); return { ok: 1 }; },
+  };
+  const n6 = await sendMedia(typeMsg, [
+    { type: 'voice', value: 'C:/same.png' },
+    { type: 'image', value: 'C:/same.png' },
+  ]);
+  ok('媒体: 不同类型不会互相去重',
+    n6 === 1 && JSON.stringify(typeCalls) === JSON.stringify([['image', 'C:/same.png']]),
+    JSON.stringify(typeCalls));
+
   ok('媒体: 识别网址', isRemote('http://a/b.png') === true && isRemote('D:/a.png') === false);
 }
 

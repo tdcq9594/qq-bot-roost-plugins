@@ -221,8 +221,11 @@ export function isRemote(src) {
 /**
  * 发富媒体（图片 / 语音）。
  *
- * 表情包、生图都走这条：DSH 那边生成或找到文件，模型输出
- * `<<image: 路径>>`，这里调 `msg.replyImage` 发出去。
+ * **只发「单独一条图」**：模型写 `<<image-alone: 路径>>` 时由 `parseActions`
+ * 抽成 image 动作，正文先发、图再另起一条，走这里调 `msg.replyImage`。
+ *
+ * 「图文同条」不走这里：模型写的 `<<image: 路径>>` 会被 `convertInlineImages`
+ * 换成 `![](路径)` 留在正文原位，由框架 `msg.replyAuto()` 按位置排版。
  *
  * 为什么要白名单扩展名：模型有文件工具，理论上能发任何文件。
  * 加一道扩展名校验，至少不会把 `.env` 当图片传上去。
@@ -234,17 +237,29 @@ export function isRemote(src) {
  */
 export async function sendMedia(msg, items, { log = () => {}, max = MAX_MEDIA } = {}) {
   let sent = 0;
+  const seen = new Set();
   for (const it of (items ?? [])) {
-    /**
-     * 上限按**发出去几个**算，不按「看了几个」。
-     *
-     * 先 `slice(0, max)` 再过滤扩展名时，一条无效项（模型给了个没有扩展名的
-     * 路径）会白占一格：`[无效, 图1, 图2]` 在 max=2 时只剩前两项，
-     * 图2 被裁掉——用户少收一张，日志里也看不出是被谁挤掉的。
-     */
-    if (sent >= max) break;
     const src = String(it?.value ?? '').trim();
     if (!src) continue;
+
+    /**
+     * 整体 text 和分段 actions 可能同时带着同一个标记；末端按
+     * type + value 去重，确保同一路径在同一轮回复里最多尝试一次。
+     * 先去重再检查发送上限，否则重复项会把后面的不同媒体挤掉。
+     */
+    const key = `${String(it?.type ?? '')}\0${src}`;
+    if (seen.has(key)) {
+      log(`${it.type} 重复媒体已跳过：${src}`);
+      continue;
+    }
+    seen.add(key);
+
+    /**
+     * 上限按**发出去几个**算，不按「看了几个」。
+     * 一条无效项（模型给了个没有扩展名的路径）不会白占一格，
+     * 后面的有效媒体仍有机会发出。
+     */
+    if (sent >= max) break;
 
     const ext = src.split(/[?#]/)[0];
     const ok = it.type === 'voice' ? VOICE_EXT.test(ext) : IMAGE_EXT.test(ext);
@@ -263,6 +278,99 @@ export async function sendMedia(msg, items, { log = () => {}, max = MAX_MEDIA } 
     }
   }
   return sent;
+}
+
+/**
+ * 通用图文出口 `msg.replyAuto()` 的插件侧封装（**框架能力，任何插件都能用**）。
+ *
+ * 传进来的正文已经是**框架认的形态**（`![alt](路径)`）：模型写的
+ * `<<image: 路径>>` 在 `parseActions()` 里就换好了，这一层不认识标记。
+ * 框架自己按图片节点的位置选出口：只有「图片两侧都有文字」才预上传素材，
+ * 其余一律走原路。插件不用判断 msg_type，不用自己拼 `qqbot-media://`，
+ * **也不用配置路径白名单**——框架不做目录校验。
+ *
+ * 按钮通过 `keyboard` 原样透传：带按钮不再逼插件绕开自动出口。
+ *
+ * **不兼容没有 `msg.replyAuto()` 的老框架**（2026-11-07 B 方案：趁插件少砍掉
+ * 兼容层）。遇到就明确记日志、返回结构化失败，**既不发送也不重复发**——
+ * 悄悄退回 `sendReply` 会把 `![](C:/…)` 里的本地绝对路径明文发进群。
+ *
+ * @returns {Promise<{ok:boolean,units:number,fellBack:boolean,unsupported?:boolean}>}
+ *   已经尝试过发送（或明确放弃），**无论成败都不能再走一遍发送路径**（会重复发）。
+ *   `units` 是占用的被动回复次数：正常 1，降级后「文本 1 条 + 独立图 N 条」。
+ */
+export async function sendAutoReply(msg, text, {
+  log = () => {},
+  onSent = null,
+  onTextSent = null,
+  requestId = '',
+  keyboard = null,
+  hints = null,
+  maxMedia = MAX_MEDIA,
+} = {}) {
+  const reportText = (value) => {
+    if (!onTextSent) return;
+    try { onTextSent(String(value ?? '')); } catch { /* 诊断回调不影响发送 */ }
+  };
+  if (typeof msg.replyAuto !== 'function') {
+    log('框架缺少 msg.replyAuto()，这条带图回复已放弃（不降级、不重复发）；请同步升级框架');
+    return { ok: false, units: 1, fellBack: false, unsupported: true };
+  }
+
+  let fellBack = false;
+  /** 降级实际补发的图张数；`null` = 还没拿到确定值（框架会逐个上报） */
+  let fallbackImages = null;
+  /**
+   * 「图在前 / 图在末尾 / 只有图」这类 `msg_type=7` 出口，一张图就是**一条消息**。
+   * 框架会把真实发出条数（`sent`）报上来，别一律按 1 算——三条图少扣两格被动额度，
+   * 后面的分段就可能撞上 5 条上限被拒。
+   */
+  let mediaUnits = null;
+  const opts = {
+    maxMedia,
+    /** 降级 / 富媒体出口各发了几条，插件自己数不出来；靠诊断回调把真实占用报回来 */
+    onResult: (info) => {
+      if (info?.mode === 'media' || info?.mode === 'media-text') {
+        if (typeof info.sent === 'number') mediaUnits = info.sent;
+        return;
+      }
+      if (info?.mode !== 'fallback') return;
+      fellBack = true;
+      /**
+       * 降级时框架内部已经把**正文文本**发出去了，只是 replyAuto 返回 null，
+       * 下面 `if (r) reportText(text)` 走不到。不上报的话 say 回退会以为
+       * 「这句话没说过」，语音一失败就再补发一遍 → 用户收到两份。
+       */
+      reportText(text);
+      /**
+       * 末尾那次 `report` 带 `images`（本次真正补发的张数），优先采信它。
+       * 不能一律按「至少 1 张」算：文件读不到 / 格式不支持时框架只发提示、
+       * 一张图都不补（`bad_format`/`outside`），多算一格会白扣被动回复额度，
+       * 后面本来能发的附件就被挤掉了。
+       */
+      if (typeof info.images === 'number') fallbackImages = info.images;
+      else if (typeof info.image === 'number' && fallbackImages === null) fallbackImages = info.image + 1;
+    },
+  };
+  if (requestId) opts.requestId = requestId;
+  if (keyboard) opts.keyboard = keyboard;
+  if (hints) opts.hints = hints;
+
+  try {
+    const r = await msg.replyAuto(text, opts);
+    if (r && onSent) onSent(String(r?.id ?? r?.message_id ?? ''));
+    if (r) reportText(text);
+    return {
+      ok: !!r || fellBack,
+      // 降级时框架内部发了「文本 1 条 + 独立图 N 条」，返回值是 null。
+      // 请求已发起但失败也至少占一格（框架的 msg_seq 在发请求前就自增）。
+      units: fellBack ? 1 + (fallbackImages ?? 1) : Math.max(1, mediaUnits ?? 1),
+      fellBack,
+    };
+  } catch (e) {
+    log(`通用图文出口失败：${e?.message ?? e}`);
+    return { ok: false, units: 1, fellBack: false };
+  }
 }
 
 /**
@@ -336,8 +444,9 @@ export function buildKeyboard(buttons, { max = 4, perRow = 2 } = {}) {
  * @param {boolean} [opts.markdown] 用 markdown 消息类型（标题/列表/加粗真渲染）
  * @param {object} [opts.keyboard] 按钮组，见 buildKeyboard
  * @param {(m:string)=>void} [opts.log]
+ * @param {(text:string)=>void} [opts.onTextSent] 每个确认完成发送的文本块调用一次
  */
-export async function sendReply(msg, text, { markdown = false, keyboard = null, log = () => {}, onSent = null, stream = false, immediate = false, requestId = '' } = {}) {
+export async function sendReply(msg, text, { markdown = false, keyboard = null, log = () => {}, onSent = null, onTextSent = null, stream = false, immediate = false, requestId = '' } = {}) {
   /**
    * 发出去了就把 message id 报出去（`onSent`）。
    *
@@ -351,6 +460,14 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
       onSent(String(r?.id ?? r?.message_id ?? ''));
     } catch {
       /* 记录失败不影响发送 */
+    }
+  };
+  const reportText = (value) => {
+    if (!onTextSent) return;
+    try {
+      onTextSent(String(value ?? ''));
+    } catch {
+      /* 诊断回调不影响发送 */
     }
   };
 
@@ -409,12 +526,14 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
           if (i < pieces.length - 1) {
             await s.push(acc);
             pushed += 1;
+            reportText(acc);
             // 停一下再推下一片，否则"长出来"的过程看不见
             await new Promise((r) => setTimeout(r, 120));
           } else {
             ending = true;
             const r = await s.end(acc);
             report(r);
+            reportText(acc);
           }
         }
         return 1;
@@ -433,6 +552,7 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
           try {
             const r = await s.end(acc);
             report(r);
+            reportText(acc);
             log(`流式中途失败，已用结束片收尾：${e?.message ?? e}`);
             return 1;
           } catch {
@@ -453,6 +573,7 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
       const r = await msg.replyMarkdown?.({ content: String(text) }, keyboard, emitOpts);
       if (r) {
         report(r);
+        reportText(text);
         return 1;
       }
       log('带按钮的 markdown 没发出去，降级纯文本（按钮会丢）');
@@ -460,6 +581,7 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
       log(`带按钮的 markdown 发送失败：${e?.message ?? e}`);
     }
     await emit(text, emitOpts);
+    reportText(text);
     return 1;
   }
 
@@ -497,6 +619,7 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
         const r = await msg.replyMarkdown({ content: body }, undefined, opt);
         if (r) {
           report(r);
+          reportText(body);
           sent++;
           continue;
         }
@@ -505,6 +628,7 @@ export async function sendReply(msg, text, { markdown = false, keyboard = null, 
       const r2 = await emit(body, opt);
       // 多段时只记最后一段的 id —— 撤回撤的是「最后发出去那条」
       report(r2);
+      reportText(body);
       sent++;
     } catch (e) {
       log(`第 ${i + 1} 段发送失败：${e?.message ?? e}`);

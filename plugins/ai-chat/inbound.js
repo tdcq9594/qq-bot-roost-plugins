@@ -222,8 +222,9 @@ export function hostPayload(msg, { id, token, replyUrl, expiresAt, history = [],
     /**
      * 插件拼好的系统提示词。
      *
-     * **宿主必须用它**：动作标记（<<skip>> / <<remember>> / <<image>> / <<button>>）
-     * 的契约写在这里，宿主自己另写一份人格就等于让这些标记失效。
+     * **宿主必须用它**：动作标记（<<skip>> / <<remember>> / <<button>>）与
+     * 发图标记（`<<image: 路径>>` 图文同条 / `<<image-alone: 路径>>` 单独一条）
+     * 的契约写在这里，宿主自己另写一份人格就等于让这些能力失效。
      * 之前就是这个 bug——DSH 模式下模型完全不知道有标记这回事。
      */
     system: String(system || ''),

@@ -28,8 +28,8 @@
 import { createAdapter } from './adapter/index.js';
 import { createBridge } from './adapter/bridge.js';
 import { buildUserContent } from './inbound.js';
-import { sendReply, sendMedia, buildKeyboard } from './outbound.js';
-import { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseDuration, parseButton, textOf, isFromBot, SKIP_MARK, DEFAULT_IGNORE } from './decide.js';
+import { sendReply, sendMedia, sendAutoReply, buildKeyboard } from './outbound.js';
+import { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseDuration, parseButton, textOf, isFromBot, SKIP_MARK, DEFAULT_IGNORE, hasInlineImage, extractInlineImages } from './decide.js';
 import { ChatStore, PaceStore } from './session.js';
 import { createMerger } from './merge.js';
 import { collectImages } from './vision.js';
@@ -154,7 +154,7 @@ function bump(k, reason) {
 export default {
   id: 'ai-chat',
   name: 'AI 对话',
-  version: '4.4.4',
+  version: '4.4.5',
   description: '群里说什么都看得见，自己判断该不该接话；不占用任何指令前缀',
   /**
    * 4.3.22 起读 `msg.groupName`（群名不再退成发送者昵称）。
@@ -804,8 +804,16 @@ export default {
        * `silenceMs` 是给 dsh-roost 的 speakup 留的显式入口：
        * 它那边的 `raw.replace(/<<[^>]*>>/g, '')` 会先把标记全摘掉，
        * 所以时长只能单独传过来，不能指望文本里还留着。
+       *
+       * 主动通道没有 `msg` 对象，发不了图。**顺序不能反**：
+       * 先 `parseActions()`（它把 `<<image: 路径>>` 就地换成 `![](路径)`），
+       * 再 `extractInlineImages()` 把图片节点抽掉。反过来写的话抽的是
+       * 「还没转过来的标记」，等于什么都没抽，最后 `![](C:/…)` 会作为
+       * 纯文本推给用户——本地绝对路径直接漏出去。
        */
-      const { text, actions } = parseActions(String(b.text ?? '').trim());
+      const parsed = parseActions(String(b.text ?? '').trim());
+      const { text } = extractInlineImages(parsed.text);
+      const { actions } = parsed;
       const silMs = parseDuration(
         actions.find((a) => a.type === 'silence')?.value ?? '',
       );
@@ -1152,7 +1160,24 @@ export default {
           '你自己的情绪有变化时标一下：<<mood: valence=-0.3, reason=被凶了>>（valence 是 -1~1，energy 和 sociability 是 0~1，0.5 是平常；可以只写 reason）',
           '要改这个会话的人设：<<persona: 内容>>',
           '要清空这个会话的上下文：<<clear>>',
-          '要发图片（表情包、画好的图）：<<image: 网址或本地路径>>',
+          /**
+           * 发图有**两种**标记，模型必须都知道，否则等于砍掉一半能力：
+           *   · `<<image: 路径>>`       = 图文同条（框架按位置排版，能夹在两段文字中间）
+           *   · `<<image-alone: 路径>>` = 单独发一条图（文字一条、图片一条）
+           *
+           * 为什么不再教标准 markdown 的 `![说明](路径)`（2026-11-07 实测）：
+           * 那种语法太常见，模型**讲解「怎么发图」时会自然写出来**，然后被
+           * 当成真指令执行——示例被替换成「读不到」提示，路径真实存在时还会
+           * 多发一张用户没要的图。标记是内部协议，讲解时不会被自然写出；
+           * 路径里的括号 / 引号 / 空格也不会再和语法打架。
+           *
+           * 别写「图在开头/结尾时会单独发」——那句会被读成「框架会另发一条」，
+           * 实际是 `msg_type=7` 的**同一条**固定混排，模型会因此选错写法。
+           */
+          '要发图片（表情包、画好的图）有两种写法，按场景选：',
+          '· 图和话在同一条消息里：在正文对应位置写 <<image: 网址或本地路径>>，图就显示在那一句',
+          '· 单独发一条图（更像真人发表情包）：写 <<image-alone: 网址或本地路径>>，话照常写在自己的回复里',
+          '路径原样写、不要加引号；网址和本地路径都支持。举例说明写法时请放进代码块（``` 包起来），代码块里的标记不会被执行',
           '要发语音：<<voice: 网址或本地路径>>',
           /**
            * `<<say>>` 只在宿主真的能合成时才教。
@@ -1519,13 +1544,19 @@ export default {
         /** 到这里才真跑过一轮模型：上面的 await 任一抛错都会进 catch，不计数 */
         bump('forwarded');
         modelRan = true;
-        const { text: cleaned, actions } = parseActions(text);
-        const confirm = await runActions(msg, actions);
         /**
-         * 富媒体（图片 / 语音）单独发，不混进文本。
-         * `let`：下面还要把分段 `qq_send` 参数里的动作并进来（见 segMedia）。
+         * 通用图文出口（框架 `msg.replyAuto`，任何插件可用；这里只是首个消费者）。
+         * 图片节点留在正文原位，框架按位置决定出口、按需预上传；按钮由
+         * `opts.keyboard` 一起带过去，不再为按钮绕开自动出口。
          */
-        let media = actions.filter((a) => a.type === 'image' || a.type === 'voice');
+        const { text: cleaned, actions } = parseActions(String(text ?? ''));
+        const confirm = await runActions(msg, actions);
+        /** 语音单独发；图片由框架在正文里发掉，这里再发一遍就是两张图 */
+        /**
+         * `<<image-alone:>>`（单独发图）和 `<<voice:>>` 都进这里，正文发完再逐条另发。
+         * 正文里的 `<<image:>>`（就地插图）**不进**这里——`parseActions` 已把它换成 `![](路径)`，要留在原位由框架排版。
+         */
+        let media = actions.filter((a) => a.type === 'voice' || a.type === 'image');
         /**
          * 「把这句话念出来」的内容。
          *
@@ -1537,6 +1568,12 @@ export default {
          * 结果记一条空回复、白占一次被动回复预算，实际什么都没发。
          */
         const say = actions.find((a) => a.type === 'say' && String(a.value ?? '').trim());
+        const sayText = String(say?.value ?? '').trim();
+        let saidAlready = false;
+        /** 已经确认发出的正文才可以抑制语音失败后的文字回退 */
+        const noteTextSent = (value) => {
+          if (sayText && String(value ?? '').includes(sayText)) saidAlready = true;
+        };
         /**
          * 模型写了 `<<file: 路径>>` 而不是调 `qq_send_file` 工具。
          *
@@ -1617,7 +1654,8 @@ export default {
         const paired =
           Array.isArray(parts) && parts.length > 1
             ? parts.map((p, i) => {
-                const parsed = parseActions(stripSkip(String(p ?? '')));
+                const raw = stripSkip(String(p ?? ''));
+                const parsed = parseActions(raw);
                 return {
                   text: parsed.text.trim(),
                   requestId: String(requestIds?.[i] ?? '').trim(),
@@ -1653,8 +1691,12 @@ export default {
          * 截断的段没发出去，它的图也不该发。
          */
         if (kept) {
+          /**
+           * 段里的 `<<image-alone:>>` / `<<voice:>>` 汇总到末尾单独发；
+           * 段正文里的 `<<image:>>`（已转成 `![](路径)`）由框架在该段里就地排版，不进这里。
+           */
           const segMedia = kept.flatMap(
-            (x) => (x.actions || []).filter((a) => a.type === 'image' || a.type === 'voice'),
+            (x) => (x.actions || []).filter((a) => a.type === 'voice' || a.type === 'image'),
           );
           if (segMedia.length) media = media.concat(segMedia);
         }
@@ -1685,7 +1727,13 @@ export default {
          *
          * 只发语音时正文也是空的，这时记 `say` 的内容——那才是用户听到的话。
          */
-        const spoken = segs?.length ? segs.join('\n') : (finalText || say?.value || '');
+        const spokenRaw = segs?.length ? segs.join('\n') : (finalText || say?.value || '');
+        /**
+         * 自动出口下正文里留着图片节点（含本地绝对路径）。上下文只该记
+         * 「她发过图」，不该每轮都把一长串盘符喂回模型——既费 token，
+         * 也可能被下一轮当成可以复用的文本照抄。
+         */
+        const spoken = spokenRaw.replace(/!\[[^\]]*\]\([^)]*\)/g, '（图片）');
         const attachCount = media.length + files.length;
         s.messages.push({
           role: 'assistant',
@@ -1724,57 +1772,93 @@ export default {
            */
           ctx.logger.info(`[ai-chat] 分 ${segs.length} 段发（逐条独立消息）`);
           for (let i = 0; i < segs.length && budget > 0; i++) {
-            const n = await sendReply(msg, segs[i], {
-              markdown: c.markdown,
-              /** 这一段的幂等键（阶段 5）。没有就空串，行为不变 */
-              requestId: segIds[i] || '',
-              /** 按钮只挂最后一段：挂前面的话，用户点完还得等后面几条才看到结果 */
-              keyboard: i === segs.length - 1 && buttons.length ? buildKeyboard(buttons) : null,
-              log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
-              /**
-               * **多段时不能流式。**
-               *
-               * 流式是「一条消息不断变长」（`replace` 模式），
-               * 多段要的是「发几条独立消息」——语义冲突，只能二选一。
-               */
-              stream: false,
-              /**
-               * **必须绕过攒批。**
-               *
-               * 框架的 `msg.reply` 是攒到本次处理结束再由 `flushReplies()` 合并成一条的
-               * （见 `src/message.js` 的 `replyBuf`）。多个插件各回一句时这是对的，
-               * 但这里要的是「几条独立消息」——走 `reply` 的话循环发五段，
-               * 用户只看到一条拼起来的，`qq_send` 调几次都一样。
-               * `immediate` 内部改走 `msg.replyNow()`，立刻发。
-               */
-              immediate: true,
-              onSent: (id) => {
-                if (id) lastSent.set(msg.chatId, { id, at: Date.now() });
-              },
-            });
+            let n;
+            /** 按钮只挂最后一段：挂前面的话，用户点完还得等后面几条才看到结果 */
+            const kb = i === segs.length - 1 && buttons.length ? buildKeyboard(buttons) : null;
+            if (hasInlineImage(segs[i])) {
+              /** 段里带图：交给框架通用出口，图片就留在这段的位置上 */
+              const auto = await sendAutoReply(msg, segs[i], {
+                requestId: segIds[i] || '',
+                keyboard: kb,
+                onTextSent: noteTextSent,
+                log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
+                onSent: (id) => {
+                  if (id) lastSent.set(msg.chatId, { id, at: Date.now() });
+                },
+              });
+              n = auto.units;
+            } else {
+              n = await sendReply(msg, segs[i], {
+                markdown: c.markdown,
+                /** 这一段的幂等键（阶段 5）。没有就空串，行为不变 */
+                requestId: segIds[i] || '',
+                onTextSent: noteTextSent,
+                /** 按钮只挂最后一段：挂前面的话，用户点完还得等后面几条才看到结果 */
+                keyboard: kb,
+                log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
+                /**
+                 * **多段时不能流式。**
+                 *
+                 * 流式是「一条消息不断变长」（`replace` 模式），
+                 * 多段要的是「发几条独立消息」——语义冲突，只能二选一。
+                 */
+                stream: false,
+                /**
+                 * **必须绕过攒批。**
+                 *
+                 * 框架的 `msg.reply` 是攒到本次处理结束再由 `flushReplies()` 合并成一条的
+                 * （见 `src/message.js` 的 `replyBuf`）。多个插件各回一句时这是对的，
+                 * 但这里要的是「几条独立消息」——走 `reply` 的话循环发五段，
+                 * 用户只看到一条拼起来的，`qq_send` 调几次都一样。
+                 * `immediate` 内部改走 `msg.replyNow()`，立刻发。
+                 */
+                immediate: true,
+                onSent: (id) => {
+                  if (id) lastSent.set(msg.chatId, { id, at: Date.now() });
+                },
+              });
+            }
             // 没发出去也扣一格——失败大概率是同一原因，别接着试
             budget -= Math.max(1, n || 0);
           }
         } else if (body) {
-          const n = await sendReply(msg, body, {
-            markdown: c.markdown,
-            /**
-             * 单段路径：幂等键只给**这一条**。
-             *
-             * 单段时 `sendReply` 内部可能按 1800 字切成几块发出去，
-             * 但那是**发送层**的事——语义上「一次 `qq_send` = 一段」，
-             * 切成几块只是为了过长度限制。所以整条共用一个 id。
-             */
-            requestId: String(requestIds?.[0] ?? '').trim(),
-            keyboard: buttons.length ? buildKeyboard(buttons) : null,
-            log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
-            // 私聊走流式（群聊没这个接口，框架内部会降级），带按钮时不流式
-            stream: !buttons.length,
-            // 记住这次发出去的 id，下一轮要撤的就是它
-            onSent: (id) => {
-              if (id) lastSent.set(msg.chatId, { id, at: Date.now() });
-            },
-          });
+          let n;
+          const kb = buttons.length ? buildKeyboard(buttons) : null;
+          if (hasInlineImage(body)) {
+            /** 图片在正文里有位置：框架自己选出口，不再把图汇总到末尾 */
+            const auto = await sendAutoReply(msg, body, {
+              requestId: String(requestIds?.[0] ?? '').trim(),
+              keyboard: kb,
+              onTextSent: noteTextSent,
+              log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
+              onSent: (id) => {
+                if (id) lastSent.set(msg.chatId, { id, at: Date.now() });
+              },
+            });
+            n = auto.units;
+          } else {
+            n = await sendReply(msg, body, {
+              markdown: c.markdown,
+              /** 单段（无图）是最常见的路径，漏了它 `saidAlready` 永远拿不到真实发送结果 */
+              onTextSent: noteTextSent,
+              /**
+               * 单段路径：幂等键只给**这一条**。
+               *
+               * 单段时 `sendReply` 内部可能按 1800 字切成几块发出去，
+               * 但那是**发送层**的事——语义上「一次 `qq_send` = 一段」，
+               * 切成几块只是为了过长度限制。所以整条共用一个 id。
+               */
+              requestId: String(requestIds?.[0] ?? '').trim(),
+              keyboard: buttons.length ? buildKeyboard(buttons) : null,
+              log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
+              // 私聊走流式（群聊没这个接口，框架内部会降级），带按钮时不流式
+              stream: !buttons.length,
+              // 记住这次发出去的 id，下一轮要撤的就是它
+              onSent: (id) => {
+                if (id) lastSent.set(msg.chatId, { id, at: Date.now() });
+              },
+            });
+          }
           /** 单段也可能被 `planChunks` 再切成几块，按实际发出去的条数扣预算 */
           budget -= Math.max(1, n || 0);
         }
@@ -1883,44 +1967,92 @@ export default {
          * 排在文件之后。以前它在预算外，于是「4 块正文 + 1 图 + 语音」
          * 会打出第 6 次请求，被框架静默降级成主动消息。
          *
-         * 失败分两种，都要有下文：
-         *   · 正文已经发过（常见）→ 少了语音不影响对话，记一行 warn 就够
-         *   · 正文是空的（只发语音）→ **把这句话当文字补发**，否则用户零输出，
-         *     而上下文里已经记着「我说过」
+         * **任何一环失败都降级成文字**（`say` 的值本来就是要说的话）：
+         *   · 宿主没开 TTS      → 直接发文字
+         *   · 合成失败          → 发文字
+         *   · 合成成功但发送失败 → 发文字
+         * 旧行为只在「正文为空」时补发，有正文时那句话就**彻底消失**——
+         * 用户什么都没听到，上下文里却记着「我说过」，下一轮模型还会当作
+         * 对方已经听过（2026-11 外部反馈：「语音发送失败是降级为文字吧」）。
+         *
+         * 唯一不补的情况：这句话**已经**出现在刚发出去的正文/分段里
+         * （模型把要念的话也写了一遍），再发一遍就是重复。
          */
         if (say && budget > 0) {
+          /**
+           * 只认**真正发出去的文本**：`saidAlready` 由外层的 `noteTextSent` 置位，
+           * 发送层每确认送出一块文本就回调一次（见 outbound.js 的 onTextSent）。
+           *
+           * 这里不能再声明同名的 `sayText` / `saidAlready`——内层 const 会遮蔽
+           * 外层回调写的那个变量，整条链路就成了死代码。也不能拿「本来打算发
+           * 什么」（segs / body）推断：分段时某段失败，用户根本没收到那句话，
+           * 却会被算成「已经说过」，语音再一失败就是零输出。
+           */
+          /** 失败兜底：把要念的话当文字发出去（预算不够就只记日志） */
+          const speakAsText = async (why) => {
+            if (!sayText || saidAlready) return;
+            if (budget <= 0) {
+              ctx.logger.warn(`[ai-chat] ${why}，且被动回复预算已用完，这句话没能补发`);
+              return;
+            }
+            budget -= 1;
+            ctx.logger.warn(`[ai-chat] ${why}，改用文字发这句话`);
+            await msg.reply(sayText).catch(() => {});
+          };
+
           if (!ttsOn) {
             /**
              * 宿主没开语音（或这一轮的缓存说不可用），但模型还是写了 `<<say>>`
-             * ——可能来自历史上下文。标记已经被摘掉，用户不会看到它；
-             * 这里留一行 warn，免得「她明明说要念，怎么没声音」无从查起。
+             * ——可能来自历史上下文或旧提示词。
              */
-            ctx.logger.warn('[ai-chat] 模型写了 <<say>>，但宿主语音没启用，这段没有语音');
-            /** 纯语音（正文为空）时还得把话补发出去，否则用户什么都没收到 */
-            if (!body && !segs?.length && budget > 0) {
-              budget -= 1;
-              await msg.reply(say.value).catch(() => {});
-            }
+            await speakAsText('模型写了 <<say>>，但宿主语音没启用');
           } else {
-            budget -= 1;
-            const file = await synthesize(c, say.value, {
+            const file = await synthesize(c, sayText, {
               cacheDir: `${ctx.dataDir}/tts-cache`,
               log: (m) => ctx.logger.warn(`[ai-chat] ${m}`),
             });
-            if (file) {
-              await msg.replyVoice?.(file, { local: true });
-            } else if (!body && !segs?.length && budget > 0) {
+            if (!file) {
+              /** 合成阶段一个 QQ 请求都没发出去，别先占掉最后一格被动回复预算 */
+              await speakAsText('语音合成失败');
+            } else {
               /**
-               * **合成失败时不能什么都不发。**
-               *
-               * 上面那句注释的前提是「文字已经发过了」——但纯语音路径下
-               * 正文本来就是空的。这时静默跳过 = 用户零输出，而上下文里
-               * 已经记了「我说过这句话」，模型下一轮会以为对方听到了。
-               * 语音发不出去，就把同一句话当文字发出去。
+               * 到这里才真的要发请求，预算扣在这里。
+               * 以前扣在 synthesize 之前，合成失败白白占掉额度，
+               * 导致降级文字反而没预算可发。
                */
               budget -= 1;
-              ctx.logger.warn('[ai-chat] 语音合成失败，改用文字发这句话');
-              await msg.reply(say.value).catch(() => {});
+              /**
+               * `replyVoice` 的三态（框架 replyMedia 在 catch 里调 opts.onError 后返回 null）：
+               *   真值             → 语音已送达，正常结束；
+               *   null + onError  → 明确失败 → 补发文字；
+               *   null + 无 onError → 可能已送达（响应丢了）→ **不补发**，避免用户收到两份。
+               * 抛错也要就地接住：以前会掉进外层 catch，文字兜底根本没机会跑。
+               */
+              let sent = null;
+              let voiceFailed = false;
+              if (typeof msg.replyVoice !== 'function') {
+                /** 老框架没有这个接口：明确发不出去，按失败降级 */
+                voiceFailed = true;
+                ctx.logger.warn('[ai-chat] 框架没有 replyVoice()，语音发不出去');
+              } else {
+                try {
+                  sent = await msg.replyVoice(file, {
+                    local: true,
+                    onError: (e) => {
+                      voiceFailed = true;
+                      ctx.logger.warn(`[ai-chat] 语音发送失败：${e?.message ?? e}`);
+                    },
+                  });
+                } catch (e) {
+                  voiceFailed = true;
+                  ctx.logger.warn(`[ai-chat] 语音发送抛错：${e?.message ?? e}`);
+                }
+              }
+              if (!sent && voiceFailed) {
+                await speakAsText('语音发送失败');
+              } else if (!sent) {
+                ctx.logger.warn('[ai-chat] 语音返回 null 且未报明确失败，可能已送达，不补发文字');
+              }
             }
           }
         }
