@@ -46,7 +46,7 @@
     {
       "id": "anime-img",
       "name": "二次元图",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "description": "来张二次元图：夜轻图源拉取 → 本地缓存 → 图文同一条发到群里",
       "tags": [
         "图片",
@@ -56,7 +56,7 @@
       "frameworkVersion": ">=0.6.13",
       "runtime": "node",
       "path": "plugins/anime-img",
-      "sha256": "ed937ba925c21338d0f20ef70093f9c0e53c5f61bbcda6f8c172724747389819",
+      "sha256": "39b200c7c4942e718b3b20e96830a3f84a6cd4a2616c441da81e760b21b45719",
       "author": "tdcq9594",
       "commands": [
         "来张图",
@@ -227,7 +227,7 @@
     {
       "id": "kun",
       "name": "养鲲",
-      "version": "4.1.3",
+      "version": "4.1.4",
       "description": "开局一条鲲，进化全靠吞：养成、道具、拍卖行、BOSS、群主互动（24 个命令）",
       "author": "tdcq9594",
       "path": "plugins/kun",
@@ -278,7 +278,7 @@
       ],
       "addedAt": "2026-10-23",
       "credits": "玩法设计来自 Agam《简单的养鲲游戏》(CQP, 2020)",
-      "sha256": "ec3db19b54f23bdafd785041062046af33a0e0a9db815ea0276bff0cecc888e9",
+      "sha256": "efeddd35f72bc78e391794fc2edcbd065c2b9886461b1f3994ab7482ebbc229a",
       "frameworkVersion": ">=0.6.0",
       "verified": "official"
     },

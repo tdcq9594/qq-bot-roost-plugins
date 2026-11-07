@@ -55,7 +55,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export default {
   id: 'anime-img',
   name: '二次元图',
-  version: '2.0.0',
+  version: '2.0.1',
   description: '来张二次元图：夜轻图源拉取 → 本地缓存 → 图文同一条发到群里',
   // 图文同一条依赖框架 replyImage 的 text 选项（0.6.13 起）
   frameworkVersion: '>=0.6.13',

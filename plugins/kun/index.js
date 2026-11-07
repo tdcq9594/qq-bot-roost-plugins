@@ -188,7 +188,7 @@ function freshGroup() {
 const PLUGIN = {
   id: 'kun',
   name: '养鲲',
-  version: '4.1.3',
+  version: '4.1.4',
   description: '开局一条鲲，进化全靠吞（Agam《简单的养鲲游戏》1:1 还原）',
   frameworkVersion: '>=0.6.0',
 
