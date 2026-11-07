@@ -27,6 +27,7 @@
 
 import { createAdapter } from './adapter/index.js';
 import { createBridge } from './adapter/bridge.js';
+import { createBusyQueue } from './busy-queue.js';
 import { buildUserContent } from './inbound.js';
 import { sendReply, sendMedia, sendAutoReply, buildKeyboard } from './outbound.js';
 import { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseDuration, parseButton, textOf, isFromBot, SKIP_MARK, DEFAULT_IGNORE, hasInlineImage, extractInlineImages } from './decide.js';
@@ -118,8 +119,9 @@ const dash = {
   ruleBlocked: 0,   // shouldConsider 拒（mention/窗口/空/指令前缀）
   quotaBlocked: 0,  // 每分钟配额用满
   moodBlocked: 0,   // 社交意愿低
-  busyDropped: 0,   // 等上一轮超时，仍然丢
+  busyDropped: 0,   // 重入过一次仍等不到，才真的丢（正常应为 0）
   busyWaited: 0,    // 等上一轮跑完后正常继续（不是丢，不进分母）
+  busyQueued: 0,    // 等上一轮超时，攒着等释放（不是丢，不进分母）
   claimed: 0,       // 别的插件接过
   merged: 0,        // 合并窗口里被并进别的批次（不算丢）
   bots: 0,          // 对方是机器人
@@ -376,7 +378,8 @@ export default {
         { label: '转发给 DSH', value: dash.forwarded, unit: '条', hint: '真的跑了一轮模型' },
         { label: '规则挡掉', value: dash.ruleBlocked, unit: '条', hint: '只在被 @ / 窗口 / 空消息 / 指令前缀' },
         { label: '配额挡掉', value: dash.quotaBlocked, unit: '条', hint: '每分钟最多 N 条用满' },
-        { label: '忙态丢掉', value: dash.busyDropped, unit: '条', hint: '等上一轮超时才丢，正常应很少' },
+        { label: '忙态丢掉', value: dash.busyDropped, unit: '条', hint: '重入一次仍等不到才丢，正常应为 0' },
+        { label: '忙态攒着', value: dash.busyQueued, unit: '条', hint: '等上一轮超时后攒着等释放，不是丢' },
         { label: '忙态等到', value: dash.busyWaited, unit: '条', hint: '等上一轮跑完后正常继续，不是丢' },
         { label: '情绪闸门', value: dash.moodBlocked, unit: '条', hint: '社交意愿低，只接明确被叫的' },
         { label: '别的插件接了', value: dash.claimed, unit: '条' },
@@ -1396,8 +1399,18 @@ export default {
           await new Promise((r) => setTimeout(r, 150));
         }
         if (paceSt.busy) {
-          bump('busyDropped', '等上一轮超时，仍然丢弃');
-          if (c.debug) ctx.logger.debug(`[ai-chat] ${msg.chatId} 等上一轮超时，跳过`);
+          /**
+           * **真等不到也不丢**：攒进队列，等这一轮 finally 释放 busy 后重入。
+           * 每条消息最多重入一次，`__queuedOnce` 防止 busy 一直不释放时无限循环。
+           */
+          if (msg.__queuedOnce) {
+            bump('busyDropped', '重入后仍等不到，才真的丢');
+            return;
+          }
+          msg.__queuedOnce = true;
+          (paceSt.waiting ??= createBusyQueue()).push(msg);
+          bump('busyQueued', '等上一轮超时，攒着等释放');
+          if (c.debug) ctx.logger.debug(`[ai-chat] ${msg.chatId} 等上一轮超时，先攒着`);
           return;
         }
         /** 只记「等过」，不占分母——这条消息接下来会正常计入某一类结果 */
@@ -2093,6 +2106,21 @@ export default {
         paceSt.busy = false;
         paceSt.controller = null;
         s.lastAt = Date.now();
+        /**
+         * 释放 busy 之后再把攒着的消息串行放回去。
+         * 用 queueMicrotask 是为了等本轮彻底退出（finally 里不该再起一轮）；
+         * 串行而不是并发，避免几条同时抢 busy 锁又各自超时重排。
+         * 过窗降级不用这里管：框架的 outbound 对 expired 已有主动发送路径。
+         */
+        const queued = paceSt.waiting?.drain() ?? [];
+        if (queued.length) {
+          queueMicrotask(() => {
+            queued
+              .reduce((p, m) => p.then(() => handle(m).catch((e) => {
+                ctx.logger.warn(`[ai-chat] 忙态重入失败：${e?.message || e}`);
+              })), Promise.resolve());
+          });
+        }
       }
     }
 
