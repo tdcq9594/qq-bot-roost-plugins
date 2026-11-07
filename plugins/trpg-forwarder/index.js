@@ -19,7 +19,7 @@
  * 和 scripts/build-index.mjs 都用正则读源码，引用常量读不到 → 索引写不进版本号、
  * CI 判红。升版本要同步改两处，`test/smoke.test.mjs` 会断言一致。
  */
-const VERSION = '0.4.1';
+const VERSION = '0.5.0';
 
 const DEFAULTS = {
   enabled: true,
@@ -36,7 +36,7 @@ const DEFAULTS = {
 export default {
   id: 'trpg-forwarder',
   name: '跑团转发器',
-  version: '0.4.1', // 必须是字面量，与上面的 VERSION 同步
+  version: '0.5.0', // 必须是字面量，与上面的 VERSION 同步
   shortDesc: '把群消息桥给本机的 dsh-trpg，再把它的骰子与剧情直发回群',
   // 市场列表只读这一行，硬要求「一句话、不超过 60 字」；多行长文会让插件市场
   // 里糊一大段说明（build-index.mjs 会原样灌进索引）。详细说明留在 README。
@@ -80,6 +80,22 @@ export default {
 
   setup(ctx) {
     const log = ctx.logger;
+
+    /**
+     * 恒定时间字符串比较。
+     *
+     * 本地回环、风险本来很低，但比较函数本身不该成为可计时侧信道；
+     * 框架里已有 safeEqual 的先例（src/web/server.js），这里对齐。
+     * 长度不同也走完整轮循环，不提前 return。
+     */
+    function safeEqual(a, b) {
+      const x = Buffer.from(String(a), 'utf8');
+      const y = Buffer.from(String(b), 'utf8');
+      const len = Math.max(x.length, y.length);
+      let diff = x.length ^ y.length;
+      for (let i = 0; i < len; i += 1) diff |= (x[i] ?? 0) ^ (y[i] ?? 0);
+      return diff === 0;
+    }
     const conf = () => {
       const raw = ctx.config || {};
       const pick = (k) => {
@@ -222,8 +238,19 @@ export default {
       }
     }
 
+    /**
+     * 投递失败时的兜底提示。
+     *
+     * 这是 probeState 关着（默认）时**唯一**会告诉用户「另一半不在」的地方，
+     * 所以文案必须点明缺的是 DSH 侧插件，而不只是「离线」。
+     * 由 flushOutbox 在「投递失败 + 健康探测失败」时调用，每分钟最多一次。
+     */
     function notifyOffline(evt) {
-      const text = '⚠️ 守密人离线中，你的行动已暂存，恢复后自动补结算';
+      const text = [
+        '⚠️ 找不到守密人：DSH 侧的 dsh-trpg 插件没在响应。',
+        '本插件只是桥，需要配合它才能跑团（骰点、叙事、角色卡都在那边）。',
+        '这条已暂存，恢复后自动补结算。',
+      ].join('\n');
       const msg = recentMsgs.get(evt.msgId)?.msg;
       const send = msg?.replyNow ? msg.replyNow(text) : ctx.push?.(evt.groupId, text);
       Promise.resolve(send).catch(() => {});
@@ -247,7 +274,7 @@ export default {
       const c = conf();
       if (!c.enabled) return json(503, { ok: false, error: 'forwarder_disabled' });
       const b = body && typeof body === 'object' ? body : {};
-      if (!c.token || String(b.token || '') !== c.token) {
+      if (!c.token || !safeEqual(String(b.token || ''), c.token)) {
         return json(403, { ok: false, error: 'bad_token' });
       }
       const requestId = String(b.requestId || '');
@@ -384,16 +411,39 @@ export default {
      * 都会抛 ReferenceError（`probed is not defined`），报错还被中间件吞掉。
      */
     async function stateCached(key, msg) {
+      const c = conf();
+
+      /**
+       * `probeState` 关着（默认）时**不发**那个请求。
+       *
+       * 这条以前是空开关：配置读进来了，但 stateCached 无条件探测。后果是
+       * 每个活跃群每 5 秒打一次 /trpg/state —— 而旧版 dsh-trpg 在这个端点上
+       * 会让宿主 fatal 退出（2026-11-07 连崩三次）。等于默认配置就在做那件
+       * 最危险的事，而且频率比手动触发高得多。
+       *
+       * 关掉时只信本地名单（/trpg start 记、/trpg pause|end 清）。
+       * `probed` 给 null 表示「没问过」，另用 `skipped` 与「问了但失败」
+       * 区分 —— 否则下游会把每条命令都当成「守密人不见了」而误报。
+       */
+      if (!c.probeState) {
+        return { at: Date.now(), running: startedGroups.has(key), probed: null, skipped: true };
+      }
+
       const hit = stateCache.get(key);
       if (hit && Date.now() - hit.at < 5000) return hit;
       const probed = await trpgState(msg);
-      const entry = { at: Date.now(), running: probed === true, probed };
+      const entry = { at: Date.now(), running: probed === true, probed, skipped: false };
       stateCache.set(key, entry);
       return entry;
     }
 
-    ctx.use('trpg-forward', async (scope, next) => {
-      const msg = scope?.msg;
+    /**
+     * 中间件签名是 `(mctx, next)`：框架文档里它叫 `ctx`（内容 { msg, cfg, commandEntry }），
+     * 但这里已经有插件的 `ctx`（下面要用 ctx.levelOf），同名会把它遮住，
+     * 所以参数取名 mctx，语义完全一样。
+     */
+    ctx.use('trpg-forward', async (mctx, next) => {
+      const msg = mctx?.msg;
       const c = conf();
       if (!c.enabled || !msg || msg.kind !== 'group' || isBotMessage(msg)) return next();
       const text = String(msg.content ?? '').trim();
@@ -405,20 +455,12 @@ export default {
       await startedReady;
       const known = isCmd && TRPG_CMDS.has(cmd);
       const stateKey = String(msg.groupUin || msg.groupId || '');
-      // 本地记过的群优先：/trpg start 之后到 DSH 落库之间有一个很小的时间窗，
-      // 那几秒内的行动不能丢。远程说在跑也算。
       /**
-       * 默认**不**探测远端状态。
-       *
-       * /trpg/state 是 dsh-trpg 后来加的；旧版本还在内存里运行时，那个请求会
-       * 让宿主 fatal 退出（今天连崩三次）。而本地名单已经够判断「这个群开没开团」，
-       * 所以探测只在显式打开 `probeState` 时才做。
-       */
-      /**
-       * 以 DSH 的状态为准（5 秒缓存，避免每条消息都多一次往返）。
-       * 探测不到（老版本 / 离线）时**不再按本地名单拦截**：
-       * 之前那样会让「暂停」失效——名单还在，转发器继续吞掉所有消息，
-       * ai-chat 再也收不到，看起来就是「跑团把普通聊天搞挂了」。
+       * 这个群在不在跑团，由 stateCached 一处决定：
+       *   · probeState 关（默认）→ 只看本地名单，零网络请求
+       *   · probeState 开         → 问 dsh-trpg 的 /trpg/state（5 秒缓存）
+       * 开着的好处是「别的入口改了状态」（比如面板上暂停）也能立刻感知；
+       * 代价是多一次本地往返，且旧版 dsh-trpg 在该端点上不稳。
        */
       const state = await stateCached(stateKey, msg);
       const running = state.running;
@@ -460,7 +502,7 @@ export default {
       await enqueue(event);
       flushOutbox().catch(() => {});
 
-      if (state.probed === null && known) {
+      if (!state.skipped && state.probed === null && known) {
         /**
          * 探测失败 = DSH 侧没起来。这里要说清楚**缺的是什么**，
          * 否则用户只会看到「守密人离线」，以为是网络抖动，反复重试。
