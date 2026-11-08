@@ -15,12 +15,25 @@
  * 契约：新增字段必须先握手，不能「加个字段等对方读」）。
  */
 
-/** 接话策略三态。`ai` 是现状，其余两个都是 opt-in，默认绝不改变线上行为 */
+/**
+ * 接话模式。**这一份就是 `index.js` config schema 里 `decide` 的 options**，
+ * 不另起第二个下拉：两个「什么时候接话」的下拉会把人搞晕，而且现有的
+ * `mention` / `window` 两种语义不能被新策略挤掉。
+ *
+ * 前三个是原有行为（默认 `ai`），后两个是调研报告 A2/A3 的 opt-in。
+ * 框架的 `ctx.config` 是**扁平 map**，所以契约表里写的 `groupPolicy.mode`
+ * 嵌套路径落不了地；模式继续用 `decide`，其余参数用 `policy*` 前缀的扁平键。
+ */
 export const POLICY_MODES = Object.freeze([
-  { value: 'ai', label: 'AI 自己判断（保持现状）' },
+  { value: 'ai', label: 'AI 自己判断（读全量消息）' },
+  { value: 'mention', label: '只有被 @ 时说话' },
+  { value: 'window', label: '@ 之后一段时间内都接话' },
   { value: 'relevance', label: '省钱：先过一道免费的相关度门' },
-  { value: 'engaged', label: '连聊：她说过话后接着聊一小会儿' },
+  { value: 'engaged', label: '连聊：相关度门 + 她说过话后接着聊' },
 ]);
+
+/** 相关度门阈值：低于这个分数就不花钱调模型（A2） */
+export const RELEVANCE_MIN = 0.25;
 
 export const GROUP_POLICY_DEFAULTS = Object.freeze({
   /** ai = 交给模型 `<skip>`，与现在完全一致 */
@@ -40,6 +53,73 @@ export const GROUP_POLICY_DEFAULTS = Object.freeze({
 
 /** 主人命令的状态位（E10）：阶段 3 预留读取、阶段 7 用 ctx.command() 写入 */
 export const SILENT_STATE_KEY = 'aiChat.silent';
+
+/**
+ * 把框架的扁平 `ctx.config` 变成一份完整策略。
+ * 面板只认扁平键，策略层用短名，两边在这里对接，别在 decide.js 里散着读。
+ */
+export function policyFromConfig(cfg = {}) {
+  const c = cfg && typeof cfg === 'object' ? cfg : {};
+  return normalizeGroupPolicy({
+    mode: c.decide,
+    burstMax: c.policyBurstMax,
+    maxPerHour: c.policyMaxPerHour,
+    quietStartHour: c.policyQuietStartHour,
+    quietEndHour: c.policyQuietEndHour,
+    shortAskMustReply: c.policyShortAskMustReply,
+    engagedMaxTurns: c.policyEngagedMaxTurns,
+  });
+}
+
+/** 问句：最该回的一类，给分最高 */
+const ASK_RE = /(吗|呢|呀|吧|么|？|\?|怎么|为什么|啥|谁|哪|几|能不能|可不可以|要不要|是不是|有没有|如何|求助)/;
+/** 兴趣/话题词：命中说明这句有内容，不只是附和 */
+const TOPIC_RE = /(游戏|电影|音乐|歌|代码|程序|猫|狗|吃|饭|玩|天气|工作|上班|学习|考试|书|旅行|旅游|照片|图片|视频|唱|想|觉得|喜欢|讨厌|bug|模型|机器人|服务器|插件|新闻|球|车|咖啡|奶茶|电脑|手机|价格|钱)/i;
+
+function bigrams(s) {
+  const t = String(s || '').replace(/\s+/g, '');
+  const out = new Set();
+  for (let i = 0; i < t.length - 1; i += 1) out.add(t.slice(i, i + 2));
+  if (t.length === 1) out.add(t);
+  return out;
+}
+
+/**
+ * 免费的相关度打分（A2）：不看模型、不查跨进程记忆。
+ *
+ * 对方 aurabot 用「兴趣词 ×0.3 + **记忆命中** ×0.5」，但记忆检索在
+ * dsh-roost 进程，ai-chat 拿不到（§14.2-2）。这里把那一维换成
+ * **最近消息窗口的重合度**：她在聊的话题里出现过的词，说明这句接得上。
+ * 纯字符串运算，零成本；分数只用来决定「要不要花钱调模型」，不进提示词。
+ */
+export function topicRelevance(text, windowTexts = []) {
+  const t = String(text ?? '').trim();
+  if (!t) return 0;
+  let score = 0;
+  if (ASK_RE.test(t)) score += 0.45;
+  if (TOPIC_RE.test(t)) score += 0.3;
+  if ([...t].length >= 20) score += 0.3;
+
+  const bg = bigrams(t);
+  let best = 0;
+  for (const w of (Array.isArray(windowTexts) ? windowTexts : []).slice(-6)) {
+    const bw = bigrams(w);
+    if (!bw.size) continue;
+    let hit = 0;
+    for (const g of bg) if (bw.has(g)) hit += 1;
+    best = Math.max(best, hit / Math.max(1, bg.size));
+  }
+  score += 0.5 * best;
+  return Math.min(1, Math.round(score * 100) / 100);
+}
+
+/** A5：≤12 字的「在吗 / 人呢」算被追问。默认关，打开才生效 */
+export function isShortAsk(text, on = false) {
+  if (!on) return false;
+  const t = String(text ?? '').trim();
+  if (!t || [...t].length > 12) return false;
+  return /(在吗|在不在|人呢|还在吗|喂|醒醒|出来|？？|\?)$/.test(t);
+}
 
 const intIn = (v, min, max, fallback) => {
   const n = Number(v);

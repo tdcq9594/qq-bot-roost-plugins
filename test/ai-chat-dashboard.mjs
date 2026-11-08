@@ -194,5 +194,31 @@ ok('面板列全了 bots / noDsh / 调用失败 / 忙态等到',
   ok('窗口内的拒绝原因没被顶掉', /只在被 @ 时回复/.test(d.note) && /旧原因/.test(d.note), d.note.split('\n').slice(-2).join(' | '));
 }
 
+/* ---------------- 接话策略计数（阶段 3） ---------------- */
+
+{
+  /** 用全新 chatId，避开前面用例攒下的配额 / 冷却状态 */
+  const d0 = plugin.dashboard();
+  const pb0 = val(d0, '其中：接话策略') ?? 0;
+  const rb0 = val(d0, '规则挡掉') ?? 0;
+
+  cfg.decide = 'relevance';
+  cfg.policyBurstMax = 0;
+  cfg.policyMaxPerHour = 0;
+  cfg.policyShortAskMustReply = false;
+  await handlers.message(msg({ content: '嗯', chatId: 'policy-test' }));
+  const d1 = plugin.dashboard();
+
+  ok('策略挡下的消息单独计数（子集列有值）', val(d1, '其中：接话策略') === pb0 + 1,
+    `policyBlocked=${val(d1, '其中：接话策略')}`);
+  ok('同一次拦截在「规则挡掉」里只加一次', val(d1, '规则挡掉') === rb0 + 1,
+    `ruleBlocked=${val(d1, '规则挡掉')}`);
+  ok('拒绝原因 Top 不双计', /相关度太低（省钱策略）\s+1\b/.test(d1.note),
+    d1.note.split('\n').slice(-2).join(' | '));
+  ok('子集列不影响「未归类」分母', val(d1, '未归类') === val(d0, '未归类'),
+    `before=${val(d0, '未归类')} after=${val(d1, '未归类')}`);
+  cfg.decide = 'mention';
+}
+
 console.log(`\n${pass}/${pass + fails.length} 通过${fails.length ? `，失败：${fails.join('、')}` : ''}`);
 if (fails.length) process.exit(1);

@@ -515,6 +515,92 @@ ok('剥标记: 没有标记时原样返回', stripSkip('今天确实挺热的') 
   ok('时长: 有 30 天上限', parseDuration('9999h') === 30 * 86_400_000);
 }
 
+/* ---------------- 可选接话策略（阶段 3） ---------------- */
+
+const { policyFromConfig } = await import(pathToFileURL(path.join(PLUGIN, 'policy-config.js')));
+const pconf = (flat = {}, over = {}) => conf({ policy: policyFromConfig(flat), ...over });
+
+ok('策略：带全默认 policy 与不带 policy 结果逐字一致（默认等价基线）', (() => {
+  const msg = group({ content: '今天好热' });
+  const a = shouldConsider(msg, conf(), {});
+  const b = shouldConsider(msg, conf({ policy: policyFromConfig({}) }), {});
+  return JSON.stringify(a) === JSON.stringify(b) && b.go === true;
+})());
+ok('策略：默认配置一个状态字段都不写', (() => {
+  const st = {};
+  shouldConsider(group(), conf({ policy: policyFromConfig({}) }), st);
+  return Object.keys(st).length === 0;
+})());
+
+ok('相关度门：短附和「嗯」被免费拦下', (() => {
+  const r = shouldConsider(group({ content: '嗯' }), pconf({ decide: 'relevance' }), {});
+  return !r.go && /相关度/.test(r.reason);
+})());
+ok('相关度门：问句照常交给模型',
+  shouldConsider(group({ content: '这个要怎么弄啊？' }), pconf({ decide: 'relevance' }), {}).go === true);
+ok('相关度门：被 @ / 私聊 / addressed 都不受它影响', (() => {
+  const c = pconf({ decide: 'relevance' });
+  return shouldConsider(group({ mentioned: true, content: '嗯' }), c, {}).go
+    && shouldConsider(group({ kind: 'c2c', content: '嗯' }), c, {}).go
+    && shouldConsider(group({ addressed: true, content: '嗯' }), c, {}).go;
+})());
+ok('相关度门：纯图片没正文但有附件，照样放行', (() => {
+  const r = shouldConsider(group({ content: '', attachments: [{ url: 'x' }] }), pconf({ decide: 'relevance' }), {});
+  return r.go && /附件/.test(r.reason);
+})());
+ok('相关度门：窗口会攒最近的话（第二句能接上第一句）', (() => {
+  const c = pconf({ decide: 'relevance' });
+  const st = {};
+  shouldConsider(group({ content: '刚才那个游戏挺好玩的' }), c, st);
+  return (st.topicWindow || []).length === 1;
+})());
+
+ok('突发刹车：接满就停，明确被 @ 不拦', (() => {
+  const c = pconf({ policyBurstMax: 1 });
+  const st = {};
+  const a = shouldConsider(group({ content: '第一句' }), c, st);
+  const b = shouldConsider(group({ content: '第二句' }), c, st);
+  const at = shouldConsider(group({ mentioned: true, content: '第三句' }), c, st);
+  return a.go && !b.go && at.go && /两分钟内最多/.test(b.reason);
+})());
+ok('小时刹车：到上限就停', (() => {
+  const c = pconf({ policyMaxPerHour: 2 });
+  const st = {};
+  shouldConsider(group({ content: '一' }), c, st);
+  shouldConsider(group({ content: '二' }), c, st);
+  const r = shouldConsider(group({ content: '三' }), c, st);
+  return !r.go && /每小时最多/.test(r.reason);
+})());
+ok('静默时段：时段内不主动接、时段外照常', (() => {
+  const c = pconf({ policyQuietStartHour: 1, policyQuietEndHour: 8 });
+  return !shouldConsider(group(), c, { policyNowHour: 3 }).go
+    && shouldConsider(group(), c, { policyNowHour: 12 }).go;
+})());
+
+ok('「在吗」直接回：默认关，打开后 force 放行且不受刹车拦', (() => {
+  const off = shouldConsider(group({ content: '在吗' }), pconf({ policyBurstMax: 1 }), {});
+  const st = {};
+  const c = pconf({ policyShortAskMustReply: true, policyBurstMax: 1 });
+  const on = shouldConsider(group({ content: '在吗' }), c, st);
+  return off.go && on.go && on.force === true && /被追问/.test(on.reason);
+})());
+
+ok('连聊：刚说过话的 3 分钟内跳过相关度门，超次数自己停', (() => {
+  const c = conf({ policy: policyFromConfig({ decide: 'engaged', policyEngagedMaxTurns: 2 }), cooldownSec: 0 });
+  const st = { lastReplyAt: Date.now() - 1000 };
+  const a = shouldConsider(group({ content: '嗯' }), c, st);
+  const b = shouldConsider(group({ content: '嗯' }), c, st);
+  const d = shouldConsider(group({ content: '嗯' }), c, st);
+  return a.go && /连聊/.test(a.reason) && b.go && !d.go && /先停一下/.test(d.reason);
+})());
+
+ok('E10 读取位：主人静默时群里不自己接话，被 @ 仍能叫醒', (() => {
+  const c = conf({ policy: policyFromConfig({}), silent: true });
+  return !shouldConsider(group(), c, {}).go
+    && shouldConsider(group({ mentioned: true }), c, {}).go
+    && shouldConsider(group({ kind: 'c2c' }), c, {}).go;
+})());
+
 /* ---------------- 汇总 ---------------- */
 
 console.log(`\n${pass}/${pass + fails.length} 通过`);

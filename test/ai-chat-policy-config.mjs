@@ -12,6 +12,7 @@ const mod = await import(pathToFileURL(path.join(HERE, '..', 'plugins', 'ai-chat
 const {
   POLICY_MODES, GROUP_POLICY_DEFAULTS, normalizeGroupPolicy,
   inQuietHours, isSilent, withSilent, SILENT_STATE_KEY,
+  policyFromConfig, topicRelevance, isShortAsk, RELEVANCE_MIN,
 } = mod;
 
 let pass = 0;
@@ -27,7 +28,9 @@ const ok = (name, cond) => {
 };
 
 ok('默认策略就是现状 ai', normalizeGroupPolicy().mode === 'ai');
-ok('三个模式都注册了', POLICY_MODES.length === 3 && POLICY_MODES[0].value === 'ai');
+ok('五个模式都注册了（原有三个 + 两个 opt-in），第一个仍是 ai',
+  POLICY_MODES.length === 5 && POLICY_MODES[0].value === 'ai'
+  && POLICY_MODES.map((m) => m.value).join(',') === 'ai,mention,window,relevance,engaged');
 ok('默认刹车全关（0 = 不限制），不改变线上行为',
   normalizeGroupPolicy().burstMax === 0 && normalizeGroupPolicy().maxPerHour === 0);
 ok('默认静默时段不生效（起止相等）',
@@ -69,6 +72,44 @@ ok('字符串 "true" 不算静默', isSilent({ [SILENT_STATE_KEY]: 'true' }) ===
 const s1 = withSilent({ a: 1 }, true);
 ok('withSilent 写入且不改原对象', isSilent(s1) && !isSilent({ a: 1 }) && s1.a === 1);
 ok('withSilent(false) 能取消', !isSilent(withSilent(s1, false)));
+
+/* ---- 阶段 3：扁平配置、相关度打分、短句追问 ---- */
+
+ok('框架扁平键 → 策略对象', (() => {
+  const p = policyFromConfig({
+    decide: 'relevance', policyBurstMax: 8, policyMaxPerHour: 6,
+    policyQuietStartHour: 1, policyQuietEndHour: 8,
+    policyShortAskMustReply: true, policyEngagedMaxTurns: 4,
+  });
+  return p.mode === 'relevance' && p.burstMax === 8 && p.maxPerHour === 6
+    && p.quietStartHour === 1 && p.quietEndHour === 8
+    && p.shortAskMustReply === true && p.engagedMaxTurns === 4;
+})());
+ok('空扁平配置 = 默认策略（升级后行为不变）', (() => {
+  const p = policyFromConfig({});
+  return p.mode === 'ai' && p.burstMax === 0 && p.maxPerHour === 0
+    && p.quietStartHour === p.quietEndHour && p.shortAskMustReply === false;
+})());
+ok('扁平配置里写嵌套 groupPolicy 不会误读', policyFromConfig({ groupPolicy: { mode: 'engaged' } }).mode === 'ai');
+
+ok('相关度：问句过门', topicRelevance('这个要怎么弄啊？') >= RELEVANCE_MIN);
+ok('相关度：话题词过门', topicRelevance('今天天气真好') >= RELEVANCE_MIN);
+ok('相关度：长句过门', topicRelevance('我刚才看了一下那个文档感觉里面对这块的说明还是挺清楚的') >= RELEVANCE_MIN);
+ok('相关度：纯附和「嗯」「哦」被拦（省钱正是拦这些）',
+  topicRelevance('嗯') < RELEVANCE_MIN && topicRelevance('哦哦') < RELEVANCE_MIN);
+ok('相关度：接着刚才的话题说，窗口重合能加分', (() => {
+  const alone = topicRelevance('那个怎么解决');
+  const withWin = topicRelevance('那个怎么解决', ['前面说的那个 bug 怎么解决', '我也遇到那个了']);
+  return withWin >= alone;
+})());
+ok('相关度：空文本 0 分，不抛错', topicRelevance('') === 0 && topicRelevance(null, [null, 3]) === 0);
+ok('相关度：上限 1', topicRelevance('为什么这个游戏这么好玩呀？', ['为什么这个游戏这么好玩呀？']) <= 1);
+
+ok('短句追问默认关', isShortAsk('在吗') === false);
+ok('短句追问打开后认「在吗 / 人呢」',
+  isShortAsk('在吗', true) && isShortAsk('人呢', true) && isShortAsk('在不在', true));
+ok('短句追问不认长句和陈述句',
+  !isShortAsk('在吗在吗在吗在吗在吗在吗在吗', true) && !isShortAsk('今天好热', true));
 
 console.log(`\n${pass} pass, ${fails.length} fail`);
 if (fails.length) process.exit(1);

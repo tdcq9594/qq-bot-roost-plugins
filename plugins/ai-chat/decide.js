@@ -14,6 +14,8 @@
  * 这些是明确的对话请求，再让模型判断一遍纯属浪费。
  */
 
+import { RELEVANCE_MIN, inQuietHours, isShortAsk, topicRelevance } from './policy-config.js';
+
 /** 模型用这个标记表示「这条我不该接」 */
 export const SKIP_MARK = '<skip>';
 
@@ -157,6 +159,80 @@ export function shouldConsider(msg, c, state = {}) {
     if (recent.length >= c.maxRepliesPerMin) {
       return { go: false, reason: `每分钟最多 ${c.maxRepliesPerMin} 条，已经用满` };
     }
+  }
+
+  /**
+   * ---- 可选接话策略（调研报告 A2/A3/A4/A5 + E10 读取位）----
+   *
+   * 默认 `decide:'ai'` + 所有 `policy*` 参数为 0/false 时 `policyActive`
+   * 为 false，整块跳过、连 `state` 都不碰——必须与升级前逐字等价。
+   * 老配置 / 测试夹具没有 `c.policy` 时同样跳过。
+   *
+   * 放在冷却与每分钟配额**之后**：那两道先拦，拦了就不计入策略次数，
+   * 免得「被冷却挡掉的消息」也把小时额度吃掉。
+   */
+  const p = c.policy;
+  const policyActive = !!p && (
+    p.mode !== 'ai' || p.burstMax > 0 || p.maxPerHour > 0 ||
+    p.quietStartHour !== p.quietEndHour || p.shortAskMustReply || c.silent === true
+  );
+  if (policyActive) {
+    /** E10：阶段 7 的 `/silent` 会写这个值；被 @ / 私聊 / addressed 已在上面放行 */
+    if (c.silent === true) return { go: false, reason: '主人设了静默' };
+
+    const times = (state.policyTimes ??= []);
+    while (times.length && now - times[0] > 3_600_000) times.shift();
+    const shortAsk = isShortAsk(text, p.shortAskMustReply);
+
+    /** 明确被追问时刹车不拦（对方 `group-policy.js` 同款：明确被叫不拦） */
+    if (!shortAsk) {
+      /** 测试可注入小时（state.policyNowHour），生产走本地时间 */
+      const hour = Number.isFinite(state.policyNowHour) ? state.policyNowHour : new Date().getHours();
+      if (inQuietHours(p, hour)) return { go: false, reason: '静默时段' };
+      if (p.burstMax > 0 && times.filter((t) => now - t < 120_000).length >= p.burstMax) {
+        return { go: false, reason: `两分钟内最多接 ${p.burstMax} 次` };
+      }
+      if (p.maxPerHour > 0 && times.length >= p.maxPerHour) {
+        return { go: false, reason: `每小时最多接 ${p.maxPerHour} 次` };
+      }
+    }
+
+    const adopt = (reason, force = false) => {
+      times.push(now);
+      return { go: true, force, reason };
+    };
+
+    if (shortAsk) return adopt('被追问（在吗 / 人呢）', true);
+    /** 纯图片 / 语音没有正文，相关度打分会误判成 0 —— 直接放行 */
+    if (atts.length && !text) return adopt('有附件，交给模型看');
+
+    /** A3：她刚说过话的 3 分钟内算「在聊」，跳过相关度门接着聊 */
+    if (p.mode === 'engaged' && state.lastReplyAt && now - state.lastReplyAt < 3 * 60_000) {
+      if (state.engagedAt !== state.lastReplyAt) {
+        state.engagedAt = state.lastReplyAt;
+        state.engagedCount = 0;
+      }
+      state.engagedCount = (state.engagedCount || 0) + 1;
+      if (state.engagedCount > p.engagedMaxTurns) {
+        return { go: false, reason: `已经连着接了 ${p.engagedMaxTurns} 次没人接，先停一下` };
+      }
+      return adopt(`连聊中（第 ${state.engagedCount} 次）`);
+    }
+
+    /** A2：免费相关度门。关键词 + 最近消息窗口，不查跨进程记忆 */
+    if (p.mode === 'relevance' || p.mode === 'engaged') {
+      const win = (state.topicWindow ??= []);
+      const rel = topicRelevance(text, win);
+      win.push(text);
+      if (win.length > 8) win.shift();
+      if (rel < RELEVANCE_MIN) {
+        return { go: false, reason: `相关度 ${rel.toFixed(2)} 太低，省一次模型` };
+      }
+      return adopt(`相关度 ${rel.toFixed(2)}，交给模型判断`);
+    }
+
+    /** 只开了刹车、模式仍是 ai：也要计数，否则小时/突发额度永远吃不满 */
+    return adopt('交给模型判断');
   }
 
   return { go: true, force: false, reason: '交给模型判断' };

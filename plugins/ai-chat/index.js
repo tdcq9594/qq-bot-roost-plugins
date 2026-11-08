@@ -28,6 +28,7 @@
 import { createAdapter } from './adapter/index.js';
 import { createBridge } from './adapter/bridge.js';
 import { createBusyQueue } from './busy-queue.js';
+import { POLICY_MODES, policyFromConfig } from './policy-config.js';
 import { buildUserContent } from './inbound.js';
 import { sendReply, sendMedia, sendAutoReply, buildKeyboard } from './outbound.js';
 import { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseDuration, parseButton, textOf, isFromBot, SKIP_MARK, DEFAULT_IGNORE, hasInlineImage, extractInlineImages } from './decide.js';
@@ -117,6 +118,7 @@ const dash = {
   seen: 0,          // 进入 handle 的消息（分母）
   forwarded: 0,     // 真正跑了一轮模型
   ruleBlocked: 0,   // shouldConsider 拒（mention/窗口/空/指令前缀）
+  policyBlocked: 0, // 其中：可选接话策略挡掉（ruleBlocked 的子集，不重复计入未归类）
   quotaBlocked: 0,  // 每分钟配额用满
   moodBlocked: 0,   // 社交意愿低
   busyDropped: 0,   // 重入过一次仍等不到，才真的丢（正常应为 0）
@@ -140,12 +142,21 @@ function normReason(r) {
   if (/^以「/.test(t)) return '像别的插件的指令（前缀）';
   if (/冷却中/.test(t)) return '冷却中（攒着）';
   if (/窗口/.test(t)) return '不在 @ 之后的窗口内';
+  if (/相关度/.test(t)) return '相关度太低（省钱策略）';
+  if (/两分钟内最多/.test(t)) return '突发刹车';
+  if (/每小时最多/.test(t)) return '小时刹车';
+  if (/静默时段|主人设了静默/.test(t)) return '静默';
+  if (/连着接了/.test(t)) return '连聊到上限';
   return t;
 }
 
-function bump(k, reason) {
+/** 可选策略挡下的原因（用于 dashboard 子集计数，不改原有分类口径） */
+const POLICY_BLOCK_RE = /相关度|两分钟内最多|每小时最多|静默时段|连着接了|主人设了静默/;
+
+function bump(k, reason, countReason = true) {
   if (k in dash && typeof dash[k] === 'number') dash[k] += 1;
-  if (reason) {
+  /** 子集计数（policyBlocked）只加总数，别把同一个原因在 Top 里算两遍 */
+  if (reason && countReason) {
     const r = normReason(reason);
     dash.reasons[r] = (dash.reasons[r] || 0) + 1;
   }
@@ -183,11 +194,8 @@ export default {
     decide: {
       type: 'select',
       default: 'ai',
-      options: [
-        { value: 'ai', label: 'AI 自己判断（读全量消息）' },
-        { value: 'mention', label: '只有被 @ 时说话' },
-        { value: 'window', label: '@ 之后一段时间内都接话' },
-      ],
+      /** 模式只此一份定义（policy-config.js），面板与决策门不会各说各话 */
+      options: POLICY_MODES,
       label: '什么时候接话',
       /**
        * 三个模式的边界要写清，否则用户分不出「只在被 @」和「@ 之后一段时间」：
@@ -204,7 +212,44 @@ export default {
        */
       desc: '「AI 自己判断」= 每条都看一眼，该接才接；'
         + '「只有被 @ 时」= 其余一律不理，最省；'
-        + '「@ 之后一段时间」= 叫一次之后那段时间内接着聊，过点恢复安静（时长见下一项）',
+        + '「@ 之后一段时间」= 叫一次之后那段时间内接着聊，过点恢复安静（时长见下一项）；'
+        + '「省钱」和「连聊」是进阶选项：**会削弱 AI 自决**，先用规则替它挡掉没内容的短句，默认不选',
+    },
+
+    /**
+     * 以下六个是接话策略的可调参数。框架 `ctx.config` 是扁平 map，
+     * 所以不用 `groupPolicy.xxx` 嵌套，统一 `policy*` 前缀。
+     * **默认全部不生效**（0 / false / 静默起止相等），升上来行为不变。
+     */
+    policyBurstMax: {
+      type: 'number', default: 0, min: 0, max: 30,
+      label: '两分钟内最多接几次',
+      desc: '0 = 不限。设了之后短时间内连着接满就先歇会儿，明显被叫住（在吗 / @）不拦',
+    },
+    policyMaxPerHour: {
+      type: 'number', default: 0, min: 0, max: 100,
+      label: '每小时最多接几次',
+      desc: '0 = 不限。比每分钟配额更粗的一层刹车，防止一下午都在跟着群里聊',
+    },
+    policyQuietStartHour: {
+      type: 'number', default: 1, min: 0, max: 23,
+      label: '安静时段从几点',
+      desc: '本地时间。起止填成同一个数 = 不设安静时段（默认）',
+    },
+    policyQuietEndHour: {
+      type: 'number', default: 1, min: 0, max: 23,
+      label: '安静时段到几点',
+      desc: '比如从 1 填到 8 = 凌晨 1 点到 8 点不主动接话；跨零点也支持（23 → 8）',
+    },
+    policyShortAskMustReply: {
+      type: 'boolean', default: false,
+      label: '「在吗」直接回',
+      desc: '默认关。打开后，12 字以内的「在吗 / 人呢」不用过模型判断，直接接。会削弱 AI 自决',
+    },
+    policyEngagedMaxTurns: {
+      type: 'number', default: 6, min: 1, max: 20,
+      label: '连聊最多接几次',
+      desc: '只在「连聊」模式下生效。她刚说过话的 3 分钟内接着聊，没人接就到次数停下',
     },
     windowMin: {
       type: 'number',
@@ -377,6 +422,7 @@ export default {
         { label: '看到消息', value: dash.seen, unit: '条', hint: '进入判定的入站消息（分母）' },
         { label: '转发给 DSH', value: dash.forwarded, unit: '条', hint: '真的跑了一轮模型' },
         { label: '规则挡掉', value: dash.ruleBlocked, unit: '条', hint: '只在被 @ / 窗口 / 空消息 / 指令前缀' },
+        { label: '其中：接话策略', value: dash.policyBlocked, unit: '条', hint: '相关度门 / 刹车 / 静默时段挡下的，是「规则挡掉」的子集，不另计' },
         { label: '配额挡掉', value: dash.quotaBlocked, unit: '条', hint: '每分钟最多 N 条用满' },
         { label: '忙态丢掉', value: dash.busyDropped, unit: '条', hint: '重入一次仍等不到才丢，正常应为 0' },
         { label: '忙态攒着', value: dash.busyQueued, unit: '条', hint: '等上一轮超时后攒着等释放，不是丢' },
@@ -501,6 +547,14 @@ export default {
         publicUrl: String(c.publicUrl ?? 'http://127.0.0.1:8080').trim().replace(/\/+$/, ''),
         debug: Boolean(c.debug),
         answerBots: Boolean(c.answerBots),
+        /** 可选接话策略：默认全关，没配过 policy* 时 policyFromConfig 给的就是现状 */
+        policy: policyFromConfig(c),
+        /**
+         * E10 读取位（阶段 7 的 `/silent /active` 才写 `ctx.state`）。
+         * 提前读出来传给规则门，这样静默时她知道自己没在说话，
+         * 不会「以为在聊、其实被静默」而接不上。进程内状态，重启失效。
+         */
+        silent: ctx.state?.aiChatSilent === true,
       };
     };
 
@@ -1309,6 +1363,8 @@ export default {
         /** 配额单独一类：它和「设了只在被 @ 时」是完全不同的两种原因 */
         const quota = /每分钟最多/.test(String(gate.reason));
         bump(quota ? 'quotaBlocked' : 'ruleBlocked', gate.reason);
+        /** 策略拦下的单独记一笔：用户开了策略却没效果时，这里是唯一的证据 */
+        if (POLICY_BLOCK_RE.test(String(gate.reason))) bump('policyBlocked', gate.reason, false);
         if (c.debug) ctx.logger.debug(`[ai-chat] 不接（${gate.reason}）：${String(msg.content).slice(0, 30)}`);
         return;
       }
