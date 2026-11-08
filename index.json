@@ -71,10 +71,10 @@
     {
       "id": "comfy-draw",
       "name": "本地绘图 (ComfyUI)",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "description": "发「ai绘图+一只猫」，它就用你电脑上的 ComfyUI 画出来并直接发到会话",
       "author": "haibiandefengshu",
-      "credits": "插件由 haibiandefengshu 提交（PR #4），签名由维护者用离线私钥重签",
+      "credits": "插件由 haibiandefengshu 提交（PR #4），1.0.3 由 PR #7 更新；签名由维护者用离线私钥重签",
       "path": "plugins/comfy-draw",
       "tags": [
         "AI 绘图",
@@ -87,7 +87,7 @@
       ],
       "addedAt": "2026-11-07",
       "runtime": "node",
-      "sha256": "1d1d582e8495359325c1135c9df94872d742bdd5bab2528975ffba056f388bc9",
+      "sha256": "5a4503b929bad82cb628227e38c2da622c5802b81a8c012ad403cb4d609b4e0b",
       "frameworkVersion": ">=0.6.13"
     },
     {
