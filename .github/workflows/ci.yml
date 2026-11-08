@@ -99,7 +99,7 @@ jobs:
           # v1.0.7 起有 msg_type=8 图文卡片 replyTuwen；v1.0.6 起富媒体发图不带占位空格；
           # v1.0.4 起消息带 uin / userAliases，被动回复上限群 5 / 单聊 4，
           # ai-chat 4.4.5 依赖它）。v1.0.8 修的是 1.0.7 实例锁判活回归。
-          ref: ${{ vars.FRAMEWORK_REF || 'v1.0.11' }}
+          ref: ${{ vars.FRAMEWORK_REF || 'v1.0.12' }}
 
       - name: 跑插件测试
         shell: bash
