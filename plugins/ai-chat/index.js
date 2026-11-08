@@ -29,6 +29,7 @@ import { createAdapter } from './adapter/index.js';
 import { createBridge } from './adapter/bridge.js';
 import { createBusyQueue } from './busy-queue.js';
 import { POLICY_MODES, policyFromConfig, isSilent, withSilent } from './policy-config.js';
+import { startSlowNotice } from './slow-notice.js';
 import { buildUserContent } from './inbound.js';
 import { sendReply, sendMedia, sendAutoReply, buildKeyboard } from './outbound.js';
 import { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseDuration, parseButton, textOf, isFromBot, SKIP_MARK, DEFAULT_IGNORE, hasInlineImage, extractInlineImages } from './decide.js';
@@ -356,6 +357,15 @@ export default {
       desc: '模型这么久没回就放弃，别让用户干等',
     },
 
+    slowNoticeSec: {
+      type: 'number',
+      default: 8,
+      min: 0,
+      max: 120,
+      label: '等多久先回一句（秒）',
+      desc: '模型超过这么久还没回，先发一句「我看看，稍等一下」，别让人以为她掉线了；0 = 关',
+    },
+
     dshUrl: {
       type: 'text',
       default: 'http://127.0.0.1:17321',
@@ -553,6 +563,7 @@ export default {
         ignoreWords: Array.isArray(c.ignoreWords) ? c.ignoreWords.map(String).filter(Boolean) : DEFAULT_IGNORE,
         markdown: c.markdown !== false,
         timeoutSec: num(c.timeoutSec, DEFAULT_TIMEOUT_SEC, 5),
+        slowNoticeSec: num(c.slowNoticeSec, 8, 0),
         dshUrl: String(c.dshUrl ?? 'http://127.0.0.1:17321').trim().replace(/\/+$/, ''),
         publicUrl: String(c.publicUrl ?? 'http://127.0.0.1:8080').trim().replace(/\/+$/, ''),
         debug: Boolean(c.debug),
@@ -1667,6 +1678,11 @@ export default {
         });
         store.trim(s);
 
+        /** E5：模型跑得久时先回一句（`replyNow` 立即发、不占主动额度），回来后取消 */
+        const slowNotice = startSlowNotice({
+          replyNow: (t) => msg.replyNow?.(t),
+          sec: c.slowNoticeSec,
+        });
         const { text, parts, requestIds = [], files = [], usage, model } = await callModel(s.messages, {
           signal: paceSt.controller.signal,
           /**
@@ -1705,7 +1721,7 @@ export default {
            */
           said: batch.text,
           batch,
-        });
+        }).finally(() => slowNotice.cancel());
 
         /** 到这里才真跑过一轮模型：上面的 await 任一抛错都会进 catch，不计数 */
         bump('forwarded');
