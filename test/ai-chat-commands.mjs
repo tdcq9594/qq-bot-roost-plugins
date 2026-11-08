@@ -101,9 +101,10 @@ const calls = [];
 globalThis.fetch = async (url, init) => {
   const body = JSON.parse(init?.body || '{}');
   calls.push({ url: String(url), body });
+  const picked = body.arg?.off ? null : { provider: body.arg?.provider || 'p', model: body.arg?.model || 'm' };
   const reply = body.op === 'model.get'
-    ? { ok: true, override: null, global: { provider: 'deepseek', model: 'deepseek-chat' } }
-    : { ok: true, override: body.arg?.off ? null : { provider: body.arg.provider, model: body.arg.model } };
+    ? { ok: true, override: null, byKind: null, global: { provider: 'deepseek', model: 'deepseek-chat' } }
+    : (body.arg?.kind ? { ok: true, byKind: picked } : { ok: true, override: picked });
   return { ok: true, status: 200, json: async () => reply };
 };
 
@@ -124,6 +125,20 @@ await commands.model.fn(msg, { args: ['off'] });
 ok('/model off = model.set + off:true',
   calls.at(-1)?.body?.op === 'model.set' && calls.at(-1)?.body?.arg?.off === true);
 ok('/model off 回话说明恢复全局', /恢复全局/.test(replied.at(-1) || ''));
+
+await commands.model.fn(msg, { args: ['kind', 'c2c', 'aliyun', 'qwen-max'] });
+ok('/model kind c2c p m = model.set + kind',
+  calls.at(-1)?.body?.arg?.kind === 'c2c'
+  && calls.at(-1)?.body?.arg?.provider === 'aliyun'
+  && calls.at(-1)?.body?.arg?.model === 'qwen-max');
+ok('/model kind 回话说明「所有私聊」', /所有私聊/.test(replied.at(-1) || ''), replied.at(-1));
+
+await commands.model.fn(msg, { args: ['kind', 'group', 'off'] });
+ok('/model kind group off = off:true',
+  calls.at(-1)?.body?.arg?.kind === 'group' && calls.at(-1)?.body?.arg?.off === true);
+
+await commands.model.fn(msg, { args: ['kind', 'bogus'] });
+ok('/model kind 非法类型给用法', /用法/.test(replied.at(-1) || ''), replied.at(-1));
 
 /* dsh-roost 返回失败时如实回话 */
 globalThis.fetch = async () => ({ ok: false, status: 500, json: async () => ({ ok: false, message: '炸了' }) });

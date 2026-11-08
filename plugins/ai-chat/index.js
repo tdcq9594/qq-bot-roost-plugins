@@ -810,17 +810,34 @@ export default {
     });
 
     ctx.command('model [provider] [model]', {
-      desc: '看/切当前会话的模型；/model off 恢复全局默认',
+      desc: '看/切模型：/model p m 改本会话，/model off 恢复；/model kind c2c|group p m 改该类默认',
       admin: true,
     }, async (msg, { args } = {}) => {
       const base = String(conf().dshUrl || '').replace(/\/+$/, '');
       if (!base) return cmdReply(msg, '还没配 DSH 地址，先去插件配置填 dshUrl。');
       const a0 = String(args?.[0] ?? '').toLowerCase();
-      const body = (a0 === 'off' || a0 === '关')
-        ? { op: 'model.set', arg: { chatId: msg.chatId, off: true } }
-        : (args?.length >= 2
-          ? { op: 'model.set', arg: { chatId: msg.chatId, provider: String(args[0]), model: String(args[1]) } }
-          : { op: 'model.get', arg: { chatId: msg.chatId } });
+      const isOff = (v) => v === 'off' || v === '关';
+      const kindLabel = (k) => (k === 'c2c' ? '私聊' : '群');
+      let body;
+      if (a0 === 'kind') {
+        const kind = String(args?.[1] ?? '').toLowerCase();
+        if (!['c2c', 'group'].includes(kind)) {
+          return cmdReply(msg, '用法：/model kind c2c <provider> <model>，或 /model kind c2c off');
+        }
+        const rest = args.slice(2);
+        body = isOff(String(rest[0] ?? '').toLowerCase())
+          ? { op: 'model.set', arg: { kind, off: true } }
+          : (rest.length >= 2
+            ? { op: 'model.set', arg: { kind, provider: String(rest[0]), model: String(rest[1]) } }
+            : { op: 'model.get', arg: { kind } });
+      } else if (isOff(a0)) {
+        body = { op: 'model.set', arg: { chatId: msg.chatId, off: true } };
+      } else if (args?.length >= 2) {
+        body = { op: 'model.set', arg: { chatId: msg.chatId, provider: String(args[0]), model: String(args[1]) } };
+      } else {
+        body = { op: 'model.get', arg: { chatId: msg.chatId } };
+      }
+      const kind = String(body.arg?.kind || '');
       try {
         const res = await fetch(`${base}/roost/api/quick`, {
           method: 'POST',
@@ -829,17 +846,19 @@ export default {
         });
         const j = await res.json().catch(() => ({}));
         if (!j.ok) return cmdReply(msg, `没成：${j.message || res.status}`);
-        if (body.op === 'model.set') {
-          const o = j.override;
-          return cmdReply(msg, o
-            ? `这个会话改用 ${o.provider} / ${o.model}，下一轮生效。`
-            : '这个会话恢复全局默认模型，下一轮生效。');
-        }
-        const o = j.override;
+        const o = kind ? j.byKind : j.override;
         const g = j.global;
+        if (body.op === 'model.set') {
+          const who = kind ? `所有${kindLabel(kind)}` : '这个会话';
+          return cmdReply(msg, o
+            ? `${who}改用 ${o.provider} / ${o.model}，下一轮生效。`
+            : `${who}恢复全局默认模型，下一轮生效。`);
+        }
+        const who = kind ? `所有${kindLabel(kind)}默认` : '这个会话';
+        const how = kind ? `/model kind ${kind} <provider> <model>` : '/model <provider> <model>';
         return cmdReply(msg, o
-          ? `这个会话：${o.provider} / ${o.model}${o.reasoningEffort ? `（${o.reasoningEffort}）` : ''}\n全局默认：${g?.provider || '?'} / ${g?.model || '?'}\n恢复：/model off`
-          : `这个会话用全局默认：${g?.provider || '?'} / ${g?.model || '?'}\n要改：/model <provider> <model>`);
+          ? `${who}：${o.provider} / ${o.model}${o.reasoningEffort ? `（${o.reasoningEffort}）` : ''}\n全局默认：${g?.provider || '?'} / ${g?.model || '?'}\n恢复：${kind ? `/model kind ${kind} off` : '/model off'}`
+          : `${who}用全局默认：${g?.provider || '?'} / ${g?.model || '?'}\n要改：${how}`);
       } catch (e) {
         return cmdReply(msg, `连不上 DSH：${e?.message ?? e}`);
       }
