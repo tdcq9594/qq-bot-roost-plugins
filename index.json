@@ -367,10 +367,10 @@
     {
       "id": "trpg-forwarder",
       "name": "跑团转发器",
-      "version": "0.5.0",
+      "version": "0.6.5",
       "description": "把群消息桥给本机 dsh-trpg，再把骰点与剧情直发回群；单独装它不会回复",
       "author": "haibiandefengshu",
-      "credits": "插件由 haibiandefengshu 提交（PR #5），0.5.0 由 PR #6 更新；签名由维护者用离线私钥重签",
+      "credits": "插件由 haibiandefengshu 提交（PR #5），0.6.5 由 PR #8 更新；签名由维护者用离线私钥重签",
       "path": "plugins/trpg-forwarder",
       "tags": [
         "跑团",
@@ -383,7 +383,7 @@
       ],
       "addedAt": "2026-11-07",
       "runtime": "node",
-      "sha256": "a49f35230361502c2a4f6fce72574cb9b26ca4e3bec63f22a08df560909c4bc7",
+      "sha256": "25ccabc1b702a7704d194bb9d26f6b3f1413fe4603e5f772bc9e91eace12c4f1",
       "frameworkVersion": ">=1.0.0"
     }
   ]
