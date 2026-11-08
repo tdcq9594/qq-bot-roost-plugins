@@ -19,7 +19,7 @@
  * 和 scripts/build-index.mjs 都用正则读源码，引用常量读不到 → 索引写不进版本号、
  * CI 判红。升版本要同步改两处，`test/smoke.test.mjs` 会断言一致。
  */
-const VERSION = '0.5.0';
+const VERSION = '0.6.5';
 
 const DEFAULTS = {
   enabled: true,
@@ -36,7 +36,7 @@ const DEFAULTS = {
 export default {
   id: 'trpg-forwarder',
   name: '跑团转发器',
-  version: '0.5.0', // 必须是字面量，与上面的 VERSION 同步
+  version: '0.6.5', // 必须是字面量，与上面的 VERSION 同步
   shortDesc: '把群消息桥给本机的 dsh-trpg，再把它的骰子与剧情直发回群',
   // 市场列表只读这一行，硬要求「一句话、不超过 60 字」；多行长文会让插件市场
   // 里糊一大段说明（build-index.mjs 会原样灌进索引）。详细说明留在 README。
@@ -253,7 +253,12 @@ export default {
       ].join('\n');
       const msg = recentMsgs.get(evt.msgId)?.msg;
       const send = msg?.replyNow ? msg.replyNow(text) : ctx.push?.(evt.groupId, text);
-      Promise.resolve(send).catch(() => {});
+      /**
+       * B-5：失败不能静默。
+       * 以前 `.catch(() => {})` 把「这条没发出去」彻底吞掉，
+       * 群里看起来像机器人没反应，日志里也什么都没有。
+       */
+      Promise.resolve(send).catch((e) => log.warn(`离线提示没发出去：${e?.message || e}`));
     }
 
     /* ── 下行：/send（幂等 + 复用 Roost 的 msg_seq 与降级逻辑）──────── */
@@ -270,11 +275,95 @@ export default {
     const pruneTimer = setInterval(prune, 60000);
     pruneTimer.unref?.();
 
+    /**
+     * B-4：下行限速。
+     * 令牌一旦泄露，没有限速就是无限刷屏机。窗口内超过阈值直接 429，
+     * 让上游（dsh-trpg）自己退避，而不是把群冲了。
+     */
+    const sendHits = [];
+    const SEND_WINDOW_MS = 60000;
+    const SEND_MAX = 30;
+    function sendRateLimited() {
+      const now = Date.now();
+      while (sendHits.length && now - sendHits[0] > SEND_WINDOW_MS) sendHits.shift();
+      if (sendHits.length >= SEND_MAX) return true;
+      sendHits.push(now);
+      return false;
+    }
+
+    /**
+     * 让 DSH 侧能把共享令牌推过来（`PATCH /config`）。
+     *
+     * 以前这里只有 /send，DSH 改完令牌去同步会 404「接口不存在」——
+     * 两边令牌不一致，群里就没反应，而报错文案看起来像「Roost 坏了」。
+     *
+     * 鉴权：请求体带 `from`（当前令牌）或面板访问密钥都行。
+     * 本地回环 + 旧令牌自证，够用了；没配令牌时（首次）直接放行。
+     */
+    ctx.registerRoute('PATCH', '/config', async ({ body, json }) => {
+      const c = conf();
+      const b = body && typeof body === 'object' ? body : {};
+      if (c.token) {
+        const from = String(b.from || '');
+        if (!safeEqual(from, c.token)) {
+          return json(403, { ok: false, error: 'bad_token', message: 'from 与当前共享令牌不一致' });
+        }
+      }
+      const next = {};
+      if (typeof b.token === 'string' && b.token.trim()) next.token = b.token.trim();
+      if (!Object.keys(next).length) return json(400, { ok: false, error: 'nothing_to_update' });
+      try {
+        await ctx.setConfig(next);
+        return json(200, { ok: true, tokenConfigured: Boolean(conf().token) });
+      } catch (e) {
+        return json(500, { ok: false, error: String(e?.message || e) });
+      }
+    });
+
+    /**
+     * 把当前令牌交给 DSH 侧（`GET /r/token`）。
+     *
+     * 反向同步用：用户在 Roost 面板改了令牌之后，DSH 那边并不知道，
+     * 于是转发器用新令牌投递、DSH 用旧令牌校验 —— 一律 403，群里没反应。
+     * DSH 定期来这里拉一次就能自己跟上。
+     *
+     * 只回环可读（framework 的路由本身只监听本地），
+     * 面板设了访问密钥时要求带上 `x-access-key`。
+     */
+    ctx.registerRoute('GET', '/token', async ({ json }) => {
+      /**
+       * 注意：registerRoute 的 handler 只有 { query, body, method }，
+       * **拿不到 req / headers**（框架的明确设计），所以这里没法校验请求头。
+       * 这个路由本身只监听回环，且只回一个本来就存在 config.json 里的值，
+       * 暴露面没有增加 —— 真机多用户场景请改用操作系统级权限隔离。
+       */
+      const c = conf();
+      return json(200, { ok: true, token: String(c.token || ''), configured: Boolean(c.token) });
+    });
+
+    /**
+     * 重载。DSH 改完令牌会顺带调一下，这里只需要回 ok ——
+     * 配置是每次 `conf()` 现读的，本来就不需要真的重载。
+     */
+    ctx.registerRoute('POST', '/reload', async ({ json }) => {
+      return json(200, { ok: true, reloaded: false, note: '配置实时读取，无需重载' });
+    });
+
     ctx.registerRoute('POST', '/send', async ({ body, json }) => {
       const c = conf();
       if (!c.enabled) return json(503, { ok: false, error: 'forwarder_disabled' });
       const b = body && typeof body === 'object' ? body : {};
-      if (!c.token || !safeEqual(String(b.token || ''), c.token)) {
+      /**
+       * 令牌走 **body**，不是请求头。
+       *
+       * 这里踩过一次坑：`ctx.registerRoute` 的 handler 拿到的是纯数据
+       * `{ query, body, method }`（src/web/server.js:3400），**没有 req，
+       * 也没有 headers** —— 插件拿不到裸 req/res 是框架的明确设计。
+       * 所以写 `req.headers[...]` 会在每次调用时抛 `req is not defined`，
+       * 表现成 /send 一律 500，群里一句回复都没有（2026-11-08 15:40 就是这样）。
+       */
+      const givenToken = String(b.token || '');
+      if (!c.token || !safeEqual(givenToken, c.token)) {
         return json(403, { ok: false, error: 'bad_token' });
       }
       const requestId = String(b.requestId || '');
@@ -282,6 +371,7 @@ export default {
       if (requestId && (sent.has(requestId) || sentList.includes(requestId))) {
         return json(200, { ok: true, dup: true });
       }
+      if (sendRateLimited()) return json(429, { ok: false, error: 'rate_limited', windowMs: SEND_WINDOW_MS, max: SEND_MAX });
       const groupId = String(b.groupId || '');
       if (!groupId) return json(400, { ok: false, error: 'missing_groupId' });
       if (String(b.type || 'text') !== 'text') {
@@ -291,7 +381,20 @@ export default {
 
       const text = String(b.content ?? '');
       if (!text.trim()) return json(400, { ok: false, error: 'empty_content' });
-      const at = String(b.atOpenid || '');
+      /**
+       * B-2：单条上限。
+       * 没有上限时，持令牌的一次调用就能灌几百 KB 进群（还会被 QQ 截断成半张卡）。
+       * 4000 字≈官方单条上限，超出直接拒，让上游自己切段。
+       */
+      if (text.length > 4000) {
+        return json(413, { ok: false, error: 'content_too_long', limit: 4000, length: text.length });
+      }
+      /**
+       * B-1：atOpenid 是**不可信输入**。
+       * 以前直接拼进 `<qqbot-at-user id="${at}" />`，带个引号就能闭合标签、
+       * 往群里塞任意 markdown/HTML。openid 的字符集是固定的，直接白名单过滤。
+       */
+      const at = String(b.atOpenid || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
       const markdown = b.markdown === true || Boolean(at);
       // @ 人只有 markdown 消息能渲染，纯文本会把标签原样露出来
       const content = at ? `<qqbot-at-user id="${at}" />\n${text}` : text;
@@ -305,8 +408,12 @@ export default {
             ...(requestId ? { requestId } : {}),
           });
         } else {
-          // 载体找不到了（进程重启/超过 5 分钟）：直接打接口，让它按主动消息走额度
-          await ctx.api.sendGroup(groupId, {
+          /**
+           * 载体找不到了（进程重启/超过 5 分钟）：直接打接口，按主动消息走额度。
+           * 单聊必须走 sendC2C —— 拿 sendGroup 发单聊 openid 会 400「群不存在」。
+           */
+          const sender = b.direct ? ctx.api.sendC2C : ctx.api.sendGroup;
+          await sender(groupId, {
             msgId: String(b.replyMsgId || '') || undefined,
             content,
             ...(markdown ? { markdown: true } : {}),
@@ -348,9 +455,26 @@ export default {
      * 实测 2026-11-07 19:58：用户发 /trpg start，群里只看到「没有这个命令」。
      * 中间件在分发之前跑，接住后不调 next()，内核就当这条没发生。
      */
+    /**
+     * 命令白名单。
+     *
+     * **必须和 dsh-trpg 的 `CN_ALIASES` 同步** —— 这里没有的命令，
+     * 中间件根本不会转给 dsh-trpg，会被当成普通聊天交给 ai-chat。
+     * 之前加了 30 个中文命令却只在 DSH 侧实现，结果群里发 /开始 一条都到不了，
+     * 表现得像「插件没反应」。
+     */
     const TRPG_CMDS = new Set([
+      // 英文（原样保留）
       'trpg', 'st', 'status', 'pc', 'ra', 'r', 'roll', 'sc', 'jrrp', 'luck', 'tactic',
-      'afk', 'go', 'undo', 'note', 'help', '?',
+      'afk', 'go', 'undo', 'note', 'help', '?', 'setcoc',
+      // 中文：开局与进度
+      '开始', '开局', '继续', '暂停', '结束', '结团', '重开', '重置', '模组', '状态', '团',
+      // 中文：角色卡
+      '录卡', '建卡', '角色卡', '卡', '切换角色', '解绑',
+      // 中文：检定与骰子
+      '检定', '骰', '掷骰', '理智', '疯狂', '幸运', '房规',
+      // 中文：其他
+      '撤销', '记录', '战术', '暂离', '帮助', '指令',
     ]);
 
     /**
@@ -361,7 +485,19 @@ export default {
      * 没开团时用户发 `/help` 却什么都收不到，看起来就是这个插件把机器人搞坏了。
      * 收录要求里「命令名全局唯一、别用 help/status 这类通用词」防的正是这件事。
      */
-    const GENERIC_CMDS = new Set(['status', 'roll', 'r', 'help', '?']);
+    /**
+     * 中文命令里同样有一批「谁都想用」的词。
+     *
+     * `TRPG_CMDS` 加了 30 个中文命令之后，这里必须一起扩 —— 否则没开团的群里
+     * 群友发 `/帮助` `/状态` `/骰` 会被转发器接走，投给 dsh-trpg；
+     * dsh-trpg 没在跑、或者根本没装，这条消息就石沉大海，看起来像机器人坏了。
+     * 开团之后它们照旧归守密人（走 running === true 那条分支），不影响跑团。
+     */
+    const GENERIC_CMDS = new Set([
+      'status', 'roll', 'r', 'help', '?',
+      // 中文通用词：别的插件（骰娘、帮助、管理）也抢这些
+      '帮助', '指令', '状态', '卡', '骰', '记录',
+    ]);
 
     /**
      * 本地「这个群开过团」的名单（落 ctx.storage，重启不清）。
@@ -445,7 +581,13 @@ export default {
     ctx.use('trpg-forward', async (mctx, next) => {
       const msg = mctx?.msg;
       const c = conf();
-      if (!c.enabled || !msg || msg.kind !== 'group' || isBotMessage(msg)) return next();
+      /**
+       * 群聊和单聊都要接（`group` / `c2c`）。
+       * 以前只认 group，私聊发 /开始 直接 return next()，
+       * 于是那条消息被当成普通聊天交给 ai-chat —— 表现就是「私聊里指令无效」。
+       */
+      if (!c.enabled || !msg || (msg.kind !== 'group' && msg.kind !== 'c2c') || isBotMessage(msg)) return next();
+      const isDirect = msg.kind === 'c2c';
       const text = String(msg.content ?? '').trim();
       if (!text) return next();
 
@@ -454,7 +596,16 @@ export default {
       const cmd = isCmd ? text.slice(1).split(/\s+/)[0].toLowerCase() : '';
       await startedReady;
       const known = isCmd && TRPG_CMDS.has(cmd);
-      const stateKey = String(msg.groupUin || msg.groupId || '');
+      /**
+       * 会话键：群聊用群号，单聊用对方 openid。
+       *
+       * 单聊时 `groupId` / `groupUin` 都是空的，直接用会把 stateKey 拼成空串 ——
+       * 于是所有私聊共用一个「开团名单」条目，A 在私聊开团、B 的私聊也跟着进跑团模式。
+       * 事件里的 `groupId` 也是同一个键（下面 event 那段），两处必须一致。
+       */
+      const stateKey = isDirect
+        ? String(msg.userId || '')
+        : String(msg.groupUin || msg.groupId || '');
       /**
        * 这个群在不在跑团，由 stateCached 一处决定：
        *   · probeState 关（默认）→ 只看本地名单，零网络请求
@@ -477,7 +628,9 @@ export default {
       const event = {
         eventId: String(msg.id || `${msg.receivedAt}-${Math.random().toString(36).slice(2, 8)}`),
         botId: c.botId,
-        groupId: msg.groupId,
+        // 单聊没有群：用对方 openid 当会话键，DSH 那边一视同仁地存 session
+        groupId: isDirect ? String(msg.userId || '') : msg.groupId,
+        direct: isDirect,
         groupUin: msg.groupUin || '',
         userId: msg.userId,
         userUin: msg.uin || '',
