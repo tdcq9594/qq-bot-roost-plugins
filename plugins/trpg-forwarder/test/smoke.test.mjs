@@ -97,9 +97,17 @@ function makeCtx(config = {}) {
     },
     api: {
       sent: [],
+      sentC2C: [],
       async sendGroup(groupId, opts) {
         ctx.api.sent.push({ groupId, opts });
       },
+      async sendC2C(openid, opts) {
+        ctx.api.sentC2C.push({ openid, opts });
+      },
+    },
+    async setConfig(patch) {
+      Object.assign(config, patch);
+      return config;
     },
     __store: store,
     __middlewares: middlewares,
@@ -377,5 +385,148 @@ test('令牌为空时下行直接拒绝（不预置弱口令）', async () => {
     json: (code, obj) => ({ code, obj }),
   });
   assert.equal(res.code, 403);
+  ctx.__teardown();
+});
+
+/* ── 中文命令与单聊（0.6.x 新增） ─────────────────────────────────────── */
+
+test('没开团的群里，中文通用命令也放行', async () => {
+  const ctx = makeCtx({ token: 't0k3n' });
+  dsh.running = false;
+  plugin.setup(ctx);
+
+  for (const cmd of ['/帮助', '/指令', '/状态', '/骰 1d100', '/卡', '/记录']) {
+    assert.equal(await runMw(ctx, makeMsg(cmd)), true, `${cmd} 不该被转发器拦下`);
+  }
+
+  ctx.__teardown();
+});
+
+test('中文 TRPG 命令仍然接住并投递', async () => {
+  const ctx = makeCtx({ token: 't0k3n' });
+  dsh.running = false;
+  dsh.received.length = 0;
+  plugin.setup(ctx);
+
+  assert.equal(await runMw(ctx, makeMsg('/开始')), false, '中文开团命令要被接住');
+  await settle();
+  assert.ok(dsh.received.some((e) => /\/开始/.test(e.text)));
+
+  ctx.__teardown();
+});
+
+test('单聊消息也接（以前只认 group，私聊指令全被当普通聊天）', async () => {
+  const ctx = makeCtx({ token: 't0k3n' });
+  dsh.running = false;
+  dsh.received.length = 0;
+  plugin.setup(ctx);
+
+  // 私聊里开团：会话键必须是这个人的 openid，不能是空串
+  const startDm = makeMsg('/trpg start', { kind: 'c2c', userId: 'u9', groupId: undefined, groupUin: undefined });
+  assert.equal(await runMw(ctx, startDm), false, '私聊里的命令也要被接住');
+  await settle();
+
+  const dm = makeMsg('我推门进去', { kind: 'c2c', userId: 'u9', groupId: undefined, groupUin: undefined });
+  assert.equal(await runMw(ctx, dm), false, '开团后单聊发言也要归守密人');
+  await settle();
+  const evt = dsh.received.find((e) => e.direct === true);
+  assert.ok(evt, '单聊事件要带 direct 标记');
+  assert.equal(evt.groupId, 'u9', '单聊用对方 openid 当会话键');
+
+  ctx.__teardown();
+});
+
+/* ── /send 的输入校验（0.6.x 新增） ───────────────────────────────────── */
+
+test('/send：内容超过 4000 字返回 413', async () => {
+  const ctx = makeCtx({ token: 't0k3n' });
+  plugin.setup(ctx);
+  const handler = ctx.__routes.get('POST /send');
+  const res = await handler({
+    body: { token: 't0k3n', groupId: 'G1', content: 'x'.repeat(4001) },
+    json: (code, obj) => ({ code, obj }),
+  });
+  assert.equal(res.code, 413);
+  assert.equal(res.obj.limit, 4000);
+  assert.equal(ctx.api.sent.length, 0);
+
+  ctx.__teardown();
+});
+
+test('/send：atOpenid 里的引号等字符被剥掉（防标签闭合注入）', async () => {
+  const ctx = makeCtx({ token: 't0k3n' });
+  plugin.setup(ctx);
+  const handler = ctx.__routes.get('POST /send');
+  await handler({
+    body: { token: 't0k3n', groupId: 'G1', content: '你好', atOpenid: 'abc" onerror="x" 123' },
+    json: (code, obj) => ({ code, obj }),
+  });
+  const opts = ctx.api.sent[0]?.opts || {};
+  const content = String(opts.content ?? '');
+  // 标签本身带引号是正常的；要确认的是 at 值里不再有可闭合标签的字符
+  const m = content.match(/<qqbot-at-user id="([^"]*)" \/>/);
+  assert.ok(m, `@ 标签没拼出来：${content.slice(0, 60)}`);
+  assert.equal(m[1], 'abconerrorx123', '引号/空格/斜杠都要被剥掉');
+
+  ctx.__teardown();
+});
+
+test('/send：一分钟内超过 30 条返回 429（令牌泄露不等于无限刷屏）', async () => {
+  const ctx = makeCtx({ token: 't0k3n' });
+  plugin.setup(ctx);
+  const handler = ctx.__routes.get('POST /send');
+  let last = null;
+  for (let i = 0; i < 31; i += 1) {
+    last = await handler({
+      body: { token: 't0k3n', groupId: 'G1', content: `第 ${i} 条` },
+      json: (code, obj) => ({ code, obj }),
+    });
+  }
+  assert.equal(last.code, 429);
+  assert.equal(last.obj.error, 'rate_limited');
+
+  ctx.__teardown();
+});
+
+test('/send：direct=true 走 sendC2C，不走 sendGroup', async () => {
+  const ctx = makeCtx({ token: 't0k3n' });
+  plugin.setup(ctx);
+  const handler = ctx.__routes.get('POST /send');
+  const res = await handler({
+    body: { token: 't0k3n', groupId: 'openid-1', direct: true, content: '私聊回一句' },
+    json: (code, obj) => ({ code, obj }),
+  });
+  assert.equal(res.code, 200);
+  assert.equal(ctx.api.sentC2C.length, 1, '单聊必须走 sendC2C');
+  assert.equal(ctx.api.sendGroup ? ctx.api.sent.length : 0, 0);
+
+  ctx.__teardown();
+});
+
+/* ── 令牌互同步端点（0.6.x 新增） ─────────────────────────────────────── */
+
+test('PATCH /config：旧令牌不对就拒绝，对了才改', async () => {
+  const ctx = makeCtx({ token: 'old-token' });
+  plugin.setup(ctx);
+  const handler = ctx.__routes.get('PATCH /config');
+  const call = (body) => handler({ body, json: (code, obj) => ({ code, obj }) });
+
+  assert.equal((await call({ from: 'wrong', token: 'new-token' })).code, 403);
+  const ok = await call({ from: 'old-token', token: 'new-token' });
+  assert.equal(ok.code, 200);
+  assert.equal(ok.obj.tokenConfigured, true);
+
+  ctx.__teardown();
+});
+
+test('GET /token：把当前共享令牌交出去（路由本身在框架鉴权之后）', async () => {
+  const ctx = makeCtx({ token: 'share-me' });
+  plugin.setup(ctx);
+  const handler = ctx.__routes.get('GET /token');
+  const res = await handler({ json: (code, obj) => ({ code, obj }) });
+  assert.equal(res.code, 200);
+  assert.equal(res.obj.token, 'share-me');
+  assert.equal(res.obj.configured, true);
+
   ctx.__teardown();
 });
