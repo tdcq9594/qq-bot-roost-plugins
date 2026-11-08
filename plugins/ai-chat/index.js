@@ -28,7 +28,7 @@
 import { createAdapter } from './adapter/index.js';
 import { createBridge } from './adapter/bridge.js';
 import { createBusyQueue } from './busy-queue.js';
-import { POLICY_MODES, policyFromConfig, isSilent } from './policy-config.js';
+import { POLICY_MODES, policyFromConfig, isSilent, withSilent } from './policy-config.js';
 import { buildUserContent } from './inbound.js';
 import { sendReply, sendMedia, sendAutoReply, buildKeyboard } from './outbound.js';
 import { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseDuration, parseButton, textOf, isFromBot, SKIP_MARK, DEFAULT_IGNORE, hasInlineImage, extractInlineImages } from './decide.js';
@@ -528,6 +528,16 @@ export default {
     };
 
     /** 配置每次现读：面板改完立刻生效，不用重启 */
+    /**
+     * E10：`/quiet` 写的**进程内**安静时段覆盖配置（重启失效）。
+     * 持久化还是走面板改 `policyQuietStartHour/EndHour`，命令只做临时控制。
+     */
+    const withQuiet = (p) => {
+      const q = ctx.state?.aiChatQuiet;
+      if (!q || !Number.isInteger(q.start) || !Number.isInteger(q.end)) return p;
+      return { ...p, quietStartHour: q.start, quietEndHour: q.end };
+    };
+
     const conf = () => {
       const c = ctx.config ?? {};
       return {
@@ -548,7 +558,7 @@ export default {
         debug: Boolean(c.debug),
         answerBots: Boolean(c.answerBots),
         /** 可选接话策略：默认全关，没配过 policy* 时 policyFromConfig 给的就是现状 */
-        policy: policyFromConfig(c),
+        policy: withQuiet(policyFromConfig(c)),
         /**
          * E10 读取位（阶段 7 的 `/silent /active` 才写 `ctx.state`）。
          * 提前读出来传给规则门，这样静默时她知道自己没在说话，
@@ -737,6 +747,90 @@ export default {
         ctx.logger.info(`[ai-chat] 快捷 ${op} → ${j.ok ? 'ok' : j.message || res.status}`);
       } catch (e) {
         ctx.logger.warn(`[ai-chat] 快捷转发失败：${e?.message ?? e}`);
+      }
+    });
+
+    /* ---------------- E10：主人命令面 ---------------- */
+
+    /**
+     * 命令注册在**本插件内**：插件关掉命令就没了，恢复用框架的
+     * `/群插件 开 ai-chat`（`main.js` 的 `core('群插件')`）。不需要
+     * 「总开关关着也能用」——那是 aurabot 有 `/on` 才需要的设计。
+     *
+     * 权限一律 `admin: true`（框架 `LEVEL.admin`）：谁是管理员由框架的
+     * 权限系统配置（`roles.effective` + `cfg.owners` + 面板分配），
+     * 不写死主人；想放宽到成员在框架权限页调就行。
+     */
+    const cmdReply = (msg, text) => msg.reply(text).catch(() => {});
+
+    /** 把 `withSilent()` 生成的新对象写回框架持有的 `ctx.state` */
+    const setSilent = (on) => {
+      const next = withSilent(ctx.state, on);
+      for (const k of Object.keys(next)) ctx.state[k] = next[k];
+    };
+
+    ctx.command('silent', { desc: '先不主动接话（进程内，重启失效）', admin: true }, async (msg) => {
+      setSilent(true);
+      return cmdReply(msg, '好，我先安静。要恢复发 /active。');
+    });
+
+    ctx.command('active', { desc: '解除静默', admin: true }, async (msg) => {
+      setSilent(false);
+      return cmdReply(msg, '好，我回来了。');
+    });
+
+    ctx.command('quiet <开始小时> <结束小时>', {
+      desc: '设安静时段（0-23，跨零点也行）；/quiet off 取消',
+      admin: true,
+    }, async (msg, { args } = {}) => {
+      const a = String(args?.[0] ?? '').toLowerCase();
+      if (a === 'off' || a === '关' || a === '取消') {
+        delete ctx.state.aiChatQuiet;
+        return cmdReply(msg, '安静时段取消了。');
+      }
+      const start = Number(args?.[0]);
+      const end = Number(args?.[1]);
+      const ok = (n) => Number.isInteger(n) && n >= 0 && n <= 23;
+      if (!ok(start) || !ok(end)) {
+        return cmdReply(msg, '用法：/quiet 23 7（23 点到次日 7 点），或 /quiet off');
+      }
+      ctx.state.aiChatQuiet = { start, end };
+      return cmdReply(msg, `好，${start} 点到 ${end} 点我不主动说话（进程内，重启失效；要持久化去面板改）。`);
+    });
+
+    ctx.command('model [provider] [model]', {
+      desc: '看/切当前会话的模型；/model off 恢复全局默认',
+      admin: true,
+    }, async (msg, { args } = {}) => {
+      const base = String(conf().dshUrl || '').replace(/\/+$/, '');
+      if (!base) return cmdReply(msg, '还没配 DSH 地址，先去插件配置填 dshUrl。');
+      const a0 = String(args?.[0] ?? '').toLowerCase();
+      const body = (a0 === 'off' || a0 === '关')
+        ? { op: 'model.set', arg: { chatId: msg.chatId, off: true } }
+        : (args?.length >= 2
+          ? { op: 'model.set', arg: { chatId: msg.chatId, provider: String(args[0]), model: String(args[1]) } }
+          : { op: 'model.get', arg: { chatId: msg.chatId } });
+      try {
+        const res = await fetch(`${base}/roost/api/quick`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!j.ok) return cmdReply(msg, `没成：${j.message || res.status}`);
+        if (body.op === 'model.set') {
+          const o = j.override;
+          return cmdReply(msg, o
+            ? `这个会话改用 ${o.provider} / ${o.model}，下一轮生效。`
+            : '这个会话恢复全局默认模型，下一轮生效。');
+        }
+        const o = j.override;
+        const g = j.global;
+        return cmdReply(msg, o
+          ? `这个会话：${o.provider} / ${o.model}${o.reasoningEffort ? `（${o.reasoningEffort}）` : ''}\n全局默认：${g?.provider || '?'} / ${g?.model || '?'}\n恢复：/model off`
+          : `这个会话用全局默认：${g?.provider || '?'} / ${g?.model || '?'}\n要改：/model <provider> <model>`);
+      } catch (e) {
+        return cmdReply(msg, `连不上 DSH：${e?.message ?? e}`);
       }
     });
 
