@@ -111,5 +111,11 @@ ok('短句追问打开后认「在吗 / 人呢」',
 ok('短句追问不认长句和陈述句',
   !isShortAsk('在吗在吗在吗在吗在吗在吗在吗', true) && !isShortAsk('今天好热', true));
 
+ok('相关度：纯标点/问号串不给问句分', topicRelevance('？？？') === 0 && topicRelevance('!!!') === 0);
+ok('相关度：窗口里复读本句不加分', topicRelevance('嗯', ['嗯']) === 0);
+ok('短句追问：全角问号结尾也认', isShortAsk('在吗？', true) && isShortAsk('人呢？', true));
+ok('短句追问：纯问号算追问（全角/半角）', isShortAsk('？？', true) && isShortAsk('?', true));
+ok('短句追问：句子中间带「在吗」不算在叫人', !isShortAsk('今天好热在吗', true));
+
 console.log(`\n${pass} pass, ${fails.length} fail`);
 if (fails.length) process.exit(1);

@@ -28,7 +28,7 @@
 import { createAdapter } from './adapter/index.js';
 import { createBridge } from './adapter/bridge.js';
 import { createBusyQueue } from './busy-queue.js';
-import { POLICY_MODES, policyFromConfig } from './policy-config.js';
+import { POLICY_MODES, policyFromConfig, isSilent } from './policy-config.js';
 import { buildUserContent } from './inbound.js';
 import { sendReply, sendMedia, sendAutoReply, buildKeyboard } from './outbound.js';
 import { shouldConsider, isSkip, stripSkip, takeRetract, parseActions, parseDuration, parseButton, textOf, isFromBot, SKIP_MARK, DEFAULT_IGNORE, hasInlineImage, extractInlineImages } from './decide.js';
@@ -554,7 +554,9 @@ export default {
          * 提前读出来传给规则门，这样静默时她知道自己没在说话，
          * 不会「以为在聊、其实被静默」而接不上。进程内状态，重启失效。
          */
-        silent: ctx.state?.aiChatSilent === true,
+        /** 用 policy-config 的 isSilent 读：状态键只有一份定义（SILENT_STATE_KEY），
+         *  以前这里硬写 aiChatSilent，withSilent() 写进去的静默永远读不到。 */
+        silent: isSilent(ctx.state),
       };
     };
 
@@ -1321,7 +1323,8 @@ export default {
      */
     async function handle(msg) {
       const c = conf();
-      bump('seen');
+      /** 重入是同一条消息的第二次进 handle，不该把「收到」再计一遍 */
+      if (!msg.__countedSeen) { bump('seen'); msg.__countedSeen = true; }
 
       /**
        * 机器人发的消息不接。

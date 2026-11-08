@@ -113,7 +113,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
   const verifyOnly = args.includes('--verify');
 
   if (verifyOnly) {
-    const pubPath = resolveKeyPath(args, 'ROOST_TRUST_PUBKEY', 'keys/trust-public.pem');
+    /**
+     * 公钥在仓库根（`trust-public.pem`），历史默认却写 `keys/trust-public.pem`，
+     * 裸跑 `--verify` 因此必红。依次回退到仓根、框架仓的 keys/。
+     */
+    const pubPath = resolveKeyPath(args, 'ROOST_TRUST_PUBKEY', 'keys/trust-public.pem')
+      || resolveKeyPath(args, 'ROOST_TRUST_PUBKEY', 'trust-public.pem')
+      || resolveKeyPath(args, 'ROOST_TRUST_PUBKEY', '../bot/keys/trust-public.pem');
     const pub = pubPath ? fs.readFileSync(pubPath, 'utf8') : process.env.ROOST_TRUST_PUBKEY || '';
     const r = verifyIndex(target, pub);
     if (r.status === 'ok') {

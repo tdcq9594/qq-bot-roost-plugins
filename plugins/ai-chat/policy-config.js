@@ -95,6 +95,8 @@ function bigrams(s) {
 export function topicRelevance(text, windowTexts = []) {
   const t = String(text ?? '').trim();
   if (!t) return 0;
+  /** 纯标点/符号没有话题信息，不能让一串问号白骗 0.45 的问句分 */
+  if (!/[\p{L}\p{N}]/u.test(t)) return 0;
   let score = 0;
   if (ASK_RE.test(t)) score += 0.45;
   if (TOPIC_RE.test(t)) score += 0.3;
@@ -103,7 +105,10 @@ export function topicRelevance(text, windowTexts = []) {
   const bg = bigrams(t);
   let best = 0;
   for (const w of (Array.isArray(windowTexts) ? windowTexts : []).slice(-6)) {
-    const bw = bigrams(w);
+    const ws = String(w ?? '').trim();
+    /** 复读自己不算话题延续：窗口里那条若就是本句，跳过（审查实测「嗯」可得 0.5） */
+    if (!ws || ws === t) continue;
+    const bw = bigrams(ws);
     if (!bw.size) continue;
     let hit = 0;
     for (const g of bg) if (bw.has(g)) hit += 1;
@@ -118,7 +123,14 @@ export function isShortAsk(text, on = false) {
   if (!on) return false;
   const t = String(text ?? '').trim();
   if (!t || [...t].length > 12) return false;
-  return /(在吗|在不在|人呢|还在吗|喂|醒醒|出来|？？|\?)$/.test(t);
+  /** 纯问号＝追问，全角半角都认 */
+  if (/^[?？!！]{1,3}$/.test(t)) return true;
+  /**
+   * 去掉句尾语气标点后**整串**匹配。原来只有 `$` 没有 `^`：
+   * 「今天好热在吗」也会被当成在叫人；「在吗？」又因结尾全角问号而不认。
+   */
+  const core = t.replace(/[?？!！。.、,，~～\s]+$/g, '');
+  return /^(在吗|在不在|人呢|还在吗|喂|醒醒|出来)$/i.test(core);
 }
 
 const intIn = (v, min, max, fallback) => {

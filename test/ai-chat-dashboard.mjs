@@ -44,9 +44,13 @@ const cfg = {
   maxRepliesPerMin: 3,
   debug: false,
 };
+/** E10 状态位：`conf()` 现读 `ctx.state`，测试靠换它切静默 */
+const stateObj = {};
 const ctx = new Proxy({}, {
   get(_t, k) {
     if (k === 'config') return cfg;
+    /** E10 状态位：`conf()` 现读 `ctx.state`，测试靠换它切静默 */
+    if (k === 'state') return stateObj;
     if (k === 'storage') return { get: async () => null, set: async () => {} };
     if (k === 'logger') return { info: noop, debug: noop, warn: noop, error: noop };
     if (k === 'on') return (ev, fn) => { handlers[ev] = fn; };
@@ -141,6 +145,35 @@ ok('每个分支都有计数，分母可复算（未归类 = 0）', val(d6, '未
 ok('面板列全了 bots / noDsh / 调用失败 / 忙态等到',
   ['机器人消息', '没连上 DSH', '调用失败', '忙态等到', '未归类']
     .every((l) => d6.metrics.some((m) => m.label === l)));
+
+/* ---------------- E10 静默状态位 + 重入不重复计数 ---------------- */
+
+const dSeenA = plugin.dashboard();
+/** 同一个 msg 对象两次进 handle = 忙态队列重入 */
+const same = msg({ content: '同一条消息' });
+await handlers.message(same);
+const dSeenB = plugin.dashboard();
+await handlers.message(same);
+const dSeenC = plugin.dashboard();
+ok('首次进来计一次「看到消息」', val(dSeenB, '看到消息') === val(dSeenA, '看到消息') + 1);
+ok('同一条消息重入不重复计「看到消息」',
+  val(dSeenC, '看到消息') === val(dSeenB, '看到消息'),
+  `${val(dSeenB, '看到消息')} → ${val(dSeenC, '看到消息')}`);
+
+/**
+ * 键名必须是 policy-config 的 SILENT_STATE_KEY（'aiChat.silent'），不是 aiChatSilent。
+ * 用**普通群消息 + ai 模式**：@ / 私聊在策略块之前就放行了，静默只挡普通接话。
+ */
+cfg.decide = 'ai';
+stateObj['aiChat.silent'] = true;
+const dS0 = plugin.dashboard();
+await handlers.message(msg({ content: '普通一句，没被 @' }));
+const dS1 = plugin.dashboard();
+ok('静默状态位生效：普通群消息被挡、原因写明「静默」',
+  val(dS1, '规则挡掉') === val(dS0, '规则挡掉') + 1 && /静默/.test(dS1.note),
+  `${val(dS0, '规则挡掉')} → ${val(dS1, '规则挡掉')}；${dS1.note.split('\n').at(-1)}`);
+stateObj['aiChat.silent'] = false;
+cfg.decide = 'mention';
 
 /* ---------------- 落盘恢复竞态 ---------------- */
 
