@@ -10,6 +10,15 @@
 //     否则自己的并发会把队列数字搅乱，「前面还有 N 张」就变成假话。
 //   · 提示与出图分开走：进度、报错用 say()（立刻发，不攒批），
 //     图和尺寸说明用 replyImage —— 两条路各有各的失败方式，别互相拖累。
+//
+// ⚠️ 改 lib/ 下的文件时，必须把下面 import 里的 `?v=N` 递增。
+//
+// 框架的热重载只给**入口**加时间戳（src/plugin/loader.js:421）：
+//   const url = `${pathToFileURL(entryFile).href}?t=${Date.now()}`;
+// 子模块的相对说明符没有 query，URL 不变，Node 的 ESM 缓存会直接命中旧模块。
+// 表现是「新入口 + 旧子模块」：改动静默不生效，或者新入口 import 了子模块里
+// 还不存在的导出，整个插件加载失败（SyntaxError: does not provide an export named …）。
+// 一个自增数字比一条容易忘的规矩可靠 —— 改 lib 就 +1。
 import fs from 'node:fs';
 import {
   resolveConfig,
@@ -27,7 +36,7 @@ import {
   listModelsAll,
   discover,
   discoverPaths,
-} from './lib/comfy-engine.js';
+} from './lib/comfy-engine.js?v=2';
 
 /**
  * 插件版本。
@@ -37,7 +46,7 @@ import {
  * CI 会直接判「读不到 version」，索引也生成不出来。所以这里升版本要同步改那一处，
  * test/basic.mjs 会断言两者一致，改漏了本地测试就红。
  */
-export const VERSION = '1.0.2';
+export const VERSION = '1.0.3';
 
 /** 官方群聊被动回复窗口：从收到消息算起 5 分钟，超了就只能走主动额度。 */
 const PASSIVE_WINDOW_MS = 5 * 60 * 1000;
@@ -443,7 +452,7 @@ const defaultConfig = {
 export default {
   id: 'comfy-draw',
   name: '本地绘图 (ComfyUI)',
-  version: '1.0.2', // 必须是字面量，与上面的 VERSION 同步（test/basic.mjs 会断言）
+  version: '1.0.3', // 必须是字面量，与上面的 VERSION 同步（test/basic.mjs 会断言）
   // 市场列表只读 description，且要求「一句话、不超过 60 字」——详细说明留在 README，
   // 这里放长文会让插件市场里出现一大段介绍（build-index.mjs 会原样灌进索引）。
   shortDesc: '用本机 ComfyUI 出图并发到群里',
@@ -517,13 +526,27 @@ export default {
       return run;
     };
 
-    const sendImages = async (msg, c, images, size, cost, seed) => {
-      let sent = 0;
-      const problems = [];
-      const maxBytes = Math.max(1, c.maxImageMB) * 1024 * 1024;
-      // 取图路径必须用「合并了自动发现」的配置：面板里 outputDir 留空时，
-      // readCfg 给的是空串，光靠它会拼出相对路径，于是明明画好了却报「文件不在了」。
+    const sendImages = async (msg, c, images, size, cost, seed, makeFinalText) => {
+      /**
+       * 发图。**结果语并进最后一张的 caption**，不再单独回一条。
+       *
+       * 为什么：QQ 同一条消息的被动回复上限是群 5 次、单聊 4 次
+       * （框架 src/outbound.js 的 PASSIVE_MAX_REPLIES）。原来的流程是
+       *   进度 1 条 + 每张图 1 条 + 结果语 1 条 = count + 2
+       * count=4 就是 6 条，群里直接超；单聊 count≥3 就超。
+       * 超出的部分框架不报错，会**自动降级成主动消息**发出去 —— 吃主动额度
+       * （1000/天、20 条/分钟），而且观感从「回复」变成「主动推送」。
+       *
+       * 现在：count 张图 + 1 条进度 = count + 1，count=4 也稳定落在 5 次以内。
+       * 只在最后一张确实发失败时，才补一条文字把结果说清楚（那是异常路径，
+       * 宁可多花一条也不能让人以为没画）。
+       */
       const rc = resolveConfig(c);
+      const maxBytes = Math.max(1, c.maxImageMB) * 1024 * 1024;
+      const problems = [];
+
+      // ① 先把「能发的图」和「发不了的原因」分好，才知道最后一张是谁
+      const plan = [];
       for (const img of images) {
         // ComfyUI 返回的 subfolder/filename 是不可信输入（baseUrl 允许填远程地址）：
         // resolveImagePath 会把两段都取 basename，并把结果锁在出图目录里。
@@ -548,16 +571,30 @@ export default {
           );
           continue;
         }
+        plan.push({ file });
+      }
+
+      const willSend = plan.length;
+      const lastIndex = willSend - 1;
+      let sent = 0;
+      let lastDelivered = false;
+
+      // ② 逐张发；最后一张挂上结果语
+      for (let i = 0; i < plan.length; i += 1) {
+        const { file } = plan[i];
+        const isLast = i === lastIndex;
+        // 纯图消息（正文是空串/空格）在官方接口那边更容易被判「内容违规」，
+        // 所以没结果语的那些图也塞一句极短的尺寸说明。
+        const caption = isLast
+          ? (typeof makeFinalText === 'function' ? makeFinalText({ willSend }) : '')
+          : c.caption
+            ? `🎨 ${size.width}×${size.height}`
+            : '';
         try {
           // 注意：roost 的 replyImage 内部把发送异常**吞掉**了，失败时返回 null 而不是抛错
           // （src/message.js:786-789 只写一条 ERROR 日志）。所以这里必须看返回值，
           // 否则会出现「日志说发出去了、群里却什么都没有」。
-          // 带一句极短的正文：纯图消息（正文是空串/空格）在官方接口那边更容易被
-          // 判成「内容违规」，塞一句无意义但与图相关的说明反而稳。
-          const result = await msg.replyImage(file, {
-            local: true,
-            text: c.caption ? `🎨 ${size.width}×${size.height}` : '',
-          });
+          const result = await msg.replyImage(file, { local: true, text: caption });
           if (!result) {
             // 这里只能说「可能」，因为框架把发送错误码吞在日志里，只回一个 null。
             // 但窗口剩多少是我们自己算得出来的 —— 摊开列原因，比一口咬定「审核违规」
@@ -571,10 +608,12 @@ export default {
             continue;
           }
           sent += 1;
+          if (isLast) lastDelivered = true;
         } catch (error) {
           problems.push(`${humanize(error)}（图已存本地：${file}）`);
         }
       }
+
       if (sent) {
         stats.images += sent;
         log.info(`出图并发送 ${sent} 张，用时 ${cost}s（${size.width}x${size.height}，seed=${seed}）`);
@@ -586,7 +625,7 @@ export default {
           /* 清理失败不影响主流程 */
         }
       }
-      return { sent, problems };
+      return { sent, problems, lastDelivered, willSend };
     };
 
     /** 真正的画图流程：从关键词到图片落地。 */
@@ -661,7 +700,17 @@ export default {
       const images = await submitAndWait(service.base, graph, c.timeoutMs, (m) => log.info(m));
       const cost = ((Date.now() - startedAt) / 1000).toFixed(1);
 
-      const { sent, problems } = await sendImages(msg, c, images, size, cost, seed);
+      /**
+       * 结果语交给 sendImages 挂在最后一张图上，所以这里先把它拼好传进去。
+       * 尺寸说明与结果合成一句，避免「图上一句 + 下面又一句」的重复。
+       */
+      const finalText = (info) => {
+        const head = c.caption ? `🎨 ${size.width}×${size.height} · ` : '';
+        return `${head}画好了 ${info.willSend} 张，用时约 ${cost} 秒`;
+      };
+      const { sent, problems, lastDelivered, willSend } = await sendImages(
+        msg, c, images, size, cost, seed, finalText,
+      );
       if (!sent) {
         return {
           ok: false,
@@ -672,8 +721,21 @@ export default {
             '若连一句话都没回，那是发送链路断了，看 logs 里的 message 报错。',
         };
       }
-      const notes = problems.length ? `（另有 ${problems.length} 张没能发出：${problems.join('；')}）` : '';
-      return { ok: true, text: `画好了 ${sent} 张，用时约 ${cost} 秒${notes}`, cost: Number(cost), size };
+      /**
+       * 正常路径：结果语已经跟着最后一张图发出去（省掉一条被动回复，见 sendImages 注释），
+       * 这里返回空文本，调用处就不会再补一句。
+       *
+       * 异常路径才说话：
+       *   · 最后一张没发成功 → 结果语没送达，补一条
+       *   · 有图没发出（尺寸超限/文件丢失/审核）→ 必须说清楚，否则用户以为画少了
+       */
+      if (lastDelivered && !problems.length) {
+        return { ok: true, text: '', cost: Number(cost), size, silent: true };
+      }
+      const parts = [];
+      if (!lastDelivered) parts.push(`画好了 ${sent}/${willSend} 张，用时约 ${cost} 秒`);
+      if (problems.length) parts.push(`另有 ${problems.length} 张没能发出：${problems.join('；')}`);
+      return { ok: true, text: parts.join('\n'), cost: Number(cost), size, silent: !parts.length };
     };
 
     // ── 关键词触发 ────────────────────────────────────────────────────────
@@ -737,9 +799,9 @@ export default {
         const result = await enqueue(() => draw(msg, c, prompt, sizeArg, c.count));
         if (result.ok) {
           stats.lastCost = result.cost;
-          // 成功也要说一句：原来只有图和图上那句尺寸，用户不知道「画了几张、用了多久、
-          // 有没有哪张没发出去」。replyNow 才不会等到本轮结束才冒出来。
-          await say(msg, result.text);
+          // 结果语默认跟着最后一张图发（silent=true）。只有「最后一张没发出去」
+          // 或「有图被跳过」时才有话要说 —— 那时不多说一句，用户就不知道发生了什么。
+          if (!result.silent) await say(msg, result.text);
         } else {
           stats.failed += 1;
           log.warn(`本地绘图失败：${result.text}`);
