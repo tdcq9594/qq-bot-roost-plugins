@@ -2,7 +2,7 @@
   "schema": 1,
   "repo": "tdcq9594/qq-bot-roost-plugins",
   "branch": "main",
-  "updated": "2026-11-08",
+  "updated": "2026-11-09",
   "plugins": [
     {
       "id": "ai-chat",
@@ -385,6 +385,28 @@
       "runtime": "node",
       "sha256": "25ccabc1b702a7704d194bb9d26f6b3f1413fe4603e5f772bc9e91eace12c4f1",
       "frameworkVersion": ">=1.0.0"
+    },
+    {
+      "id": "weather-card",
+      "name": "天气播报",
+      "version": "1.0.1",
+      "description": "问「上海天气」「今天天气怎么样」就回一张天气卡图片，支持多地区、四大天气源与每日定时播报",
+      "author": "haibiandefengshu",
+      "credits": "插件由 haibiandefengshu 提交（PR #9），签名由维护者用离线私钥重签",
+      "path": "plugins/weather-card",
+      "tags": [
+        "天气",
+        "播报",
+        "图片卡片",
+        "定时"
+      ],
+      "commands": [
+        "天气"
+      ],
+      "addedAt": "2026-11-09",
+      "runtime": "node",
+      "sha256": "e27da8ac43812f581a9a114f05221b3466ef8611d2ef475af57da389b72d715d",
+      "frameworkVersion": ">=0.6.13"
     }
   ]
 }
