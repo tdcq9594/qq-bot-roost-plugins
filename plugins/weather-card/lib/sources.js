@@ -269,11 +269,28 @@ const dateOf = (v) => {
   return s.slice(0, 10);
 };
 
+/**
+ * 路径段合法性。
+ *
+ * 允许：标识符、`name[0]`、纯数字下标（`a.b.0.c` 和 `a.b[0].c` 两种写法都要认）。
+ * 拦掉 `__proto__` / `prototype` / `constructor`：只读取值不构成原型污染，
+ * 但这几个段能一路读到 Object.prototype 上的东西，把「映射配错了」
+ * 变成一个看不出原因的值 —— 直接判非法、返回 undefined 更好排查。
+ */
+const BANNED_SEG = new Set(['__proto__', 'prototype', 'constructor']);
+function segOk(seg) {
+  const m = /^([A-Za-z_$][\w$]*)(\[\d+\])?$/.exec(seg);
+  if (m) return !BANNED_SEG.has(m[1]);
+  return /^\d+$/.test(seg); // 纯数字下标
+}
+
 /** 按 "a.b.0.c" / "a[0].b" 取深层字段。取不到返回 undefined（区别于 null = 没配）。 */
 export function pickPath(obj, path) {
   if (!path) return undefined;
+  const segs = String(path).split('.').filter(Boolean);
+  if (!segs.every(segOk)) return undefined;
   let cur = obj;
-  for (const raw of String(path).split('.').filter(Boolean)) {
+  for (const raw of segs) {
     if (cur == null) return undefined;
     const m = /^([A-Za-z_$][\w$]*)\[(\d+)\]$/.exec(raw);
     if (m) {

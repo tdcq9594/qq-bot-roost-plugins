@@ -83,10 +83,34 @@
 
 ## 开发与测试
 
-- 修改 `lib/` 下文件后，请将 `index.js` 顶部对应 `import ... from './lib/xxx.js?v=N'` 的版本号 `+1`，以击穿 Node ESM 热重载缓存。
-- 运行单测：
+### 改代码后怎么生效
+
+| 改了哪里 | 生效方式 |
+|---|---|
+| `index.js` | 面板点「重载」即可（框架给入口加时间戳重新 import） |
+| `lib/` 下任意文件 | **必须重启 Roost 进程**，热重载不会生效 |
+
+`lib/` 内部和入口的 import **都不带 `?v=N` 查询串**，这是刻意的：
+
+- 带查询串会让同一个文件被 ESM 当成两个模块各实例化一份。`sources.js` 里有 5 个模块级缓存 Map（按量计费靠它们省请求），一旦分裂成两套，同一地区同一小时可能走不同缓存路径、多打一次接口。
+- 而「改 lib 就递增入口 `?v=N`」这个约定并不能解决问题：递增只会重新加载 `render.js`，它内部那句 `./png.js` 的 URL 始终不变，照样命中旧模块。四个文件互相引用，靠手工递增必然漏一个。
+
+所以选择统一不带查询串（每个模块全局只有一个实例），代价是改 `lib/` 要重启进程。`test/module-identity.mjs` 会断言「相对 import 不许带查询串」，防止以后又写回去。
+
+### 跑测试
 
 ```bash
-node --test plugins/weather-card/test/basic.mjs
-node scripts/test-plugin.mjs weather-card --list
+# 在框架仓根目录（qq-bot-roost）执行
+node --test "plugins/weather-card/test/*.mjs"
 ```
+
+三个文件：`basic.mjs`（纯函数）、`regressions.mjs`（已修 bug 的回归）、`module-identity.mjs`（模块身份与清单契约）。
+
+⚠️ 测试里的 import 必须与 `index.js` 的 specifier **完全一致**。带不带查询串在两个模块实例之间，用错会造成「打桩无效、请求真发出去」的假象。
+
+### 框架版本要求
+
+`frameworkVersion: '>=0.8.6'` —— `ctx.registerTool`（跨插件 AI 工具）是框架 0.8.6 才引入的（见 `RELEASE_NOTES.md` v0.8.6）。
+
+声明低了不会崩，但 AI 工具**静默不注册**：用户看到的是「装上了，AI 却不会查天气」，且没有任何报错。所以直接在清单里卡住，低于 0.8.6 拒绝加载并显示版本不符。
+
