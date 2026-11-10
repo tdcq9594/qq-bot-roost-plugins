@@ -43,6 +43,22 @@ function git(...a) {
   }
 }
 
+/**
+ * 是不是 DSH 扩展。
+ *
+ * 扩展没有 `plugins/<id>/index.js`，也没有 version 契约 —— 更新判定走索引里
+ * 的 `sha256`（dsh-roost 的安装器每次对比目录哈希）。硬套「改了内容必须升
+ * version」会让每个扩展一提交就红，所以这里显式跳过。
+ */
+function isExtension(dir) {
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(dir, 'plugin.json'), 'utf8'));
+    return j?.kind === 'dsh-extension';
+  } catch {
+    return false;
+  }
+}
+
 /** 从插件目录里读 version。python 插件看 plugin.json，node 看 index.js */
 function readVersion(dir) {
   // node：index.js 里的 version: '1.2.3'
@@ -96,6 +112,11 @@ try {
 
 for (const id of ids) {
   const dir = path.join(PLUGINS, id);
+  /** 扩展不参与版本号检查（判据见 `isExtension`）。 */
+  if (isExtension(dir)) {
+    checked.push({ id, ver: null, changed: false, skipped: 'dsh-extension' });
+    continue;
+  }
   const ver = readVersion(dir);
   if (!ver) {
     problems.push({ id, why: '读不到 version（index.js 或 plugin.json 里都没有）' });

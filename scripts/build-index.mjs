@@ -63,6 +63,18 @@ async function readMeta(dir) {
   if (hasManifest) {
     const raw = JSON.parse(await fs.readFile(manifest, 'utf8'));
     if (!raw.id) throw new Error('plugin.json 里没有 id');
+    /**
+     * `kind: "dsh-extension"` 的条目是 **DSH 扩展**（标准 MCP server），
+     * 不是框架插件。两者共用 `plugin.json`，但运行形态完全不同：
+     *
+     *   · 扩展由 DSH 按受管块 spawn，没有 `index.js`、没有 `version` 契约；
+     *   · 框架侧绝不能按默认 `runtime:'python'` 去拉子进程 —— 那会启动一个
+     *     不存在的 python 进程，表现是「装上了但一点反应都没有」。
+     *
+     * 所以扩展**显式**给 `runtime:'mcp'`，框架的 market / loader 见到 kind
+     * 就跳过（6.2 的两道过滤）。存量插件没有 kind，产出与之前逐字节一致。
+     */
+    const isExt = raw.kind === 'dsh-extension';
     return {
       id: String(raw.id),
       name: raw.name ?? raw.id,
@@ -70,7 +82,7 @@ async function readMeta(dir) {
       description: raw.shortDesc ?? raw.description ?? '',
       tags: Array.isArray(raw.tags) ? raw.tags : [],
       frameworkVersion: raw.frameworkVersion ?? '',
-      runtime: raw.runtime ?? 'python',
+      ...(isExt ? { kind: 'dsh-extension', runtime: 'mcp' } : { runtime: raw.runtime ?? 'python' }),
     };
   }
 
@@ -109,7 +121,15 @@ async function readMeta(dir) {
  * 早期版本是整份覆盖，结果跑一次「更新索引」就把 tags 清空、把描述里的
  * 补充说明抹掉，看起来像升级，实际是数据丢失。
  */
-const STRUCT_FIELDS = ['id', 'version', 'path', 'runtime', 'sha256', 'frameworkVersion'];
+/**
+ * 结构字段：磁盘能算出来、索引里可能过期的那些。
+ *
+ * `kind` 也要在列 —— 它决定下游怎么处理这个条目（插件 vs 扩展）。
+ * 不写进来的话，扩展条目从插件改回来时旧 `kind` 会留在索引里，
+ * 框架侧一直当扩展跳过。存量插件没有 `kind`，`merged` 不写入，
+ * 产出与之前逐字节一致。
+ */
+const STRUCT_FIELDS = ['id', 'version', 'path', 'runtime', 'sha256', 'frameworkVersion', 'kind'];
 
 /**
  * 插件分级。
@@ -169,7 +189,14 @@ async function build() {
       console.error(`✗ ${d.name}: ${e.message}`);
       throw new Error(`${d.name} 读不出元信息`);
     }
-    if (!meta.version) throw new Error(`${d.name} 读不到 version（要写成字面量）`);
+    /**
+     * 版本号契约只对**框架插件**成立：市场按 version 判更新。
+     * 扩展没有 version，更新判定走索引的 `sha256`（6.2 的安装器），
+     * 所以这里按 kind 分叉，否则扩展一入库就会被判成「读不到 version」。
+     */
+    if (!meta.version && meta.kind !== 'dsh-extension') {
+      throw new Error(`${d.name} 读不到 version（要写成字面量）`);
+    }
     if (meta.id !== d.name) {
       console.warn(`  ${d.name}: 声明的 id 是 ${meta.id}，与目录名不一致（以目录名为准）`);
       meta.id = d.name;
@@ -193,11 +220,19 @@ async function build() {
   const merged = found
     .map((p) => {
       const old = prevById.get(p.id);
-      if (!old) return p; // 新插件：全量写入
-      const out = { ...old };
-      for (const k of STRUCT_FIELDS) {
-        if (p[k] !== undefined && p[k] !== '') out[k] = p[k];
+      const out = old ? { ...old } : { ...p }; // 新插件：全量写入
+      if (old) {
+        for (const k of STRUCT_FIELDS) {
+          if (p[k] !== undefined && p[k] !== '') out[k] = p[k];
+        }
       }
+      /**
+       * 清空判据必须看**磁盘实读的 `p`**，不能看合并结果 `out`。
+       * `out` 里旧值还在（`{...old}`），`if (!out.kind)` 恒假 —— 上一版就错在这里：
+       * 扩展改回普通插件后 `kind` 永久残留，框架侧一直跳过它，`--check` 也发现不了。
+       */
+      if (p.kind === undefined) delete out.kind;
+      if (!p.version) delete out.version;
       return out;
     })
     .map((p) => {
@@ -317,5 +352,5 @@ if (keyPath) {
 console.log(`已生成 ${path.relative(ROOT, TARGET)}`);
 console.log(`  ${result.out.plugins.length} 个插件${result.out.repo ? `，repo=${result.out.repo}` : '（没有 repo，安装会失败）'}`);
 for (const p of result.out.plugins) {
-  console.log(`  - ${p.id} v${p.version}（${p.runtime}）${p.sha256 ? '' : '  ⚠ 无 sha256'}`);
+  console.log(`  - ${p.id}${p.version ? ` v${p.version}` : ''}（${p.runtime}）${p.sha256 ? '' : '  ⚠ 无 sha256'}`);
 }
