@@ -179,7 +179,15 @@ export function pageBgOf(theme) {
   return (THEMES[theme] || THEMES.dark).pageBg;
 }
 
-const esc = (x) => String(x ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+/**
+ * HTML 转义。
+ *
+ * 单引号也转 —— 当前属性全用双引号，所以 `'` 在这里暂时不是必需的；
+ * 但哪天有人把某个属性改成 `style='...'`，少这一条的转义就是个注入面。
+ * 一次转全，比记着「这里只能用双引号」可靠。
+ */
+const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const esc = (x) => String(x ?? '').replace(/[&<>"']/g, (ch) => ESC_MAP[ch]);
 
 /**
  * @param {object[]} rows

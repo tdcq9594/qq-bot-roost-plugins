@@ -4,10 +4,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import plugin, { internals, DEFAULTS } from '../index.js';
-// ⚠️ 必须与 index.js 里的 specifier 完全一致（含 ?v=2）。
-// 带不带查询串在 ESM 里是两个模块实例，打桩会打到另一个副本上 ——
-// 现象是「明明替身了 fetch，请求还是真的发出去」。
-import { SOURCES } from '../lib/sources.js?v=2';
+// ⚠️ 必须与 index.js 里的 specifier 完全一致（现在都**不带**查询串）。
+// 带不带 ?v= 在 ESM 里是两个模块实例：打桩会打到另一个副本上，
+// 现象是「明明替身了 fetch，请求还是真的发出去」。测试会真的出网。
+import { SOURCES } from '../lib/sources.js';
 import { cropBottom, encodePng, decodePng, hexToRgb } from '../lib/png.js';
 
 const { parseRegions } = internals;

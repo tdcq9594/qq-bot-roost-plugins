@@ -14,23 +14,36 @@
  *   · 目标：QQ 号 → 群 openid（官方接口不提供群号，只能填 openid）
  *   · 触发：原版靠 AI 判断；这里额外提供关键词与命令，没接 AI 插件也能用
  *
- * lib/ 下的文件改了要把下面 import 的 ?v=N 加一。
- * 框架热重载只给入口加时间戳，子模块不带 query 会命中 Node 的 ESM 缓存，
- * 表现是「新入口 + 旧子模块」：改动静默不生效，或加载直接 SyntaxError。
+ * ── 关于 lib/ 的修改与热重载 ───────────────────────────────────
+ *
+ * 下面的 import **故意不带 `?v=N` 查询串**，lib/ 内部互相引用也不带。
+ *
+ * 之前入口写了 `./lib/sources.js?v=2`、而 card.js 里写的是 `./sources.js`，
+ * 同一个文件因为 specifier 不同被 ESM 当成**两个模块**各实例化一份：
+ * sources.js 里 5 个模块级缓存 Map 分成两套，按量计费的缓存命中率凭空减半
+ * （同一地区同一小时可能走两条不同缓存路径、多打一次接口）。
+ *
+ * 而「改 lib 就递增入口的 ?v=N」这个约定本身也修不好它 —— 递增只会让入口重新
+ * 加载 render.js，render.js 内部那句 `./png.js` 的 URL 始终不变，照样命中旧模块。
+ * 4 个文件互相引用，靠手工递增必然漏。
+ *
+ * 所以选择：**全链路统一不带查询串**，每个模块全局只有一个实例；
+ * 代价是改 lib/ 下任意文件后需要**重启 Roost 进程**，热重载只对 index.js 本身生效。
+ * test/module-identity.mjs 会断言「相对 import 不许带查询串」，防止以后又写回去。
  */
 import {
   getSource, describe,
-} from './lib/sources.js?v=2';
+} from './lib/sources.js';
 import {
   applyDayPrefs, buildWeatherHtml, textCard, cardSummary, rangeText, pageBgOf,
-} from './lib/card.js?v=2';
-import { renderHtmlToPng, findBrowser } from './lib/render.js?v=2';
+} from './lib/card.js';
+import { renderHtmlToPng, findBrowser } from './lib/render.js';
 
 /**
  * 版本号必须是字面量，不能写成 `version: VERSION` ——
  * scripts/check-versions.mjs 用正则读源码，引用常量读不到。升版本要同步改两处。
  */
-export const VERSION = '1.0.1';
+export const VERSION = '1.0.2';
 
 const MAX_REGIONS = 6;
 const PASSIVE_WINDOW_MS = 5 * 60 * 1000;
@@ -330,12 +343,20 @@ const configSchema = {
 export default {
   id: 'weather-card',
   name: '天气播报',
-  version: '1.0.1', // 必须是字面量，与上面的 VERSION 同步
+  version: '1.0.2', // 必须是字面量，与上面的 VERSION 同步
   shortDesc: '问一句「上海天气」回一张天气卡，可定时播报',
   // 市场索引要求 description 一句话、不超过 60 字；详细说明留在 README
   description: '问「上海天气」「今天天气怎么样」就回一张天气卡图片，支持多地区、四大天气源与每日定时播报',
   icon: '🌤️',
-  frameworkVersion: '>=0.6.13',
+  /**
+   * `ctx.registerTool`（跨插件 AI 工具）是 **0.8.6** 才引入的（RELEASE_NOTES: v0.8.6）。
+   * 其余用到的 API 在 0.6.10 就有。
+   *
+   * 这里用的是 `ctx.registerTool?.()` 可选调用，低版本不会崩、但也**不会注册工具**，
+   * 用户看到的是「装上了，AI 却不会查天气」且没有任何报错。与其静默降级，
+   * 不如把要求写清楚：0.8.6 以下直接拒绝加载，面板上会显示明确的版本不符提示。
+   */
+  frameworkVersion: '>=0.8.6',
   priority: 10,
   config: configSchema,
 
@@ -666,7 +687,15 @@ export default {
               if (!up?.file_info) throw new Error('上传未返回 file_info');
               await ctx.api.sendGroup(gid, { msgType: 7, media: { file_info: up.file_info } });
             } else {
-              await ctx.api.sendGroup(gid, { content: textCard(rows) });
+              /**
+               * 纯文字走 `ctx.push`，不走 `ctx.api.sendGroup`。
+               *
+               * 图片必须走 uploadMedia + sendGroup（push 只发文本），这条绕不开；
+               * 但文字这条路走 push 才对得上账：框架的主动消息额度、限流、
+               * 投递账本归属都挂在 outbound 上，直调底层 api 会绕过统计 ——
+               * 用户查「今天主动消息用了多少」时数字对不上。
+               */
+              await ctx.push(gid, textCard(rows), { kind: 'group', requestId: `weather:${due}:${gid}` });
             }
             // ② 每成功一个群立刻记账并落盘：中途崩溃也不会重发已成功的群
             state.sentToday.done.push(key);
