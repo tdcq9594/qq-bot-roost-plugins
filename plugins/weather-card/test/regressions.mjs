@@ -20,7 +20,7 @@ function justNow() {
 
 /* ── 脚手架：假 ctx ──────────────────────────────────────────── */
 
-function makeCtx({ canReturn = true, config = {}, api } = {}) {
+function makeCtx({ canReturn = true, config = {}, api, renderCard = async () => Buffer.from('fake-png') } = {}) {
   const store = new Map();
   const commands = new Map();
   const schedules = [];
@@ -29,6 +29,7 @@ function makeCtx({ canReturn = true, config = {}, api } = {}) {
     id: 'weather-card', logger: { info() {}, warn() {}, error() {}, debug() {} },
     config: { ...DEFAULTS, cooldownSec: 0, ...config },
     state: {},
+    _renderCard: renderCard,
     command(p, o, fn) { commands.set(p.split(' ')[0], fn); },
     menu() {}, on(e, fn) { (handlers[e] ||= []).push(fn); },
     schedule(name, ms, fn) { schedules.push({ name, ms, fn }); },
