@@ -43,7 +43,7 @@ import { renderHtmlToPng, findBrowser } from './lib/render.js';
  * 版本号必须是字面量，不能写成 `version: VERSION` ——
  * scripts/check-versions.mjs 用正则读源码，引用常量读不到。升版本要同步改两处。
  */
-export const VERSION = '1.0.2';
+export const VERSION = '1.0.3';
 
 const MAX_REGIONS = 6;
 const PASSIVE_WINDOW_MS = 5 * 60 * 1000;
@@ -343,7 +343,7 @@ const configSchema = {
 export default {
   id: 'weather-card',
   name: '天气播报',
-  version: '1.0.2', // 必须是字面量，与上面的 VERSION 同步
+  version: '1.0.3', // 必须是字面量，与上面的 VERSION 同步
   shortDesc: '问一句「上海天气」回一张天气卡，可定时播报',
   // 市场索引要求 description 一句话、不超过 60 字；详细说明留在 README
   description: '问「上海天气」「今天天气怎么样」就回一张天气卡图片，支持多地区、四大天气源与每日定时播报',
@@ -404,7 +404,7 @@ export default {
       }
     }).catch(() => {});
 
-    const deps = () => ({ state, cfg: readCfg(ctx), fetchRef: fetch, warn: (m) => log.warn(m), persist: persistState });
+    const deps = () => ({ state, cfg: readCfg(ctx), fetchRef: fetch, warn: (m) => log.warn(m), persist: persistState, render: ctx._renderCard });
 
     /* 面板指标 */
     let dashTimer = null;
@@ -462,7 +462,8 @@ export default {
       state.stats.last = rows.map((r) => r.region).join('/').slice(0, 24);
 
       // 渲染串行化：并发起多个无头浏览器会把机器拖死
-      const png = await (rendering = rendering.catch(() => {}).then(() => makeCard(rows, cfg, (m) => log.warn(m))));
+      const renderFn = deps().render || makeCard;
+      const png = await (rendering = rendering.catch(() => {}).then(() => renderFn(rows, cfg, (m) => log.warn(m))));
       if (png) {
         const sent = await msg.replyImageBuffer(png);
         if (sent) {
@@ -608,7 +609,8 @@ export default {
 
         const msg = call?.msg;
         if (msg?.replyImageBuffer) {
-          const png = await (rendering = rendering.catch(() => {}).then(() => makeCard(rows, cfg, (m) => log.warn(m))));
+          const renderFn = deps().render || makeCard;
+          const png = await (rendering = rendering.catch(() => {}).then(() => renderFn(rows, cfg, (m) => log.warn(m))));
           if (png && await msg.replyImageBuffer(png)) {
             state.stats.cards += 1;
             refreshDashboard();
@@ -674,7 +676,8 @@ export default {
         const regions = parseRegions('', cfg.regions);
         const { rows, failed } = await fetchMany(regions, deps());
         if (!rows.length) { log.warn(`播报取天气全部失败：${failed.join('；')}`); return; }
-        const png = await (rendering = rendering.catch(() => {}).then(() => makeCard(rows, cfg, (m) => log.warn(m))));
+        const renderFn = deps().render || makeCard;
+        const png = await (rendering = rendering.catch(() => {}).then(() => renderFn(rows, cfg, (m) => log.warn(m))));
 
         // 只发给「这个时间点还没收到过」的群：G1 成功、G2 失败时，下一拍只会重试 G2
         let sentOk = 0;

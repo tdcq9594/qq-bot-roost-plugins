@@ -100,8 +100,11 @@
 ### 跑测试
 
 ```bash
-# 在框架仓根目录（qq-bot-roost）执行
+# 在插件仓根目录执行
 node --test "plugins/weather-card/test/*.mjs"
+
+# 若在当前插件目录（plugins/weather-card）下执行
+node --test "test/*.mjs"
 ```
 
 三个文件：`basic.mjs`（纯函数）、`regressions.mjs`（已修 bug 的回归）、`module-identity.mjs`（模块身份与清单契约）。
