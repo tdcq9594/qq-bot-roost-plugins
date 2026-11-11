@@ -11,8 +11,10 @@
  * "provider / 注入系统提示" 这种通道 —— ctx 上只有 command / on / use /
  * schedule / storage / tool 这几样。
  *
- * 所以这里走**中间件**：在插件分发之前，只改写「命中的人」这一轮的正文，
- * 把专属人设拼成一段带边界的指令块附在原文后面。
+ * 所以这里走**监听器**（`ctx.on('message')`，`priority: 5`）：只改写「命中的人」
+ * 这一轮的正文，把专属人设拼成一段带边界的指令块附在原文后面。
+ * 不能用 `ctx.use`（中间件）：中间件的执行顺序跟插件目录名走、与 priority 无关，
+ * 具体踩过的坑见下面「注入点」那段。
  *   · 对其它插件透明：原文一个字不动，标记只用中文书名号，不会被当成命令前缀
  *   · 对别人不生效：只改命中者的那条消息，其余人在群里完全感知不到
  *   · 对 AI 插件通用：不改 ai-chat 内部，换 webhook / DSH 也一样有效
@@ -86,7 +88,12 @@ export default {
   shortDesc: '对指定的人换一套人格，别人不受影响。rp向插件，建议相对懂rp再玩',
   description: '给指定的人（如主人）单独换一套人设卡，支持正则条件分支；其他人仍是原人设',
   icon: '🎭',
-  frameworkVersion: '>=0.6.10',
+  /**
+   * 面板卡片的 REST 接口用了 `ctx.registerRoute`（0.6.18 才有），
+   * 所以下限是 0.6.18 而不是 0.6.10 —— 填低了会装到旧框架上表现为
+   * 「设置页能打开、保存按钮没反应」。
+   */
+  frameworkVersion: '>=0.6.18',
   /**
    * 必须落在 weather-card(10) 之后、ai-chat(-100) 之前。
    *
@@ -177,7 +184,7 @@ export default {
               { label: '生效对象', value: parseIdList(c.targets).length + (c.minLevel ? `+等级≥${c.minLevel}` : '') },
               { label: '最近一次', value: st.last || '—' },
             ],
-            note: `中间件注入，不改全局人设\n${c.enabled ? '' : '⚠️ 当前已关闭'}`,
+            note: `监听器注入，不改全局人设\n${c.enabled ? '' : '⚠️ 当前已关闭'}`,
           });
         } catch { /* 面板不是关键路径 */ }
       }, 1500);
