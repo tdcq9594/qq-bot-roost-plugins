@@ -69,6 +69,21 @@
       "verified": "official"
     },
     {
+      "id": "bili",
+      "name": "刷 B 站",
+      "version": "0.1.0",
+      "description": "给模型一双能看 B 站的眼睛：搜视频、看榜单、读字幕与热评、看 UP 主。只读，不发评论、不点赞。",
+      "tags": [
+        "B站",
+        "视频",
+        "只读"
+      ],
+      "kind": "dsh-extension",
+      "runtime": "mcp",
+      "path": "plugins/bili",
+      "sha256": "53ff172891576c4850ac972138faa779f6dc0aaa579b1d5014b216e24e8545e2"
+    },
+    {
       "id": "comfy-draw",
       "name": "本地绘图 (ComfyUI)",
       "version": "1.0.3",
