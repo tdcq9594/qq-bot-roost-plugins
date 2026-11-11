@@ -2,7 +2,7 @@
   "schema": 1,
   "repo": "tdcq9594/qq-bot-roost-plugins",
   "branch": "main",
-  "updated": "2026-11-10",
+  "updated": "2026-11-11",
   "plugins": [
     {
       "id": "ai-chat",
@@ -328,6 +328,28 @@
       "frameworkVersion": ">=0.6.13"
     },
     {
+      "id": "persona-scope",
+      "name": "rp人设",
+      "version": "1.3.1",
+      "description": "给指定的人（如主人）单独换一套人设卡，支持正则条件分支；其他人仍是原人设",
+      "author": "haibiandefengshu",
+      "credits": "插件由 haibiandefengshu 提交（PR #11）；文档措辞（注入点「中间件 → 监听器」、测试命令目录、框架版本下限）由维护者在合并时订正",
+      "path": "plugins/persona-scope",
+      "tags": [
+        "人设",
+        "RP",
+        "条件分支",
+        "分人"
+      ],
+      "commands": [
+        "人设"
+      ],
+      "addedAt": "2026-11-12",
+      "runtime": "node",
+      "sha256": "76f15ed64e97d6d38e139da94de4b881104738449973cbaf87b7b69a22d3fd5f",
+      "frameworkVersion": ">=0.6.18"
+    },
+    {
       "id": "pixiv-pid",
       "name": "Pixiv 发图",
       "version": "1.0.1",
@@ -389,10 +411,10 @@
     {
       "id": "weather-card",
       "name": "天气播报",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "description": "问「上海天气」「今天天气怎么样」就回一张天气卡图片，支持多地区、四大天气源与每日定时播报",
       "author": "haibiandefengshu",
-      "credits": "插件由 haibiandefengshu 提交（PR #9），1.0.2 由 PR #10 更新；签名由维护者用离线私钥重签",
+      "credits": "插件由 haibiandefengshu 提交（PR #9），1.0.2 由 PR #10 更新，1.0.3 由 PR #12 更新；签名由维护者用离线私钥重签",
       "path": "plugins/weather-card",
       "tags": [
         "天气",
@@ -405,7 +427,7 @@
       ],
       "addedAt": "2026-11-09",
       "runtime": "node",
-      "sha256": "3859bdf1f88e1ee4446bbd57105231c86a94fc2238749e63f744685ad1284470",
+      "sha256": "44f36d30482b3ef0b71005ef896be062559b5bd53198a2f8cc7c52df3e875df4",
       "frameworkVersion": ">=0.8.6"
     }
   ]
