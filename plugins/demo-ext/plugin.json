@@ -1,0 +1,21 @@
+{
+  "api": 1,
+  "kind": "dsh-extension",
+  "id": "demo-ext",
+  "serverName": "demo-ext",
+  "name": "演示扩展",
+  "version": "0.1.0",
+  "description": "读完 server.mjs 就能写扩展：最小工具、参数校验、调宿主 /v1、输出收口——五个工具各示范一件事。",
+  "usage": "示例扩展，只用来演示扩展怎么写，不要当成正式能力：echo 回显、now 看时间、dice 掷骰、remember 往自己的记忆里记一句、whoami 看令牌身份。",
+  "transport": "stdio",
+  "command": "node",
+  "args": ["./server.mjs"],
+  "mounts": ["*"],
+  "memory": {
+    "writeTarget": "ext:demo-ext",
+    "visibility": "all",
+    "onClear": "keep",
+    "maxRows": 50
+  },
+  "tags": ["示例", "入门", "MCP"]
+}

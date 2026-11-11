@@ -106,6 +106,21 @@
       "frameworkVersion": ">=0.6.13"
     },
     {
+      "id": "demo-ext",
+      "name": "演示扩展",
+      "version": "0.1.0",
+      "description": "读完 server.mjs 就能写扩展：最小工具、参数校验、调宿主 /v1、输出收口——五个工具各示范一件事。",
+      "tags": [
+        "示例",
+        "入门",
+        "MCP"
+      ],
+      "kind": "dsh-extension",
+      "runtime": "mcp",
+      "path": "plugins/demo-ext",
+      "sha256": "83977ab1611da340723a9b43fa35bb4d3c66a0ef34ee0a68379cfd1fd1fe68d8"
+    },
+    {
       "id": "demo-x",
       "name": "演示插件",
       "version": "0.2.0",
