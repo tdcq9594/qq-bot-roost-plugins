@@ -208,6 +208,10 @@ ok('带回标准武魂', typeof r.data.refWuhun?.atk === 'number', JSON.stringif
 r = await call('GET', '/balance/check', { query: { samples: '20' } });
 ok('判定 200', r.code === 200 && typeof r.data.ok === 'boolean', `${r.data.passed} 通过 / ${r.data.failed} 失败`);
 ok('平衡规则全部通过', r.data.ok === true);
+/** 失败时必须说清是哪条规则——只报总数的话，CI 日志里看不出问题在哪。 */
+for (const it of (r.data.items ?? []).filter((x) => !x.ok)) {
+  console.log(`     ✗ ${it.name} · ${it.rule} 期望 ${it.expect} 实际 ${it.actual}`);
+}
 
 console.log(`\n${fail === 0 ? '全部通过' : '有失败'}：${pass} 通过 / ${fail} 失败`);
 process.exit(fail === 0 ? 0 : 1);

@@ -10,6 +10,18 @@
  *   - 返回 json(code, data) → 指定状态码
  *   - 抛错 → 框架统一转成 500 + 错误信息
  */
+/**
+ * `?seed=` 归一化：不传 / 空串 / 非数字都返回 undefined，
+ * 交给 repo 用默认种子——「不传」和「传了个无效值」不该得出两套结论。
+ */
+function querySeed(v) {
+  if (v === undefined || v === null) return undefined;
+  const s = String(v).trim();
+  if (!s) return undefined;
+  const n = Number(s);
+  return Number.isFinite(n) ? n >>> 0 : undefined;
+}
+
 export function registerRoutes(ctx, { content, players, db, economy, balance, mail }) {
   const log = ctx.logger;
 
@@ -195,12 +207,14 @@ export function registerRoutes(ctx, { content, players, db, economy, balance, ma
       .map((x) => Number(x.trim()))
       .filter((n) => Number.isFinite(n) && n >= 1 && n <= 99);
     const samples = Math.min(300, Math.max(10, Number(query.samples) || 60));
-    return balance.report({ levels: levels.length ? levels : undefined, samples });
+    // 采样默认走固定种子（结论可复现）；带 ?seed= 可以换一组采样重新看，
+    // 用来确认「某条规则失败」是不是只在这一组样本里才成立。
+    return balance.report({ levels: levels.length ? levels : undefined, samples, seed: querySeed(query.seed) });
   });
 
   ctx.registerRoute('GET', '/balance/check', async ({ query }) => {
     const samples = Math.min(300, Math.max(10, Number(query.samples) || 80));
-    return balance.check({ samples });
+    return balance.check({ samples, seed: querySeed(query.seed) });
   });
 
   /* ---------------- 经济 ---------------- */

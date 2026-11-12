@@ -128,8 +128,13 @@ jobs:
           fail=0
           shopt -s nullglob
           for t in plugins/*/test/*.mjs; do
-            case "$(basename "$t")" in
-              _*.mjs) continue ;;          # 共享夹具，不是用例
+            case "$t" in
+              */test/_*.mjs) continue ;;     # 共享夹具，不是用例
+              # 联网用例：真打 B 站接口，风控（code -352）/ 内容下架 / 网络抖动都会让它红，
+              # 而 CI 要的是确定性。live.mjs 自己的注释早就写着「CI 不跑」，
+              # 但这里原来是通配扫全部，约定从没生效 —— 2026-11-12 连续三次 CI 红
+              # 有两次就是它撞风控。手动联调时自己跑：node plugins/bili/test/live.mjs
+              */test/live.mjs) continue ;;
             esac
             echo "--- $t"
             ROOST_FRAMEWORK="$PWD/.framework" node "$t" || fail=1

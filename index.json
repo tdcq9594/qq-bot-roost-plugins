@@ -164,12 +164,12 @@
     {
       "id": "douluo",
       "name": "斗罗大陆",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "description": "斗罗大陆文字游戏：内容全部在面板可编辑，数据用 SQLite",
       "tags": [],
       "runtime": "node",
       "path": "plugins/douluo",
-      "sha256": "a8e41f215bcdb672b55a716497ca237acaa33797e3fcb2318bc8fd02160843bb"
+      "sha256": "6aa389451b1e1e458b8b313b26f4eb20157d4833fdaeede61b0a009a728db0ce"
     },
     {
       "id": "echo",

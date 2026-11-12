@@ -145,6 +145,48 @@ export function simulateFight({ player, monster, cfg, maxRounds = 60, rng = Math
 }
 
 /**
+ * 确定性伪随机（mulberry32）。
+ *
+ * 为什么不用 `Math.random`：平衡体检的判定是「采样均值落在某区间内」，
+ * 同一份数据换个时刻采样就会得出不同结论——面板上刷一次变一次，
+ * CI 也会偶发红（实测 samples=20 时约 2%，失败点全卡在阈值边缘：
+ * 「低 20 级明显吃力」要求回合数 ≥1.5×，实际 8.8 → 13 回合，差 0.2 就翻脸）。
+ *
+ * 体检回答的是「这份数据健不健康」，不该每次问都换个答案。
+ */
+export function makeRng(seed) {
+  let a = seed >>> 0;
+  return function rng() {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * 把「种子 + 怪 id + 场景」混成一个 32 位种子（FNV-1a 变体）。
+ *
+ * 每只怪、每个场景单独取种，而不是让一个 rng 顺序消费全部样本——
+ * 否则调大 samples 会让后面所有怪抽到完全不同的序列，结论整体跳变，
+ * 分不清是「数据变了」还是「采样变了」。独立取种后，samples 变大只是
+ * 把同一条序列采得更长，均值只会收敛，不会翻脸。
+ */
+export function seedOf(...parts) {
+  let h = 0x811c9dc5;
+  for (const part of parts) {
+    const s = String(part);
+    for (let i = 0; i < s.length; i += 1) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    h = Math.imul(h ^ 0x9e3779b9, 0x85ebca6b);
+  }
+  return h >>> 0;
+}
+
+/**
  * 多次采样，给分布而不是单次结果。
  * 单次模拟会被暴击/闪避的随机性骗到，看分布才靠谱。
  */

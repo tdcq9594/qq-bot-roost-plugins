@@ -12,10 +12,13 @@
  */
 import { computeAttrs } from '../engine/stats.js';
 import { expectedHit, mitigate, monsterLevel } from '../engine/formula.js';
-import { monsterStats as calcMonster, sampleFight, expectedRings } from '../engine/balance.js';
+import { monsterStats as calcMonster, sampleFight, expectedRings, makeRng, seedOf } from '../engine/balance.js';
 import { resolveRound } from '../engine/battle.js';
 
 const ATTR_KEYS = ['hp', 'mp', 'atk', 'def', 'spd', 'str', 'intel', 'dodge', 'crit', 'crit_dmg'];
+
+/** 体检默认种子。固定值 = 同一份数据永远给出同一个结论。 */
+const DEFAULT_SEED = 0x5eed;
 
 export class BalanceRepo {
   constructor(game, content, players) {
@@ -84,9 +87,9 @@ export class BalanceRepo {
 
   /**
    * 平衡矩阵：每只怪 × 每个等级段。
-   * @param {{levels?:number[], samples?:number}} [opt]
+   * @param {{levels?:number[], samples?:number, seed?:number}} [opt]
    */
-  report({ levels = [1, 10, 20, 30, 40, 50, 60, 70, 80, 90], samples = 60 } = {}) {
+  report({ levels = [1, 10, 20, 30, 40, 50, 60, 70, 80, 90], samples = 60, seed = DEFAULT_SEED } = {}) {
     const cfg = this.#cfg();
     const monsters = this.monsters();
     const rows = [];
@@ -101,6 +104,7 @@ export class BalanceRepo {
           cfg,
           samples,
           resolveRound,
+          rng: makeRng(seedOf(seed, m.id, lv)),
         });
         cells.push({ level: lv, ...r, verdict: verdictOf(r, stats.expectedRounds) });
       }
@@ -126,15 +130,19 @@ export class BalanceRepo {
    *  1. 在怪自己的标准等级下，平均回合数要在 target±2 内
    *  2. 等级越高回合越少（成长必须有感）
    *  3. 标准等级下胜率要 ≥ 90%（打同级怪不该频繁翻车）
+   *
+   * 采样走确定性种子（每只怪、每个场景独立派生），所以**同一份数据
+   * 永远得出同一个结论**；调大 `samples` 只会让均值收敛，不会让结论翻脸。
    */
-  check({ samples = 80 } = {}) {
+  check({ samples = 80, seed = DEFAULT_SEED } = {}) {
     const cfg = this.#cfg();
     const out = [];
     for (const m of this.monsters()) {
       const stats = this.monsterStats(m);
       const target = stats.expectedRounds;
+      const rngFor = (tag) => makeRng(seedOf(seed, m.id, tag));
 
-      const atStd = sampleFight({ player: this.referencePlayer(stats.level), monster: stats, cfg, samples, resolveRound });
+      const atStd = sampleFight({ player: this.referencePlayer(stats.level), monster: stats, cfg, samples, resolveRound, rng: rngFor('std') });
       out.push({
         name: m.name,
         rule: '标准等级回合数',
@@ -154,7 +162,7 @@ export class BalanceRepo {
       // 已经顶到 99 级的怪没法再"升级"，这条跳过（不是失败）
       const canGrow = stats.level < 99;
       if (canGrow) {
-        const hi = sampleFight({ player: this.referencePlayer(Math.min(99, stats.level + 20)), monster: stats, cfg, samples, resolveRound });
+        const hi = sampleFight({ player: this.referencePlayer(Math.min(99, stats.level + 20)), monster: stats, cfg, samples, resolveRound, rng: rngFor('hi') });
         out.push({
           name: m.name,
           rule: '升级 20 级后更快',
@@ -168,7 +176,7 @@ export class BalanceRepo {
       // 「打不过」或「回合数翻倍」都算吃力——不能要求一定输，
       // 否则 99 级怪的低级对照会永远失败（那个等级已经没得再降了）
       if (stats.level > 20) {
-        const lo = sampleFight({ player: this.referencePlayer(stats.level - 20), monster: stats, cfg, samples, resolveRound });
+        const lo = sampleFight({ player: this.referencePlayer(stats.level - 20), monster: stats, cfg, samples, resolveRound, rng: rngFor('lo') });
         const muchSlower = lo.avgRounds >= atStd.avgRounds * 1.5;
         out.push({
           name: m.name,
