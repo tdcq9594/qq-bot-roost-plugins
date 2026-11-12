@@ -42,10 +42,38 @@ import process from 'node:process';
 /* §0 基础件                                                           */
 /* ------------------------------------------------------------------ */
 
-const SERVER = { name: 'demo-ext', version: '0.1.0' };
+const SERVER = { name: 'demo-ext', version: '0.1.1' };
 
 /** 日志只能走 stderr。stdout 留给 JSON-RPC。 */
 const log = (msg) => process.stderr.write(`[demo-ext] ${msg}\n`);
+
+/**
+ * 可调设置：宿主把面板里保存的**非敏感**值拼成 JSON 放在 `ROOST_EXT_CONFIG`。
+ *
+ * 三条实践要点：
+ *  1. 读不到 / 解析失败都按空对象继续跑 —— 配置坏了不该让扩展起不来；
+ *  2. 每个值都要**再夹一次范围**：面板会校验，但用户可能手改文件，
+ *     而这里是最后一道；
+ *  3. 密钥走独立变量 `ROOST_EXT_SECRET_<KEY>`（键名大写），不在这个 JSON 里。
+ */
+function readConfig() {
+  try {
+    const raw = JSON.parse(String(process.env.ROOST_EXT_CONFIG || '{}'));
+    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  } catch (e) {
+    log(`ROOST_EXT_CONFIG 不是合法 JSON，按空配置启动：${e.message}`);
+    return {};
+  }
+}
+
+const CFG = readConfig();
+
+/** 数字配置取值：非法就退回默认，合法则夹到范围内。 */
+function cfgNumber(value, def, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return def;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
 
 /** 一行一个消息，stdout 写出即「回复」。 */
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
@@ -230,7 +258,8 @@ async function toolEcho(raw) {
   const a = argsOf(raw, ['text']);
   const text = String(a.text ?? '');
   if (!text) throw new ToolError('text 是空的', '给一段要回显的文字，比如 {"text":"你好"}');
-  return clamp(`回显：${text}\n字数：${Array.from(text).length}`);
+  const prefix = typeof CFG.echoPrefix === 'string' && CFG.echoPrefix ? CFG.echoPrefix.slice(0, 20) : '回显：';
+  return clamp(`${prefix}${text}\n字数：${Array.from(text).length}`);
 }
 
 async function toolNow(raw) {
@@ -253,8 +282,9 @@ async function toolNow(raw) {
 
 async function toolDice(raw) {
   const a = argsOf(raw, ['sides', 'count']);
-  const sides = intOf(a.sides, { def: 6, min: 2, max: 1000, name: 'sides' });
-  const count = intOf(a.count, { def: 1, min: 1, max: 10, name: 'count' });
+  /** 默认值来自设置；模型显式给参数时仍以模型为准。 */
+  const sides = intOf(a.sides, { def: cfgNumber(CFG.diceFaces, 6, 2, 1000), min: 2, max: 1000, name: 'sides' });
+  const count = intOf(a.count, { def: cfgNumber(CFG.diceCount, 1, 1, 10), min: 1, max: 10, name: 'count' });
   const rolls = Array.from({ length: count }, () => 1 + Math.floor(Math.random() * sides));
   const sum = rolls.reduce((x, y) => x + y, 0);
   return `${count}d${sides}：${rolls.join(' + ')}${count > 1 ? ` = ${sum}` : ''}`;
@@ -264,7 +294,8 @@ async function toolRemember(raw) {
   const a = argsOf(raw, ['text']);
   const text = String(a.text ?? '').trim();
   if (!text) throw new ToolError('text 是空的');
-  if (Array.from(text).length > 200) throw new ToolError('一句话别超过 200 字', '要记长内容请分几条。');
+  const maxChars = cfgNumber(CFG.rememberLimit, 200, 20, 2000);
+  if (Array.from(text).length > maxChars) throw new ToolError(`一句话别超过 ${maxChars} 字`, '要记长内容请分几条。');
 
   // extId 由令牌决定，body 里不传（传了也会被宿主忽略并记 warn）。
   const r = await callHost('/memory/ext.add', { method: 'POST', body: { fact: text } });
@@ -274,9 +305,22 @@ async function toolRemember(raw) {
 }
 
 async function toolWhoami() {
-  const r = await callHost('/whoami');
+  /**
+   * 密钥只以「配没配」的形式出现 —— 扩展自己也读不到明文以外的信息时，
+   * 排查「面板存了但扩展没收到」最有效的一句话就是这一行。
+   *
+   * **连不上宿主时也要把它带出来**：那正是最需要分清「没密钥」和「没连上」的时刻。
+   */
+  const secretSet = Boolean(String(process.env.ROOST_EXT_SECRET_NOTETOKEN || ''));
+  const tail = `\n演示密钥：${secretSet ? '已配置' : '未配置'}`;
+  let r;
+  try {
+    r = await callHost('/whoami');
+  } catch (e) {
+    throw new ToolError(`${e?.message ?? e}${tail}`, e?.hint ?? '');
+  }
   const scopes = Array.isArray(r.scopes) && r.scopes.length ? r.scopes.join('、') : '（无）';
-  return `令牌 id：${r.id ?? '?'}\n扩展：${r.extId ?? '（面板发放的客户端令牌，不绑扩展）'}\nscope：${scopes}`;
+  return `令牌 id：${r.id ?? '?'}\n扩展：${r.extId ?? '（面板发放的客户端令牌，不绑扩展）'}\nscope：${scopes}${tail}`;
 }
 
 const HANDLERS = {

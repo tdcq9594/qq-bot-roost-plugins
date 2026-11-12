@@ -2,7 +2,7 @@
   "schema": 1,
   "repo": "tdcq9594/qq-bot-roost-plugins",
   "branch": "main",
-  "updated": "2026-11-11",
+  "updated": "2026-11-12",
   "plugins": [
     {
       "id": "ai-chat",
@@ -71,7 +71,7 @@
     {
       "id": "bili",
       "name": "刷 B 站",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "description": "给模型一双能看 B 站的眼睛：搜视频、看榜单、读字幕与热评、看 UP 主。只读，不发评论、不点赞。",
       "tags": [
         "B站",
@@ -81,7 +81,7 @@
       "kind": "dsh-extension",
       "runtime": "mcp",
       "path": "plugins/bili",
-      "sha256": "53ff172891576c4850ac972138faa779f6dc0aaa579b1d5014b216e24e8545e2"
+      "sha256": "9d89fae75a855fb61aa5f741f3d60089ce7ca59b0ceba5873275aac46a0fd45c"
     },
     {
       "id": "comfy-draw",
@@ -108,7 +108,7 @@
     {
       "id": "demo-ext",
       "name": "演示扩展",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "description": "读完 server.mjs 就能写扩展：最小工具、参数校验、调宿主 /v1、输出收口——五个工具各示范一件事。",
       "tags": [
         "示例",
@@ -118,7 +118,7 @@
       "kind": "dsh-extension",
       "runtime": "mcp",
       "path": "plugins/demo-ext",
-      "sha256": "83977ab1611da340723a9b43fa35bb4d3c66a0ef34ee0a68379cfd1fd1fe68d8"
+      "sha256": "1bd7ff435cd1f7fa542b969ba7bd233e0e3abac01d7db26100cdc86d96fe9f58"
     },
     {
       "id": "demo-x",

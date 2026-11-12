@@ -4,12 +4,19 @@
   "id": "demo-ext",
   "serverName": "demo-ext",
   "name": "演示扩展",
-  "version": "0.1.0",
-  "description": "读完 server.mjs 就能写扩展：最小工具、参数校验、调宿主 /v1、输出收口——五个工具各示范一件事。",
+  "version": "0.1.1",
+  "description": "读完 server.mjs 就能写扩展：最小工具、参数校验、调宿主 /v1、输出收口、可调设置——六个工具各示范一件事。",
   "usage": "示例扩展，只用来演示扩展怎么写，不要当成正式能力：echo 回显、now 看时间、dice 掷骰、remember 往自己的记忆里记一句、whoami 看令牌身份。",
   "transport": "stdio",
   "command": "node",
   "args": ["./server.mjs"],
+  "config": {
+    "echoPrefix": { "type": "string", "label": "回显前缀", "default": "回显：", "maxLength": 20, "hint": "echo 工具输出的开头几个字" },
+    "diceFaces": { "type": "number", "label": "默认骰子面数", "default": 6, "min": 2, "max": 1000, "integer": true, "hint": "模型不指定 sides 时用它" },
+    "diceCount": { "type": "number", "label": "默认掷几个", "default": 1, "min": 1, "max": 10, "integer": true },
+    "rememberLimit": { "type": "number", "label": "记忆单条字数上限", "default": 200, "min": 20, "max": 2000, "integer": true },
+    "noteToken": { "type": "string", "label": "演示用密钥", "secret": true, "hint": "非必填。填了之后 whoami 会显示「已配置」——演示密钥怎么存、怎么下发" }
+  },
   "mounts": ["*"],
   "memory": {
     "writeTarget": "ext:demo-ext",

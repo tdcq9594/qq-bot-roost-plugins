@@ -119,7 +119,21 @@ function boolOf(v, def) {
   return def;
 }
 
-export function createToolbox({ api, log = () => {} }) {
+export function createToolbox({ api, log = () => {}, config = {} }) {
+  /**
+   * 设置取值：面板保存前已经校验过，但用户可能手改 `config.json`，
+   * 所以这里再夹一次范围 —— 这是最后一道。
+   */
+  const num = (v, def, min, max) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return def;
+    return Math.min(max, Math.max(min, Math.round(n)));
+  };
+  const defaultLimit = num(config.defaultLimit, 6, 1, 8);
+  const hotPoolSize = num(config.hotPoolSize, 20, 10, 30);
+  const commentLimit = num(config.commentLimit, 5, 1, 10);
+  const defaultDanmaku = config.defaultDanmaku === true;
+
   let hotCache = null;   // { at, items }
   let hotCursor = 0;
 
@@ -129,9 +143,9 @@ export function createToolbox({ api, log = () => {} }) {
    */
   async function hot(args) {
     const a = argsOf(args, ['limit', 'fresh']);
-    const limit = intOf(a.limit, 6);
+    const limit = intOf(a.limit, defaultLimit);
     if (a.fresh || !hotCache || Date.now() - hotCache.at > 5 * 60_000) {
-      hotCache = { at: Date.now(), items: await api.hot({ ps: 20 }) };
+      hotCache = { at: Date.now(), items: await api.hot({ ps: hotPoolSize }) };
       hotCursor = 0;
     }
     const pool = hotCache.items;
@@ -144,7 +158,7 @@ export function createToolbox({ api, log = () => {} }) {
 
   async function weekly(args) {
     const a = argsOf(args, ['number', 'limit']);
-    const limit = intOf(a.limit, 6);
+    const limit = intOf(a.limit, defaultLimit);
     const issue = await api.weekly({ number: Number(a.number) || 0 });
     if (!issue.items.length) throw new BiliError(`第 ${issue.number} 期没有条目`);
     const head = `B 站每周必看 第 ${issue.number} 期${issue.name ? `「${issue.name}」` : ''}${issue.subject ? `（${issue.subject}）` : ''}，共 ${issue.items.length} 条：`;
@@ -157,7 +171,7 @@ export function createToolbox({ api, log = () => {} }) {
     if (!keyword) throw new BiliError('缺 keyword（要搜什么词）');
     const order = ['play', 'pubdate', 'dm'].includes(a.order) ? a.order : 'play';
     const minPlay = Math.max(0, Number(a.minPlay) || 0);
-    const limit = intOf(a.limit, 6);
+    const limit = intOf(a.limit, defaultLimit);
     // 多要一倍再按 minPlay 过滤，免得过滤完只剩两条
     const items = (await api.search(keyword, { order, limit: limit * 2 })).filter((v) => v.play >= minPlay);
     if (!items.length) return fmtVideoList([], { heading: `搜「${keyword}」${minPlay ? `（播放 ≥ ${minPlay}）` : ''}：` });
@@ -184,8 +198,8 @@ export function createToolbox({ api, log = () => {} }) {
     const account = await api.account();
 
     const sub = boolOf(a.subtitle, true) ? await api.subtitle(info) : { text: '', lang: '' };
-    const comments = boolOf(a.comments, true) ? await api.comments(info.aid, { limit: 5 }) : [];
-    const danmaku = boolOf(a.danmaku, false) ? await api.danmaku(info.cid, { limit: 8 }) : [];
+    const comments = boolOf(a.comments, true) ? await api.comments(info.aid, { limit: commentLimit }) : [];
+    const danmaku = boolOf(a.danmaku, defaultDanmaku) ? await api.danmaku(info.cid, { limit: 8 }) : [];
 
     return fmtVideo(info, {
       subtitle: sub.text,

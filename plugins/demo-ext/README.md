@@ -256,6 +256,25 @@ node scripts/build-index.mjs --check    # CI 用：索引与目录必须一致
 
 先想清楚这一条，能省掉一半返工。
 
+## 可调设置（第六件事：配置怎么接）
+
+这个扩展也示范了 `plugin.json` 的 `config`：宿主在面板里画表单、存值，启动时通过
+`ROOST_EXT_CONFIG`（非敏感，JSON）与 `ROOST_EXT_SECRET_<KEY>`（敏感）给回扩展。
+
+| 设置 | 默认 | 作用 |
+|---|---|---|
+| 回显前缀 | `回显：` | `echo` 输出的开头 |
+| 默认骰子面数 | 6 | `dice` 不给 `sides` 时用 |
+| 默认掷几个 | 1 | `dice` 不给 `count` 时用 |
+| 记忆单条字数上限 | 200 | `remember` 的拒绝阈值 |
+| 演示用密钥 | 未设置 | 敏感项：填了之后 `whoami` 显示「已配置」，值本身不落普通配置、也不回显 |
+
+三条实践：
+
+1. **读不到就按空对象跑**——配置坏掉不该让扩展起不来（`node test/config.mjs` 专门验这条）；
+2. **每个值再夹一次范围**——面板会校验，但用户可能手改 `config.json`；
+3. **密钥走独立变量**，不要塞进 `ROOST_EXT_CONFIG`。
+
 ## 许可
 
 MIT。写法参考了本仓 `examples/hello-stdio`（最小 MCP server）、`plugins/bili`（一个真实的只读扩展）

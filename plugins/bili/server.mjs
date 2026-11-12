@@ -18,12 +18,26 @@ import process from 'node:process';
 import { BiliError, createBiliApi } from './lib/api.mjs';
 import { createToolbox } from './lib/tools.mjs';
 
-const SERVER = { name: 'bili', version: '0.1.0' };
+const SERVER = { name: 'bili', version: '0.1.1' };
 const log = (m) => process.stderr.write(`[bili] ${m}\n`);
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 
+/**
+ * 可调设置：宿主把面板里保存的**非敏感**值拼成 JSON 放在 `ROOST_EXT_CONFIG`。
+ * 解析失败按空配置继续 —— 配置坏了不该让扩展起不来。
+ */
+const config = (() => {
+  try {
+    const raw = JSON.parse(String(process.env.ROOST_EXT_CONFIG || '{}'));
+    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  } catch (e) {
+    log(`ROOST_EXT_CONFIG 不是合法 JSON，按空配置启动：${e.message}`);
+    return {};
+  }
+})();
+
 const api = createBiliApi({ log });
-const box = createToolbox({ api, log });
+const box = createToolbox({ api, log, config });
 
 function ok(id, result) {
   send({ jsonrpc: '2.0', id, result });
