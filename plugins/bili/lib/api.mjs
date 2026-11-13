@@ -338,6 +338,8 @@ export function createBiliApi({ getCookie = () => '', log = () => {}, fetchImpl 
       pubdate: (Number(v.pubdate) || 0) * 1000,
       desc: String(v.desc || '').slice(0, 160),
       tname: v.tname || '',
+      /** 封面：面板那张卡要用。只给 http(s)，别的协议下游会清掉 */
+      cover: String(v.pic || ''),
     }));
   }
 

@@ -14,9 +14,11 @@
  */
 
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 import { BiliError, createBiliApi } from './lib/api.mjs';
 import { createToolbox } from './lib/tools.mjs';
+import { createUiData } from './lib/ui-data.mjs';
 
 const SERVER = { name: 'bili', version: '0.1.1' };
 const log = (m) => process.stderr.write(`[bili] ${m}\n`);
@@ -38,6 +40,17 @@ const config = (() => {
 
 const api = createBiliApi({ log });
 const box = createToolbox({ api, log, config });
+
+/**
+ * 面板数据（6.1 声明式界面）：宿主只读这个 JSON，不执行这里的任何代码。
+ * 写盘时机只有两个，都不额外发请求 —— 见 `lib/ui-data.mjs` 顶部。
+ */
+/**
+ * 扩展自己的目录。用 `fileURLToPath` 而不是 `URL.pathname`：
+ * 后者在 Windows 上给 `/C:/...`，而且中文路径会被百分号编码。
+ */
+const HERE = fileURLToPath(new URL('.', import.meta.url));
+const ui = createUiData({ dir: HERE, log });
 
 function ok(id, result) {
   send({ jsonrpc: '2.0', id, result });
@@ -73,6 +86,8 @@ async function handle(msg) {
     const name = String(params?.name ?? '');
     try {
       const text = await box.call(name, params?.arguments ?? {});
+      /** 刚拉过热门就顺手把面板数据刷新一下：零额外请求 */
+      if (name === 'hot') ui.fromPool(box.hotPool());
       return ok(id, { content: [{ type: 'text', text: String(text) }] });
     } catch (e) {
       // 业务错误用 isError 而不是 JSON-RPC error：协议层没坏，是这次调用没成，
@@ -154,6 +169,18 @@ function serve() {
   // 宿主关掉管道时别抛 EPIPE 栈。
   process.stdout.on('error', () => process.exit(0));
   log(`就绪（${box.tools.length} 个工具）`);
+
+  /**
+   * 启动后预热一次面板数据。
+   *
+   * 放在 `setTimeout` 里、并且吞掉所有错误：这一步失败了不该影响协议握手，
+   * 面板那边只会显示「还没有数据文件」，点一下工具就补上了。
+   */
+  setTimeout(() => {
+    box.call('hot', { limit: 8 })
+      .then(() => ui.fromPool(box.hotPool()))
+      .catch((e) => log(`预热面板数据失败（不影响使用）：${e?.message ?? e}`));
+  }, 1200).unref?.();
 }
 
 const argv = process.argv.slice(2);

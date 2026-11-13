@@ -245,5 +245,12 @@ export function createToolbox({ api, log = () => {}, config = {} }) {
     },
     /** 自检 / 测试用。 */
     reset() { hotCache = null; hotCursor = 0; },
+    /**
+     * 当前热门池（给面板数据文件用）。
+     *
+     * 复用 `hot` 已经拉过的那一份，**不为面板额外发一次请求**——
+     * 这个扩展的请求要节流，多一次就可能撞 412。
+     */
+    hotPool() { return Array.isArray(hotCache?.items) ? hotCache.items : []; },
   };
 }
