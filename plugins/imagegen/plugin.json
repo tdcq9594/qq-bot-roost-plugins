@@ -1,0 +1,211 @@
+{
+  "api": 1,
+  "kind": "dsh-extension",
+  "id": "imagegen",
+  "serverName": "imagegen",
+  "name": "让ta画图",
+  "version": "0.1.0",
+  "description": "给模型一支笔：调生图接口画图，存进自己的画作库，再把图发进聊天。支持 OpenAI 兼容接口、自定义接口和备用接口链。",
+  "usage": "说「画个 xx」「给我画一张」时用 image_gen：它会把图的绝对路径给你，你必须在回复里写 <<image-alone: 路径>>（或 <<image: 路径>> 图文同条）才发得出去，画完别描述画面细节。说「刚才那张再发一次」「你都画过什么」用 image_list，然后用同样两个标记重发。说「你能画图吗」「生图是不是坏了」用 image_test 真画一张验证（会花钱）。不想留某张图用 image_delete。画不出来时把工具返回的原因原样告诉对方——那里面通常已经写清是地址、密钥还是余额的问题。",
+  "transport": "stdio",
+  "command": "node",
+  "args": [
+    "./server.mjs"
+  ],
+  "config": {
+    "provider": {
+      "type": "select",
+      "label": "接口格式",
+      "default": "openai",
+      "options": [
+        {
+          "value": "openai",
+          "label": "OpenAI 兼容"
+        },
+        {
+          "value": "custom",
+          "label": "自定义接口"
+        }
+      ],
+      "hint": "先试 OpenAI 兼容：填服务地址 + 密钥 + 模型名就能画。服务什么都不兼容时才用自定义。"
+    },
+    "baseUrl": {
+      "type": "string",
+      "label": "服务地址",
+      "default": "https://api.openai.com/v1",
+      "maxLength": 300,
+      "placeholder": "https://api.xxx.com/v1",
+      "hint": "OpenAI 兼容接口的根地址（到 /v1 为止），也可以直接贴完整的 /images/generations 地址。本地 ComfyUI / SD WebUI 的代理一般是 http://127.0.0.1:端口/v1"
+    },
+    "apiKey": {
+      "type": "string",
+      "label": "API Key",
+      "secret": true,
+      "maxLength": 200,
+      "hint": "只存宿主侧的 secrets，不进 config.json，也不会下发到面板"
+    },
+    "model": {
+      "type": "string",
+      "label": "模型",
+      "default": "gpt-image-1",
+      "maxLength": 80,
+      "hint": "看服务商文档。硅基流动常是 Kwai-Kolors/Kolors、通义万相是 wanx2.1-t2i-turbo 这类名字"
+    },
+    "shape": {
+      "type": "select",
+      "label": "默认构图",
+      "default": "square",
+      "options": [
+        {
+          "value": "square",
+          "label": "方 1024x1024"
+        },
+        {
+          "value": "portrait",
+          "label": "竖 1024x1536"
+        },
+        {
+          "value": "landscape",
+          "label": "横 1536x1024"
+        },
+        {
+          "value": "wide",
+          "label": "宽 1536x864"
+        }
+      ],
+      "hint": "模型没指定构图时用这个"
+    },
+    "size": {
+      "type": "string",
+      "label": "默认尺寸",
+      "maxLength": 20,
+      "placeholder": "留空 = 用构图尺寸",
+      "hint": "想固定成某个尺寸就填，比如 2048x2048。填了会盖过构图设置"
+    },
+    "stylePrompt": {
+      "type": "string",
+      "label": "固定风格",
+      "maxLength": 200,
+      "hint": "每次生图自动加在提示词前面，比如「厚涂、暖色调、吉卜力风格」。留空就不加"
+    },
+    "img2img": {
+      "type": "boolean",
+      "label": "参考图改画",
+      "default": true,
+      "hint": "允许拿画作库里的旧图当参考重画。OpenAI 兼容接口走 /images/edits，有些服务不支持"
+    },
+    "dailyLimit": {
+      "type": "number",
+      "label": "每天最多几张",
+      "default": 20,
+      "min": 0,
+      "max": 200,
+      "integer": true,
+      "hint": "生图按张收钱，这是防手滑的闸。0 = 不限"
+    },
+    "customUrl": {
+      "type": "string",
+      "label": "自定义 · 接口地址",
+      "maxLength": 500,
+      "placeholder": "https://api.xxx.com/draw?q={prompt}&size={size}",
+      "hint": "只有「接口格式」选自定义时才用。可用占位符：{prompt} {model} {size} {width} {height} {image}"
+    },
+    "customMethod": {
+      "type": "select",
+      "label": "自定义 · 方法",
+      "default": "POST",
+      "options": [
+        {
+          "value": "POST",
+          "label": "POST"
+        },
+        {
+          "value": "GET",
+          "label": "GET"
+        }
+      ]
+    },
+    "customParams": {
+      "type": "array",
+      "label": "自定义 · 参数",
+      "maxItems": 20,
+      "items": {
+        "type": "string"
+      },
+      "hint": "每行一个，写成 键=值。GET 拼进地址、POST 放进请求体。值里可以用占位符"
+    },
+    "customBodyType": {
+      "type": "select",
+      "label": "自定义 · 请求体",
+      "default": "json",
+      "options": [
+        {
+          "value": "json",
+          "label": "JSON"
+        },
+        {
+          "value": "form",
+          "label": "表单"
+        }
+      ],
+      "hint": "只对 POST 有效"
+    },
+    "customResponsePath": {
+      "type": "string",
+      "label": "自定义 · 返回值路径",
+      "maxLength": 120,
+      "placeholder": "data.0.url",
+      "hint": "图片地址在返回 JSON 的哪个位置。留空会自动在里面找图片地址"
+    },
+    "fallbacks": {
+      "type": "array",
+      "label": "备用接口",
+      "maxItems": 5,
+      "items": {
+        "type": "string"
+      },
+      "hint": "主接口失败后按顺序再试。每行一条，写成 地址|模型（只写地址就沿用主模型），密钥沿用上面那个"
+    }
+  },
+  "mounts": [
+    "*"
+  ],
+  "tags": [
+    "生图",
+    "画图",
+    "图像",
+    "AI"
+  ],
+  "ui": {
+    "nav": {
+      "label": "让ta画图",
+      "group": "express"
+    },
+    "view": {
+      "kind": "table",
+      "title": "画作库",
+      "staleSec": 0,
+      "source": {
+        "file": "ui-data.json"
+      },
+      "fields": [
+        {
+          "key": "prompt",
+          "label": "提示词"
+        },
+        {
+          "key": "when",
+          "label": "画于"
+        },
+        {
+          "key": "size",
+          "label": "大小"
+        },
+        {
+          "key": "file",
+          "label": "文件"
+        }
+      ]
+    }
+  }
+}

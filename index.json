@@ -236,6 +236,25 @@
       "verified": "official"
     },
     {
+      "id": "imagegen",
+      "name": "让ta画图",
+      "version": "0.1.0",
+      "description": "给模型一支笔：调生图接口画图，存进自己的画作库，再把图发进聊天。支持 OpenAI 兼容接口、自定义接口和备用接口链。",
+      "tags": [
+        "生图",
+        "画图",
+        "图像",
+        "AI"
+      ],
+      "kind": "dsh-extension",
+      "runtime": "mcp",
+      "path": "plugins/imagegen",
+      "sha256": "4d4442d0cb86707c32edc27e13566ccae1f234afd7433d72a91aa28f34840f44",
+      "verified": "official",
+      "author": "tdcq9594",
+      "addedAt": "2026-11-14"
+    },
+    {
       "id": "imgbed",
       "name": "图床",
       "version": "0.1.0",
