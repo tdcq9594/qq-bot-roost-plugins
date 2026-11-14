@@ -584,16 +584,31 @@
    * 装在 `<数据目录>/deps` 而不是扩展自己这里：一份装了所有扩展都能用，
    * 扩展升级/卸载也不会把它删掉。状态来自 `meta.ffmpeg`，装完立刻回填。
    */
-  function visionExtra() {
-    const box = document.createElement('div');
-    box.className = 'hint';
-    box.style.marginTop = '10px';
+  /**
+   * 「看画面」卡底部的 ffmpeg 状态。
+   *
+   * 三点要求：
+   *   1. 状态来自 `meta.ffmpeg`，而 meta 是 `loadData()` 才拿到的 —— 所以
+   *      渲染时**还要能单独刷新**（`loadData` 末尾调 `syncVisionNote()`），
+   *      否则页面一开是「没找到 ffmpeg」，装好了也不变。
+   *   2. 没装时给一个「装到框架共享目录」的按钮：装在 `<数据目录>/deps`，
+   *      一份装了所有扩展都能用，扩展升级/卸载也不会删它。
+   *   3. 按钮用事件委托绑（见下面 `document.addEventListener`）——这张卡
+   *      是每次 `renderSettings()` 重建的，直接绑 onclick 重建一次就失效。
+   */
+  function fillVisionNote(box) {
+    box.textContent = '';
     const f = meta && meta.ffmpeg ? meta.ffmpeg : null;
-    const ok = Boolean(f && f.ready);
-    box.textContent = ok
-      ? `✓ 已找到 ffmpeg：${f.path || ''}`
-      : `✗ 没找到 ffmpeg：抽帧会被跳过${f && f.dir ? `（共享目录：${f.dir}）` : ''}`;
+    if (!f) {
+      box.style.color = 'var(--muted)';
+      box.textContent = 'ffmpeg 状态还没读出来…';
+      return;
+    }
+    const ok = Boolean(f.ready);
     box.style.color = ok ? 'var(--ok)' : 'var(--warn)';
+    box.append(document.createTextNode(ok
+      ? `✓ 已找到 ffmpeg：${f.path || ''}`
+      : `✗ 没找到 ffmpeg：抽帧会被跳过${f.dir ? `（共享目录：${f.dir}）` : ''}`));
     if (!ok) {
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -602,7 +617,21 @@
       btn.textContent = '装到框架共享目录（约 62 MB）';
       box.append(btn);
     }
+  }
+
+  function visionExtra() {
+    const box = document.createElement('div');
+    box.className = 'hint';
+    box.id = 'vision-note';
+    box.style.marginTop = '10px';
+    fillVisionNote(box);
     return box;
+  }
+
+  /** meta 更新后单独刷这一块，不重画整张设置卡（否则正在输入的数字会丢） */
+  function syncVisionNote() {
+    const box = document.querySelector('#vision-note');
+    if (box) fillVisionNote(box);
   }
 
   function renderSettings() {
@@ -1061,6 +1090,7 @@
       }
       const when = j && j.updatedAt ? new Date(j.updatedAt).toLocaleString() : '还没更新过';
       $('#stamp').textContent = '更新于 ' + when;
+      syncVisionNote();
       const pending = Array.isArray(j && j.pendingActions) ? j.pendingActions.length : 0;
       $('#pending').hidden = pending === 0;
       if (pending) $('#pending').textContent = `${pending} 个动作排队中`;
@@ -1137,7 +1167,8 @@
         meta = Object.assign({}, meta, {
           ffmpeg: { ready: Boolean(st.ffmpeg), path: String(st.ffmpeg || ''), dir: String(st.dir || '') },
         });
-        renderSettings();
+        /** 只刷那一行：重画整张设置卡会把正在输入的数字冲掉 */
+        syncVisionNote();
       }
     }
     await loadData();
