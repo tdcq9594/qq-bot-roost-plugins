@@ -53,7 +53,7 @@ export function createFeed({
   intervalImpl = setInterval, clearImpl = clearInterval,
 } = {}) {
   const minutes = Math.round(Number(cfg?.feedIntervalMin) || 0);
-  const enabled = minutes >= MIN_FEED_MINUTES;
+  const enabled = cfg?.enabled !== false && minutes >= MIN_FEED_MINUTES;
   let timer = null;
   let running = false;
   let items = [];

@@ -157,6 +157,8 @@ export function createPush({
   /** 定时刷的 onFresh 回调。整体吞错：刷 B 站成功但推送失败，不该让这轮算失败 */
   async function onFresh(items, reason = '定时') {
     roll();
+    /** 总开关只挡自动推送；工具手动补推仍然可用 */
+    if (cfg?.enabled === false) return { ok: false, why: '总开关关着', picked: 0, delivered: 0, writes: 0, errors: [] };
     const got = pick(items);
     let delivered = 0;
     let didWrites = 0;

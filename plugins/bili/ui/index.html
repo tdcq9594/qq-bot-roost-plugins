@@ -9,7 +9,7 @@
     color-scheme: light dark;
     --fg: #1f2329; --fg-2: #4e5969; --muted: #86909c;
     --line: #eef0f3; --card: #fff; --page: #fafbfc;
-    --accent: #1668dc; --accent-soft: #e8f1ff;
+    --accent: #fb7299; --accent-soft: #ffe9f0;
     --ok: #1f8a4c; --warn: #b45309; --danger: #c0392b;
     --shadow: 0 1px 2px rgba(16,24,40,.04);
   }
@@ -17,7 +17,7 @@
     :root {
       --fg: #e8eaed; --fg-2: #c2c7cf; --muted: #8b919b;
       --line: #2a2f37; --card: #1b1e24; --page: #14171c;
-      --accent: #6f9dff; --accent-soft: #1e2a3d;
+      --accent: #ff9bbb; --accent-soft: #3a2430;
       --ok: #4cc38a; --warn: #e0a458; --danger: #f07171; --shadow: none;
     }
   }
@@ -81,8 +81,8 @@
 
   /* 两列 */
   .row {
-    display: grid; grid-template-columns: minmax(168px, 252px) 1fr;
-    gap: 26px; padding: 15px 0; border-top: 1px solid var(--line); align-items: center;
+    display: grid; grid-template-columns: minmax(200px, 300px) 1fr;
+    gap: 32px; padding: 16px 0; border-top: 1px solid var(--line); align-items: center;
   }
   .row:first-of-type { border-top: 0; }
   .side .label { font-size: 12.5px; font-weight: 600; }
@@ -177,6 +177,10 @@
 <div class="wrap">
   <div class="top">
     <h1>刷 B 站</h1>
+    <span id="master-wrap" style="display:flex;align-items:center;gap:8px;margin-left:14px">
+      <span class="stamp" style="margin:0">总开关</span>
+      <button type="button" class="switch" id="master" role="switch" aria-checked="true"></button>
+    </span>
     <span class="stamp" id="stamp">读着…</span>
     <button type="button" id="reload">刷新</button>
   </div>
@@ -193,6 +197,7 @@
     <button type="button" class="primary" id="act-refresh">刷新热门</button>
     <button type="button" id="act-feed">现在刷一轮</button>
     <button type="button" id="act-login">检查登录</button>
+    <button type="button" id="act-ffmpeg" hidden>装 ffmpeg</button>
     <span class="spacer"></span>
     <span class="tag" id="pending" hidden>动作排队中</span>
   </div>
@@ -491,7 +496,7 @@
       });
       box.append(card);
     });
-    const rest = spec.filter((f) => !used.has(f.key));
+    const rest = spec.filter((f) => !used.has(f.key) && f.key !== 'enabled');
     if (rest.length) {
       const card = document.createElement('div');
       const h = document.createElement('h2');
@@ -539,6 +544,14 @@
         small: true,
       },
     ];
+    if (meta && meta.ffmpeg) {
+      items.push({
+        k: 'ffmpeg（抽帧）',
+        v: meta.ffmpeg.ready ? '可用' : (meta.ffmpeg.message ? '没装：' + meta.ffmpeg.message : '没装'),
+        dot: meta.ffmpeg.ready ? 'ok' : 'off',
+        small: true,
+      });
+    }
     if (feed && feed.error) {
       items.push({ k: '上次没刷成', v: feed.error, dot: 'warn', small: true });
     }
@@ -589,6 +602,16 @@
     draft = Object.assign({}, r.values || {});
     secrets = {};
     renderSettings();
+    syncMaster();
+  }
+
+  /** 顶部总开关：直接落到 enabled，保存整份 values 以免把别的项冲掉 */
+  function syncMaster() {
+    const on = draft.enabled !== false;
+    const b = document.querySelector('#master');
+    if (!b) return;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-checked', String(on));
   }
 
   async function save() {
@@ -661,6 +684,8 @@
       const when = j && j.updatedAt ? new Date(j.updatedAt).toLocaleString() : '还没更新过';
       $('#stamp').textContent = '更新于 ' + when;
       const pending = Array.isArray(j && j.pendingActions) ? j.pendingActions.length : 0;
+      const needFfmpeg = Boolean(meta && meta.ffmpeg && !meta.ffmpeg.ready);
+      $('#act-ffmpeg').hidden = !needFfmpeg;
       $('#pending').hidden = pending === 0;
       if (pending) $('#pending').textContent = `${pending} 个动作排队中`;
     } catch (e) {
@@ -680,6 +705,14 @@
   $('#act-refresh').onclick = () => act('refresh_hot');
   $('#act-feed').onclick = () => act('feed_now');
   $('#act-login').onclick = () => act('check_login');
+  $('#act-ffmpeg').onclick = () => act('install_ffmpeg');
+  $('#master').onclick = async () => {
+    const next = !$('#master').classList.contains('on');
+    $('#master').classList.toggle('on', next);
+    draft.enabled = next;
+    const r = await op('extensions.config.save', { id: ID, values: Object.assign({}, draft, { enabled: next }), secrets: {} });
+    toast(r && r.ok ? (next ? '已开启' : '已关闭') : '没保存上');
+  };
   $('#reload').onclick = () => { loadConfig(); loadData(); };
   $('#save').onclick = save;
 

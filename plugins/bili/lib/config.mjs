@@ -74,6 +74,8 @@ export function readConfig(env = process.env) {
     /* 配置坏了不该让扩展起不来，按默认值继续 */
   }
   return {
+    /** 总开关：关掉后不定时刷、不推送、不跑写动作；工具仍然可用 */
+    enabled: raw.enabled !== false,
     defaultLimit: intOf(raw.defaultLimit, 6, 1, 8),
     hotPoolSize: intOf(raw.hotPoolSize, 20, 10, 30),
     commentLimit: intOf(raw.commentLimit, 5, 1, 10),

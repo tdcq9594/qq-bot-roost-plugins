@@ -29,6 +29,7 @@ import { createProactiveClient } from './lib/proactive.mjs';
 import { createWriteApi } from './lib/write.mjs';
 import { createPush } from './lib/push.mjs';
 import { createUiActions } from './lib/ui-actions.mjs';
+import { bundledFfmpeg, installFfmpeg } from './lib/ffmpeg.mjs';
 
 const SERVER = { name: 'bili', version: '0.5.1' };
 const log = (m) => process.stderr.write(`[bili] ${m}\n`);
@@ -88,7 +89,8 @@ const feed = createFeed({
 
 const shots = createShots({
   dir: cfg.shotDir, keep: cfg.shotKeep, width: cfg.shotWidth,
-  ffmpegPath: cfg.ffmpegPath, api, log,
+  /** 手动填的优先；没填就用扩展自己 deps/ 里那份（一键安装装在这里） */
+  ffmpegPath: cfg.ffmpegPath || bundledFfmpeg(HERE), api, log,
 });
 
 push = createPush({ cfg, api, shots, submit, write, log });
@@ -100,6 +102,7 @@ box = createToolbox({ api, log, config: cfg, feed, shots, push });
 
 /** 最近一次「检查登录」/「发弹幕」的结果，面板下次刷新就能看到 */
 let lastAccount = null;
+let lastFfmpeg = null;
 let lastDanmaku = null;
 
 /** 从链接或 BV 号里抠出 BV 号（面板只让填一行，不逼用户分开填） */
@@ -135,6 +138,11 @@ function metaOf() {
         : null,
     },
     write: { paused: String(write.state()?.paused || '') },
+    ffmpeg: {
+      ready: Boolean(cfg.ffmpegPath || bundledFfmpeg(HERE)),
+      path: String(cfg.ffmpegPath || bundledFfmpeg(HERE) || ''),
+      message: String(lastFfmpeg?.message || ''),
+    },
     danmaku: lastDanmaku,
   };
 }
@@ -183,6 +191,13 @@ const uiActions = createUiActions({
         at: Date.now(), ok: null, dryRun: false, message: `《${v.title}》· ${v.duration} 秒`,
       };
       syncMeta();
+    },
+    /** 一键安装 ffmpeg 到扩展自己的 deps/（约 62 MB） */
+    async install_ffmpeg() {
+      const r = await installFfmpeg(HERE, { log });
+      lastFfmpeg = r;
+      syncMeta();
+      if (!r.ok) throw new Error(r.message);
     },
     /** 真发弹幕：走 write 层（默认试运行、每日上限、风控当天暂停都在那里） */
     async danmaku_send(payload) {

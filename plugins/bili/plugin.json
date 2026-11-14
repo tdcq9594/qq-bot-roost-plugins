@@ -13,6 +13,12 @@
     "./server.mjs"
   ],
   "config": {
+    "enabled": {
+      "type": "boolean",
+      "label": "总开关",
+      "default": true,
+      "hint": "关掉后不定时刷、不推送、不跑写动作；工具还是能用"
+    },
     "defaultLimit": {
       "type": "number",
       "label": "默认条数",
@@ -277,6 +283,10 @@
       {
         "id": "danmaku_send",
         "label": "发送弹幕"
+      },
+      {
+        "id": "install_ffmpeg",
+        "label": "装 ffmpeg"
       }
     ],
     "view": {
