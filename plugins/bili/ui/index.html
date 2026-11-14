@@ -219,6 +219,11 @@
     <h2>ta 刷过什么</h2>
     <p class="card-sub" id="act-line">今天自动刷了 0 轮 · 截图 0 张 · 评论 0 条</p>
     <div id="recent"><div class="empty">还没有记录。点上面的「现在刷一轮」试试。</div></div>
+    <div class="toolbar" style="margin-top:12px">
+      <button type="button" id="act-replies">看看有没有人回 ta</button>
+      <span class="note" id="replies-note"></span>
+    </div>
+    <div id="replies"></div>
   </div>
 
   <div class="card">
@@ -758,6 +763,62 @@
     }
   }
 
+  /**
+   * 谁回了 ta。
+   *
+   * 列表在 `replies.json`（回复是数组，塞不进只支持一层标量的 meta）。
+   * 只读展示：要不要回、怎么回由模型决定，页面不替你说话。
+   */
+  async function loadReplies() {
+    const box = $('#replies');
+    const note = $('#replies-note');
+    if (!box) return;
+    try {
+      const r = await fetch(`${API}/ext-pages?id=bili&file=replies.json&t=${Date.now()}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      const items = Array.isArray(j && j.items) ? j.items : [];
+      if (note) {
+        const st = (meta && meta.replies) || null;
+        note.textContent = st && st.unread ? `有 ${st.unread} 条新的` : (items.length ? `共 ${items.length} 条` : '');
+      }
+      box.textContent = '';
+      if (!items.length) {
+        const d = document.createElement('div');
+        d.className = 'empty';
+        d.textContent = '还没有人回 ta（或者还没查过）。';
+        box.append(d);
+        return;
+      }
+      for (const it of items.slice(0, 8)) {
+        const row = document.createElement('div');
+        row.className = 'hint';
+        row.style.marginTop = '8px';
+        const who = document.createElement('b');
+        who.textContent = it.name || '有人';
+        const when = it.time ? ` · ${new Date(Number(it.time)).toLocaleString()}` : '';
+        const head = document.createElement('div');
+        head.append(who, document.createTextNode(`${when}`));
+        const say = document.createElement('div');
+        say.textContent = `「${it.text || ''}」`;
+        const mine = document.createElement('div');
+        mine.style.opacity = '.7';
+        mine.textContent = it.myText ? `ta 原来说：${it.myText}` : '';
+        const src = document.createElement('div');
+        src.style.opacity = '.7';
+        src.textContent = it.title ? `在《${it.title}》下` : '';
+        row.append(head, say, mine, src);
+        box.append(row);
+      }
+    } catch {
+      box.textContent = '';
+      const d = document.createElement('div');
+      d.className = 'empty';
+      d.textContent = '还没有查过谁回 ta。';
+      box.append(d);
+    }
+  }
+
   /** 「ta 刷过什么」：今日计数 + 上次刷的结果 */
   function renderActivity() {
     const line = $('#act-line');
@@ -985,6 +1046,8 @@
   $('#act-refresh').onclick = () => act('refresh_hot');
   $('#act-feed').onclick = () => act('feed_now');
   $('#act-login').onclick = () => act('check_login');
+  const rpBtn = document.querySelector('#act-replies');
+  if (rpBtn) rpBtn.onclick = async () => { await act('check_replies'); await loadReplies(); };
   const galBtn = document.querySelector('#gal-refresh');
   if (galBtn) galBtn.onclick = () => { void loadGallery(); };
   /**
@@ -1048,6 +1111,7 @@
   loadConfig();
   loadData();
   void loadGallery();
+  void loadReplies();
 
   /**
    * 打开页面就自己查一次登录态。

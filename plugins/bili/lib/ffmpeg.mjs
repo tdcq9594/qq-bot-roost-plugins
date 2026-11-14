@@ -57,12 +57,36 @@ function findIn(depsDir) {
  *   3. `ROOST_LAUNCHER_DIR`（指向宿主数据目录）拼一个——老受管块没有新键时的回退。
  */
 export function sharedDepsDir(explicit = '') {
-  const given = String(explicit || '').trim();
-  if (given) return given;
-  const direct = String(process.env.ROOST_DEPS_DIR || '').trim();
-  if (direct) return direct;
+  const first = depsCandidates(explicit)[0];
+  return first || '';
+}
+
+/**
+ * 共享依赖目录的**候选列表**，按可信度排序。
+ *
+ * 为什么不是一个路径：这三条来源都可能过期。
+ *   · 受管块里的 `ROOST_DEPS_DIR` 是**渲染那一刻**算出来的——用户后来改了
+ *     宿主数据目录（`DSH_ROOST_DATA`），受管块里还是旧路径；
+ *   · `ROOST_LAUNCHER_DIR` 指向宿主数据目录，跟着受管块一起过期；
+ *   · 进程内动作由宿主每次现传（最可信）。
+ *
+ * 所以调用方要**逐个试**，谁下面真有 ffmpeg 就用谁。只取第一个非空值，
+ * 等于把「路径过期」变成「明明装好了却说没装」。
+ *
+ * @param {string} [explicit] 调用方显式给的目录（宿主会传最新的那个）
+ * @returns {string[]} 去重后的候选，可能为空
+ */
+export function depsCandidates(explicit = '') {
+  const out = [];
+  const push = (v) => {
+    const s = String(v || '').trim();
+    if (s && !out.includes(s)) out.push(s);
+  };
+  push(explicit);
+  push(process.env.ROOST_DEPS_DIR);
   const data = String(process.env.ROOST_LAUNCHER_DIR || '').trim();
-  return data ? join(data, 'deps') : '';
+  if (data) push(join(data, 'deps'));
+  return out;
 }
 
 /**
@@ -80,8 +104,11 @@ export function resolveFfmpeg({ root = '', configured = '', depsDir = '' } = {})
     if (asDir) return asDir;
     if (existsSync(manual)) return manual;
   }
-  const shared = findIn(sharedDepsDir(depsDir));
-  if (shared) return shared;
+  /** 逐个候选试：谁下面真有 ffmpeg 就用谁（见 depsCandidates 的注释） */
+  for (const dir of depsCandidates(depsDir)) {
+    const hit = findIn(dir);
+    if (hit) return hit;
+  }
   return root ? findIn(join(root, LEGACY_DEPS_DIR)) : '';
 }
 
@@ -93,10 +120,14 @@ export function resolveFfmpeg({ root = '', configured = '', depsDir = '' } = {})
  */
 export function ffmpegState({ root = '', configured = '', depsDir = '' } = {}) {
   const path = resolveFfmpeg({ root, configured, depsDir });
+  /** `dir` 要显示**真正用了哪个**，不能显示候选里的第一个（那可能是过期路径） */
+  const used = path
+    ? (depsCandidates(depsDir).find((d) => findIn(d)) || sharedDepsDir(depsDir))
+    : sharedDepsDir(depsDir);
   return {
     ready: Boolean(path),
     path,
-    dir: sharedDepsDir(depsDir),
+    dir: used,
     legacy: Boolean(!path && root && findIn(join(root, LEGACY_DEPS_DIR))),
     configured: Boolean(String(configured || '').trim()),
   };

@@ -87,10 +87,17 @@ export function createWriteApi({
   }
 
   return {
-    /** 视频下评论。aid 来自只读的 view()，模板里的 {title} 会替换 */
-    comment: (aid, text) => post('/x/v2/reply/add', {
+    /**
+     * 视频下评论；带 `root` / `parent` 就是**回到某一层楼**。
+     *
+     * 只发到视频下面等于另起一条评论，对方收不到提醒——「ta 回你」这件事
+     * 就白做了。`root` 是楼主评论的 rpid，`parent` 是被回复那条的 rpid
+     * （回复楼主时可以两个都给同一个值）。
+     */
+    comment: (aid, text, { root = 0, parent = 0 } = {}) => post('/x/v2/reply/add', {
       type: '1', oid: String(aid), message: String(text).slice(0, 200),
-    }, '发评论'),
+      ...(root ? { root: String(root), parent: String(parent || root) } : {}),
+    }, root ? '回复评论' : '发评论'),
     /** 点赞 */
     like: (aid) => post('/x/web-interface/archive/like', {
       aid: String(aid), like: '1',

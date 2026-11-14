@@ -20,7 +20,7 @@
  *      `ui-data.json`（定时刷、推送额度），直接覆盖会把对方字段抹掉。
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -30,7 +30,7 @@ import { createFeed } from '../lib/feed.mjs';
 import { createWriteApi } from '../lib/write.mjs';
 import { createQrLogin } from '../lib/qr-login.mjs';
 import { createShots } from '../lib/shots.mjs';
-import { bumpStats } from '../lib/stats.mjs';
+import { bumpStats, readStats } from '../lib/stats.mjs';
 import { countShots } from '../lib/gallery.mjs';
 import { createAutoShot } from '../lib/auto-shot.mjs';
 import { ffmpegState, resolveFfmpeg, sharedDepsDir } from '../lib/ffmpeg.mjs';
@@ -88,6 +88,8 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
     cfg: config,
     api,
     hostState: async () => ({ ok: true }),
+    /** 每日轮数上限用；`config` 是活引用，改了上限立刻按新值判断 */
+    runsToday: () => readStats(ui.file()).rounds,
     onFresh: (items) => {
       ui.fromPool(items);
       setMeta({ feed: feedPatch('手动') });
@@ -140,6 +142,34 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
    * 逻辑在 `lib/auto-shot.mjs`：MCP 子进程的定时刷也要用它，两边必须同一套。
    */
   const autoShot = createAutoShot({ api, shots, ui, config, log });
+
+  /**
+   * 谁回了 ta（B 站「收到的回复」）。
+   *
+   * 结果写 `replies.json`：回复列表是数组，而宿主透传的 `meta` 只认一层
+   * 标量——塞进去会被 `String()` 成 "[object Object]"。页面单独取这个文件。
+   */
+  const repliesFile = () => join(HERE, 'replies.json');
+
+  function readReplies() {
+    try {
+      const j = JSON.parse(readFileSync(repliesFile(), 'utf8'));
+      return { seen: Array.isArray(j?.seen) ? j.seen : [], items: Array.isArray(j?.items) ? j.items : [] };
+    } catch {
+      return { seen: [], items: [] };
+    }
+  }
+
+  function writeReplies(next) {
+    try {
+      const tmp = `${repliesFile()}.tmp`;
+      writeFileSync(tmp, `${JSON.stringify(next, null, 0)}\n`, 'utf8');
+      renameSync(tmp, repliesFile());
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   /**
    * 扫码登录。

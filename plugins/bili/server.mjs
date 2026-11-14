@@ -32,11 +32,12 @@ import { createUiActions } from './lib/ui-actions.mjs';
 import { resolveFfmpeg, ffmpegState, sharedDepsDir } from './lib/ffmpeg.mjs';
 import { createQrLogin } from './lib/qr-login.mjs';
 import { createLiveConfig } from './lib/live-config.mjs';
+import { createExtMemory } from './lib/memory.mjs';
 import { createAutoShot } from './lib/auto-shot.mjs';
 import { bumpStats, readStats } from './lib/stats.mjs';
 import { countShots } from './lib/gallery.mjs';
 
-const SERVER = { name: 'bili', version: '0.9.0' };
+const SERVER = { name: 'bili', version: '0.10.0' };
 const log = (m) => process.stderr.write(`[bili] ${m}\n`);
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 
@@ -111,6 +112,8 @@ feed = createFeed({
   api,
   hostState: createHostState(process.env),
   beforeTick: async () => { refreshConfig(); },
+  /** 每日轮数上限用：`stats.rounds` 由 onFresh 里的 bumpStats 累加 */
+  runsToday: () => readStats(ui.file()).rounds,
   onFresh: (items) => {
     box?.setPool(items);
     ui.fromPool(items);
@@ -134,7 +137,9 @@ const shots = createShots({
   ffmpegPath: () => resolveFfmpeg({ root: HERE, configured: cfg.ffmpegPath }), api, log,
 });
 
-push = createPush({ cfg, api, shots, submit, write, log });
+/** 宿主记忆：推成功记一笔，下次别推同一条（写不进去不影响推送） */
+const memory = createExtMemory(process.env);
+push = createPush({ cfg, api, shots, submit, write, memory, log });
 box = createToolbox({ api, log, config: cfg, feed, shots, push });
 
 /** 扫码登录：headless 浏览器出码，拿到 cookie 就写 cookie.txt */

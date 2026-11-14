@@ -47,6 +47,8 @@ export function materialOf(v, { withCover = false } = {}) {
 
 export function createPush({
   cfg, api, shots, submit, write,
+  /** 宿主记忆（可选）：推成功记一笔，下次别推同一条、聊天里也能回忆 */
+  memory = null,
   log = () => {}, now = () => Date.now(),
 } = {}) {
   let day = '';
@@ -108,7 +110,23 @@ export function createPush({
       if (r.ok) { n += 1; pushed += 1; }
       else errors.push(`${t.target}：${r.why}`);
     }
-    if (n) log(`推送素材《${v?.title}》：${n} 条（${reason}）`);
+    if (n) {
+      log(`推送素材《${v?.title}》：${n} 条（${reason}）`);
+      /**
+       * 记一笔「推过什么」。
+       *
+       * 只在**真投递出去**之后记：交素材成功但被门闸挡下、等审批的，
+       * 记了会变成「她记得推过、其实主人没看到」。
+       * 写不进去不影响这次推送（宿主可能没给 memory:write 的 scope）。
+       */
+      if (memory?.available) {
+        const title = String(v?.title ?? '').slice(0, 60);
+        const who = String(v?.author ?? '').slice(0, 30);
+        void memory
+          .remember(`刷 B 站时推过《${title}》（UP：${who || '?'}，${String(v?.bvid ?? '')}），${n} 条`)
+          .catch(() => {});
+      }
+    }
     return { delivered: n, errors };
   }
 

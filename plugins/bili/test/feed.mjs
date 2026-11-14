@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { inActiveHours, parseActiveHours, readConfig, secretEnv } from '../lib/config.mjs';
-import { createFeed, createHostState, MIN_FEED_MINUTES } from '../lib/feed.mjs';
+import { createFeed, createHostState, filterItems, MIN_FEED_MINUTES } from '../lib/feed.mjs';
 
 const POOL = Array.from({ length: 5 }, (_, i) => ({ bvid: `BV${i}`, title: `视频 ${i}` }));
 
@@ -178,4 +178,74 @@ test('tick 之前会先跑 beforeTick（用来热读配置）', async () => {
   });
   await feed.tick('手动');
   assert.equal(refreshed, 1);
+});
+
+// ---------------------------------------------------------------------------
+// 一轮的筛子（对齐 aurabot 那页的播放量 / 只看最近 / 一轮几个 / 每日上限）
+// ---------------------------------------------------------------------------
+
+test('filterItems：播放量门槛与新鲜度，0 表示不限', () => {
+  const now = Date.UTC(2026, 10, 14);
+  const day = 86_400_000;
+  const list = [
+    { bvid: 'BV1', play: 100, pubdate: Math.floor(now / 1000) },          // 新，播放少
+    { bvid: 'BV2', play: 900000, pubdate: Math.floor((now - 30 * day) / 1000) }, // 老，播放多
+    { bvid: 'BV3', play: 900000, pubdate: Math.floor(now / 1000) },       // 新，播放多
+    { bvid: 'BV4', play: 500, pubdate: 0 },                                // 没有发布时间
+  ];
+  assert.equal(filterItems(list, { now }).length, 4, '都不限时全都留');
+  assert.deepEqual(filterItems(list, { minViews: 1000, now }).map((v) => v.bvid), ['BV2', 'BV3']);
+  /** `pubdate` 是秒，`now` 是毫秒：换算错了这条会全空 */
+  assert.deepEqual(filterItems(list, { maxAgeDays: 7, now }).map((v) => v.bvid), ['BV1', 'BV3', 'BV4']);
+  assert.deepEqual(
+    filterItems(list, { minViews: 1000, maxAgeDays: 7, now }).map((v) => v.bvid),
+    ['BV3'],
+  );
+});
+
+test('每日上限只拦定时刷，手动不受限', async () => {
+  const cfg = { enabled: true, feedIntervalMin: 30, hotPoolSize: 5, feedActiveHours: '', feedMaxRunsPerDay: 2 };
+  let runs = 2;
+  const feed = createFeed({
+    cfg,
+    api: { hot: async () => [{ bvid: 'BV1xx411c7mD', play: 1, pubdate: Math.floor(Date.now() / 1000) }], state: () => ({}) },
+    hostState: async () => ({ ok: true }),
+    runsToday: () => runs,
+  });
+
+  const auto = await feed.tick('定时');
+  assert.equal(auto.ok, false);
+  assert.match(auto.why, /到上限/);
+
+  /** 手动是用户明确要的，不该被上限挡 */
+  runs = 2;
+  const manual = await feed.tick('手动');
+  assert.equal(manual.ok, true);
+});
+
+test('一轮看几个：筛完再截断', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const many = Array.from({ length: 10 }, (_, i) => ({ bvid: `BV1xx411c7m${'ABCDEFGHIJ'[i]}`, play: 1000, pubdate: now }));
+  let seen = 0;
+  const feed = createFeed({
+    cfg: { enabled: true, feedIntervalMin: 30, hotPoolSize: 20, feedActiveHours: '', feedPerRun: 3 },
+    api: { hot: async () => many, state: () => ({}) },
+    hostState: async () => ({ ok: true }),
+    onFresh: (items) => { seen = items.length; },
+  });
+  const r = await feed.tick('手动');
+  assert.equal(r.ok, true);
+  assert.equal(r.count, 3);
+  assert.equal(seen, 3, 'onFresh 拿到的也应该是截断后的');
+});
+
+test('筛得太严时明确报错，不是静默返回 0 条', async () => {
+  const feed = createFeed({
+    cfg: { enabled: true, feedIntervalMin: 30, hotPoolSize: 5, feedActiveHours: '', feedMinViews: 9_999_999 },
+    api: { hot: async () => [{ bvid: 'BV1xx411c7mD', play: 1, pubdate: 0 }], state: () => ({}) },
+    hostState: async () => ({ ok: true }),
+  });
+  const r = await feed.tick('手动');
+  assert.equal(r.ok, false);
+  assert.match(r.why, /筛得太严/);
 });

@@ -32,6 +32,8 @@ const SKIP_FILES = new Set([
   '.deps.json', '.DS_Store', 'Thumbs.db',
   /** 面板数据与扫码二维码：运行时生成，内容每次不同，算进哈希会让 --check 永远失败 */
   'ui-data.json', 'qr.png', 'cookie.txt',
+  /** 「谁回了 ta」的清单：运行时写入，内容随时在变 */
+  'replies.json',
 ]);
 
 /** 文本文件 CRLF 折成 LF；二进制原样（判定依据同 git：有没有 NUL 字节） */

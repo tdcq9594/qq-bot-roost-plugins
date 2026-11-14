@@ -25,6 +25,34 @@ import { inActiveHours } from './config.mjs';
 export const MIN_FEED_MINUTES = 15;
 
 /**
+ * 一轮的筛子：播放量门槛、只看最近几天。
+ *
+ * `pubdate` 是**秒**（B 站接口），而 `now` 是毫秒——这里统一换算，
+ * 别在调用方各写一遍（写错就会「只看最近 7 天」把一切都筛掉）。
+ *
+ * @param {object[]} list
+ * @param {{minViews?: number, maxAgeDays?: number, now?: number}} [o]
+ */
+export function filterItems(list, { minViews = 0, maxAgeDays = 0, now = Date.now() } = {}) {
+  const items = Array.isArray(list) ? list : [];
+  const min = Math.max(0, Number(minViews) || 0);
+  const days = Math.max(0, Number(maxAgeDays) || 0);
+  if (!min && !days) return items.slice();
+  return items.filter((v) => {
+    if (min && (Number(v?.play) || 0) < min) return false;
+    if (days) {
+      const pub = Number(v?.pubdate) || 0;
+      /** 没有发布时间的不拦（有些接口不给），否则会被静默筛光 */
+      if (pub) {
+        const pubMs = pub > 1e12 ? pub : pub * 1000;
+        if (now - pubMs > days * 86_400_000) return false;
+      }
+    }
+    return true;
+  });
+}
+
+/**
  * 探宿主是否在线。`/v1/state` 只要 `state:read`（扩展默认就有），
  * 不需要额外声明 scope；手动 `--call` 时没有这两个 env 属正常，直接跳过。
  */
@@ -53,6 +81,8 @@ export function createFeed({
   intervalImpl = setInterval, clearImpl = clearInterval,
   /** 每次 tick 前调一次：用来热读宿主刚保存的配置（见 lib/live-config.mjs） */
   beforeTick = null,
+  /** 今天已经刷了几轮（`feedMaxRunsPerDay` 用它判断）；由调用方从面板数据里取 */
+  runsToday = () => 0,
 } = {}) {
   /**
    * **现算，不再在创建时算死**。
@@ -76,6 +106,20 @@ export function createFeed({
       await beforeTick?.();
     } catch { /* 热读失败不该让这一轮不刷 */ }
     if (running) return { ok: false, why: '上一轮还没结束' };
+
+    /**
+     * 每天最多刷几轮：**只拦定时刷**。
+     *
+     * 手动点「现在刷一轮」是用户明确要的，被上限拦下来会让人以为按钮坏了。
+     */
+    const cap = Math.max(0, Number(cfg?.feedMaxRunsPerDay) || 0);
+    if (cap && reason !== '手动') {
+      const used = Number(runsToday()) || 0;
+      if (used >= cap) {
+        last = { ...last, reason: `今天已经刷了 ${used} 轮（上限 ${cap}）` };
+        return { ok: false, why: `今天已经刷了 ${used} 轮，到上限了（${cap}）` };
+      }
+    }
     /** 用注入的 `now()`；测试才验得了「半夜不刷」这道闸 */
     if (!inActiveHours(cfg?.feedActiveHours, new Date(now()))) {
       last = { ...last, reason: '不在活跃时段' };
@@ -96,8 +140,20 @@ export function createFeed({
 
     running = true;
     try {
-      const got = await api.hot({ ps: Number(cfg?.hotPoolSize) || 20 });
-      if (!Array.isArray(got) || !got.length) throw new Error('热门池是空的');
+      const raw = await api.hot({ ps: Number(cfg?.hotPoolSize) || 20 });
+      if (!Array.isArray(raw) || !raw.length) throw new Error('热门池是空的');
+
+      /** 先按「播放量 / 新鲜度」筛，再按「一轮看几个」截 */
+      const filtered = filterItems(raw, {
+        minViews: Number(cfg?.feedMinViews) || 0,
+        maxAgeDays: Number(cfg?.feedMaxAgeDays) || 0,
+        now: now(),
+      });
+      if (!filtered.length) {
+        throw new Error(`筛得太严了：${raw.length} 条热门里一条都没剩（播放量门槛 / 只看最近）`);
+      }
+      const perRun = Math.max(1, Math.min(10, Number(cfg?.feedPerRun) || 6));
+      const got = filtered.slice(0, perRun);
       items = got;
       onFresh(got);
       last = { at: now(), count: got.length, error: '', hostMood: hs.mood ?? null, reason };

@@ -87,6 +87,15 @@ export function readConfig(env = process.env) {
     /** 0 = 不定时刷。装了扩展就一直打 B 站接口是 412 的捷径，默认必须关 */
     feedIntervalMin: intOf(raw.feedIntervalMin, 0, 0, 240),
     feedActiveHours: strOf(raw.feedActiveHours, '', 20),
+    /**
+     * 一轮的筛子（对齐 aurabot 那页的四个滑条）。
+     *
+     * 都是「0 = 不限」，因为默认限制越多越容易让人以为「刷不到东西」。
+     */
+    feedPerRun: intOf(raw.feedPerRun, 6, 1, 10),
+    feedMinViews: intOf(raw.feedMinViews, 0, 0, 10_000_000),
+    feedMaxAgeDays: intOf(raw.feedMaxAgeDays, 0, 0, 365),
+    feedMaxRunsPerDay: intOf(raw.feedMaxRunsPerDay, 0, 0, 48),
 
     ffmpegPath: strOf(raw.ffmpegPath, '', 300),
     shotWidth: intOf(raw.shotWidth, 512, 256, 1024),

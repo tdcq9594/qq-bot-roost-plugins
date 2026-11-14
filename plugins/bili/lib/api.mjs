@@ -473,6 +473,43 @@ export function createBiliApi({ getCookie = () => '', log = () => {}, fetchImpl 
    * 弹幕抽样（旧版 list.so，返回 deflate 压缩的 XML）。
    * 只取前 N 条并按时间排序 —— 我们要的是「弹幕在刷什么」的体感，不是全量。
    */
+  /**
+   * 别人回她的消息（B 站「消息中心 → 收到的回复」）。
+   *
+   * 这是「ta 会回你」这条链路的入口：`msgfeed/reply` 给的是**别人回复我**
+   * 的那条，带上 `root` / `parent` 才能回到正确的楼层——只发到视频下面
+   * 等于另起一条评论，对方收不到提醒。
+   *
+   * 字段名对齐 aurabot 那份，方便两边对照：
+   * `{ id, time, name, mid, text, myText, oid, root, parent, title, uri }`
+   *
+   * @param {{limit?: number}} [o]
+   */
+  async function replyFeed({ limit = 20 } = {}) {
+    try {
+      const d = await req('https://api.bilibili.com/x/msgfeed/reply?platform=web&build=0&mobi_app=web', { pauseOn412: false });
+      return (d?.items || []).slice(0, Math.max(1, Number(limit) || 20)).map((x) => ({
+        id: String(x.id ?? ''),
+        time: (Number(x.reply_time) || 0) * 1000,
+        name: stripHtml(x.user?.nickname || ''),
+        mid: Number(x.user?.mid) || 0,
+        /** 对方说的话 */
+        text: stripHtml(x.item?.source_content || '').slice(0, 300),
+        /** 我当时说的那句（用来判断是不是在回我） */
+        myText: stripHtml(x.item?.target_reply_content || x.item?.root_reply_content || '').slice(0, 300),
+        /** 视频 aid：回复时要拿它当 oid */
+        oid: Number(x.item?.subject_id) || 0,
+        root: Number(x.item?.root_id) || Number(x.item?.source_id) || 0,
+        parent: Number(x.item?.source_id) || 0,
+        title: stripHtml(x.item?.title || '').slice(0, 120),
+        uri: String(x.item?.uri || ''),
+      }));
+    } catch (e) {
+      log(`拿「收到的回复」失败：${e?.message ?? e}`);
+      return [];
+    }
+  }
+
   async function danmaku(cid, { limit = 8 } = {}) {
     try {
       const r = await raw(`https://api.bilibili.com/x/v1/dm/list.so?oid=${cid}`, { timeoutMs: 12000, pauseOn412: false });
@@ -560,7 +597,7 @@ export function createBiliApi({ getCookie = () => '', log = () => {}, fetchImpl 
   }
 
   return {
-    nav, search, searchUser, hot, weekly, view, playurl, subtitle, comments, danmaku, up, bangumi, resolveShort,
+    nav, search, searchUser, hot, weekly, view, playurl, subtitle, comments, replyFeed, danmaku, up, bangumi, resolveShort,
     /** 给工具层用的登录态（带 10 分钟缓存）。 */
     account: () => nav().catch(() => ({ isLogin: false, uname: '', mid: 0, vip: false })),
     /** 只读状态：给 --status 自检用。 */
