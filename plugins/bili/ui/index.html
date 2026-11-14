@@ -752,7 +752,8 @@
       const stamp = document.querySelector('#stamp');
       if (stamp) stamp.textContent = '动作没提交上：' + msg;
     }
-    if (ok) setTimeout(() => { loadData(); }, 2200);
+    /** 长轮询下动作基本是立刻执行的，等半秒刷新就够 */
+    if (ok) setTimeout(() => { loadData(); }, 700);
     return r;
   }
 

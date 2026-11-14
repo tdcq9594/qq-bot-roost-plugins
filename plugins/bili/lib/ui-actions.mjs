@@ -25,16 +25,20 @@ export function createUiActions({
 } = {}) {
   const base = String(env?.ROOST_API_URL || '').replace(/\/+$/, '');
   const token = String(env?.ROOST_API_TOKEN || '');
-  let timer = null;
+  let stopped = true;
   let busy = false;
+  /** 长轮询挂多久；宿主那边上限 30 秒，这里留一秒余量 */
+  const WAIT_MS = 25_000;
 
-  async function poll() {
+  async function poll(waitMs = 0) {
     if (!base || !token || busy) return { ok: false, why: '通道未就绪' };
     busy = true;
     try {
-      const r = await fetchImpl(`${base}/ext-ui/actions`, {
+      const qs = waitMs > 0 ? `?wait=${Math.round(waitMs)}` : '';
+      const r = await fetchImpl(`${base}/ext-ui/actions${qs}`, {
         headers: { authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(timeoutMs),
+        /** 长轮询时请求会挂 25 秒，超时必须比它长，否则每 8 秒就断一次 */
+        signal: AbortSignal.timeout(waitMs > 0 ? waitMs + 8_000 : timeoutMs),
       });
       const j = await r.json().catch(() => null);
       if (!r.ok || !j?.ok) {
@@ -69,15 +73,23 @@ export function createUiActions({
   return {
     get available() { return Boolean(base && token); },
     poll,
+    /**
+     * 长轮询循环：一次请求最多挂 25 秒，返回后立刻再来。
+     * 动作一入队宿主就唤醒，所以点按钮到执行之间基本没有固定延迟。
+     */
+    async loop() {
+      while (!stopped) {
+        try { await poll(WAIT_MS); } catch { /* 网络抖动：下一轮继续 */ }
+        if (stopped) break;
+        await new Promise((r) => { const t = setTimeout(r, 250); t.unref?.(); });
+      }
+    },
     start() {
-      if (timer || !base || !token) return false;
-      timer = setInterval(() => { void poll(); }, intervalMs);
-      timer.unref?.();
+      if (!stopped || !base || !token) return false;
+      stopped = false;
+      void this.loop();
       return true;
     },
-    stop() {
-      if (timer) clearInterval(timer);
-      timer = null;
-    },
+    stop() { stopped = true; },
   };
 }
