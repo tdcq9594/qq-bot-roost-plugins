@@ -22,6 +22,8 @@ const playText = (n) => {
 };
 
 /** 模板里只替换 {title} / {author}，别让外部文本变成代码 */
+import { cardOf } from './card.mjs';
+
 export function fillTemplate(tpl, v) {
   return String(tpl ?? '')
     .replaceAll('{title}', String(v?.title ?? '').slice(0, 40))
@@ -30,7 +32,7 @@ export function fillTemplate(tpl, v) {
     .slice(0, 200);
 }
 
-export function materialOf(v, { withCover = false } = {}) {
+export function materialOf(v, { withCover = false, withCard = false } = {}) {
   const lines = [
     `刚刷到《${String(v?.title ?? '').slice(0, 60)}》`,
     `UP：${String(v?.author ?? '?').slice(0, 30)} · 播放 ${playText(v?.play)}`
@@ -38,9 +40,19 @@ export function materialOf(v, { withCover = false } = {}) {
     v?.desc ? `简介：${String(v.desc).slice(0, 80)}` : '',
     `链接：${linkOf(v?.bvid ?? '')}`,
   ];
-  /** 封面是 https 地址，给模型当素材；不写成 <<card:>> 标记（见文件头②） */
+  /** 封面是 https 地址，给模型当素材 */
   if (withCover && /^https:\/\//i.test(String(v?.cover ?? ''))) {
     lines.push(`封面：${String(v.cover).slice(0, 300)}`);
+  }
+  /**
+   * 分享默认走**图文卡片**：素材里直接把拼好的标记给模型，让它原样写进回复。
+   * 四个字段由扩展从 B 站数据拼，模型不用自己凑——凑错就是一张废卡。
+   *
+   * 没封面的视频不给：卡片必须有图，缺图会被平台拒。
+   */
+  if (withCard && /^https:\/\//i.test(String(v?.cover ?? ''))) {
+    const { text } = cardOf(v);
+    lines.push('', '想分享就直接发成卡片：把下面这行原样写进回复（四个字段别改、别加引号），正文可以很短。', text);
   }
   return lines.filter(Boolean).join('\n');
 }
@@ -103,7 +115,8 @@ export function createPush({
   }
 
   async function deliver(v, reason) {
-    let text = materialOf(v, { withCover: Boolean(cfg?.pushCover) });
+    /** 分享默认发图文卡片：素材里带拼好的卡片标记，模型原样写出去就是一条卡片 */
+    let text = materialOf(v, { withCover: Boolean(cfg?.pushCover), withCard: true });
     const shot = await maybeShot(v);
     if (shot) {
       text += `\n（顺手截了一张画面：${shot}。想直接发这张图就原样写 <<image-alone: ${shot}>>，不想发就别提它。）`;

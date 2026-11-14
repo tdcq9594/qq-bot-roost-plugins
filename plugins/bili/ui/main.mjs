@@ -332,7 +332,8 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
       }
       if (!v) return { ok: false, message: '还没有视频可分享，先点「现在刷一轮」' };
 
-      const text = materialOf(v, { withCover: config.pushCover !== false });
+      /** 分享就是发图文卡片：带上拼好的卡片标记 */
+      const text = materialOf(v, { withCover: config.pushCover !== false, withCard: true });
       const r = await proactive.submit({
         cause: '测试分享（写死发给主人）',
         key: `test-${Date.now()}`,

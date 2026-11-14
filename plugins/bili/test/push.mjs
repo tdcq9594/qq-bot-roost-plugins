@@ -184,3 +184,31 @@ test('截帧失败不影响推送：素材照发，只是没图', async () => {
   assert.equal(sub.calls.length, 1, '推送不能因为截不了图而失败');
   assert.equal(/image-alone/.test(String(sub.calls[0]?.text || '')), false);
 });
+
+/* ---------------- 分享默认发图文卡片 ---------------- */
+
+test('推送素材带拼好的卡片标记（有封面时）', async () => {
+  const sub = fakeSubmit();
+  const push = createPush({
+    cfg: cfg0({ pushOwner: true }),
+    api: fakeApi(), submit: sub, write: fakeWrite(), now: () => T,
+  });
+  await push.onFresh(POOL);
+  const text = String(sub.calls[0]?.text || '');
+  assert.match(text, /<<card: /, '素材里要有卡片标记');
+  assert.match(text, /原样写进回复/);
+  /** 四个字段由扩展拼，模型不用自己凑 */
+  assert.match(text, /BV1ZAWM61Eva/);
+  assert.match(text, /i0\.hdslb\.com/, '封面要在卡片里');
+});
+
+test('没封面的视频不给卡片（平台会拒）', async () => {
+  const sub = fakeSubmit();
+  const push = createPush({
+    cfg: cfg0({ pushOwner: true }),
+    api: fakeApi(), submit: sub, write: fakeWrite(), now: () => T,
+  });
+  /** 第二条没有 cover */
+  await push.onFresh([POOL[1]]);
+  assert.equal(/<<card: /.test(String(sub.calls[0]?.text || '')), false);
+});
