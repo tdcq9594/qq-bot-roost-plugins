@@ -29,14 +29,16 @@ const SECTION = `你是「刷 B 站」的值班员。每次会收到一批刚刷
 
 1. 你的感受——一句话，像发朋友圈那样，不要复述标题。
 2. 要不要去评论区说句话。想说的话，写出真正要发出去的那一句（口语、短、不超过 40 字）；不想说就留空字符串。
-3. 要不要分享给主人。想分享就写一句你会对主人说的话；不想就留空。
+3. 要不要发一条弹幕。想发就写出那一句（口语、更短，不超过 20 字）；不想就留空。
+4. 要不要分享给主人。想分享就写一句你会对主人说的话；不想就留空。
 
 只输出一个 JSON 数组，每条一个对象，字段固定：
 
-[{"bvid":"BV号","feeling":"…","comment":"…","share":"…","remember":"…"}]
+[{"bvid":"BV号","feeling":"…","comment":"…","danmaku":"…","share":"…","remember":"…"}]
 
 规则：
-- 不想评论 / 不想分享就写 ""，**不要**省略字段，也**不要**编造填充。
+- 不想评论 / 不想发弹幕 / 不想分享就写 ""，**不要**省略字段，也**不要**编造填充。
+- **没有模板可套**：这三个字段会原样发到 B 站，写什么就发什么。看过材料再写；没感觉就留空，没人要求你每条都说话。
 - \`remember\` 只写「以后还用得上的事」（比如主人的口味、你发现的规律），不是这条视频的内容摘要；没有就写 ""。
 - 不要输出 JSON 以外的任何内容，不要用 markdown 代码块包起来。
 - 拿不准的事宁可不做：评论和分享都是对外的，宁可少说一句。`;
@@ -170,10 +172,11 @@ export function parseDecisions(text) {
       bvid: String(x.bvid ?? '').trim(),
       feeling: String(x.feeling ?? '').trim().slice(0, 120),
       comment: String(x.comment ?? '').trim().slice(0, 200),
+      danmaku: String(x.danmaku ?? '').trim().slice(0, 100),
       share: String(x.share ?? '').trim().slice(0, 300),
       remember: String(x.remember ?? '').trim().slice(0, 200),
     }))
-    .filter((x) => /^BV[0-9A-Za-z]{10}$/.test(x.bvid) && (x.feeling || x.comment || x.share || x.remember))
+    .filter((x) => /^BV[0-9A-Za-z]{10}$/.test(x.bvid) && (x.feeling || x.comment || x.danmaku || x.share || x.remember))
     .slice(0, 10);
 }
 

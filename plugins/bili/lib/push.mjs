@@ -131,14 +131,18 @@ export function createPush({
   }
 
   /**
-   * 写动作：只对**定时刷命中的视频**执行，模型调用不到。
+   * 写动作：只做**不需要文案**的那一个——点赞。
+   *
+   * 评论和弹幕曾经在这里按模板填（「{title} 挺好」），那就是假互动：
+   * 她根本没看过内容。现在这两件事只在 `aiDecideTask` 里做，话由她
+   * 在独立会话里看过简介/字幕/热评之后自己写（见 lib/ai-duty.mjs）；
+   * 开关依旧是 `autoComment` / `autoDanmaku`，只是没有模板可填了。
+   *
    * dryRun 也占当日次数，否则一个开着试运行的循环会刷出无数条日志。
    */
   async function actions(v) {
     const want = [];
-    if (cfg?.autoComment) want.push(['comment', fillTemplate(cfg?.commentTemplate, v)]);
     if (cfg?.autoLike) want.push(['like', '']);
-    if (cfg?.autoDanmaku) want.push(['danmaku', fillTemplate(cfg?.danmakuTemplate, v)]);
     if (!want.length || !write) return { writes: 0, errors: [] };
 
     const limit = Math.max(1, Math.min(100, Number(cfg?.writeDailyLimit) || 10));
@@ -153,15 +157,12 @@ export function createPush({
 
     for (const [kind, text] of want) {
       if (writes >= limit) { errors.push('今日写操作额度用完了'); break; }
-      if (kind !== 'like' && !text) { errors.push('评论 / 弹幕模板是空的'); continue; }
-      if ((kind === 'comment' || kind === 'like') && !aid) continue;
+      if (kind === 'like' && !aid) continue;
       if (kind === 'danmaku' && !cid) continue;
       const why = write.state?.()?.paused;
       if (why) { errors.push(why); break; }
       try {
-        const r = kind === 'comment' ? await write.comment(aid, text)
-          : kind === 'like' ? await write.like(aid)
-            : await write.danmaku(cid, text);
+        const r = kind === 'like' ? await write.like(aid) : await write.danmaku(cid, text);
         writes += 1;
         n += 1;
         if (r?.dryRun) log(`试运行 ${kind}《${v?.title}》（没真发）`);

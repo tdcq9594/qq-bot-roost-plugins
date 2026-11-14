@@ -140,12 +140,17 @@ export function readConfig(env = process.env) {
     autoShotCount,
     autoShot: autoShotCount > 0,
 
-    /** 写动作：不注册 MCP 工具，只在定时刷内部跑；试运行默认开 */
+    /**
+     * 写动作：不注册 MCP 工具，只在定时刷内部跑；试运行默认开。
+     *
+     * **没有模板**：评论和弹幕的话必须是她看过内容之后自己写的
+     * （见 lib/ai-duty.mjs 的独立会话）。开着开关但她这轮没想去说，
+     * 就不发——不再拿一句「这个视频不错」凑数。
+     */
     autoComment: boolOf(raw.autoComment, false),
-    commentTemplate: strOf(raw.commentTemplate, '看着挺有意思，收藏了', 200),
     autoLike: boolOf(raw.autoLike, false),
+    /** 同上：弹幕内容由她决定，没有模板可填 */
     autoDanmaku: boolOf(raw.autoDanmaku, false),
-    danmakuTemplate: strOf(raw.danmakuTemplate, '好看', 100),
     writeDryRun: boolOf(raw.writeDryRun, true),
     writeDailyLimit: intOf(raw.writeDailyLimit, 10, 1, 100),
   };

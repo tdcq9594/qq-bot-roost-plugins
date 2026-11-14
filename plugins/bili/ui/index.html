@@ -34,6 +34,11 @@
   .top .stamp { color: var(--muted); font-size: 11.5px; margin-left: auto; }
   .lead { color: var(--fg-2); font-size: 12.5px; margin: 0 0 14px; line-height: 1.7; }
 
+  .h2-right { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; }
+  .h2-right button { padding: 4px 10px; font-size: 12px; }
+  .row-acts { display: flex; align-items: center; gap: 10px; padding: 10px 0 2px; flex-wrap: wrap; }
+  .sub-h { font-size: 12px; color: var(--muted); margin: 6px 0 6px; }
+  #stats { margin-top: 12px; }
   .card {
     background: var(--card); border: 1px solid var(--line); border-radius: 12px;
     padding: 4px 18px 16px; margin-bottom: 14px; box-shadow: var(--shadow);
@@ -186,60 +191,53 @@
       <span class="stamp" style="margin:0">总开关</span>
       <button type="button" class="switch" id="master" role="switch" aria-checked="true"></button>
     </span>
+    <span class="tag" id="pending" hidden></span>
     <span class="stamp" id="stamp">读着…</span>
     <button type="button" id="reload">刷新</button>
+    <button type="button" class="primary" id="save">保存</button>
   </div>
+  <div class="err" id="save-err" style="margin:-2px 0 8px"></div>
   <p class="lead">她会定时去 B 站刷几个视频，读简介、字幕和热评，按自己的性格决定评不评论、要不要私聊分享给你。这一页改的是她的行为偏好：登录态、刷的频率、推送门槛、写动作开关。</p>
 
   <div class="card">
-    <h2>现在什么状态</h2>
+    <h2>刷 B 站</h2>
+    <p class="card-sub">她会定时去 B 站刷几个视频：从你的兴趣、记忆里你喜欢的东西和下面「额外想看的方向」挑方向去搜，读简介、字幕和热评，再按自己的性格决定评不评论、要不要私聊分享给你、记住什么。你在 QQ 里发 B 站链接或分享卡片，她也能点进去看完再聊。</p>
+    <div id="cookie-slot"><div class="empty">读着…</div></div>
+    <div class="row-acts">
+      <button type="button" id="act-login">检查登录</button>
+      <span class="note" id="login-note"></span>
+    </div>
     <div class="stats" id="stats">
       <div class="stat"><div class="k">登录</div><div class="v small">读着…</div></div>
     </div>
   </div>
 
-  <div class="toolbar">
-    <button type="button" class="primary" id="act-refresh">刷新热门</button>
-    <button type="button" id="act-feed">现在刷一轮</button>
-    <button type="button" id="act-login">检查登录</button>
-    <button type="button" id="act-ffmpeg" hidden>装 ffmpeg</button>
-    <span class="spacer"></span>
-    <span class="tag" id="pending" hidden>动作排队中</span>
-  </div>
+  <div id="settings"><div class="empty">读着…</div></div>
 
   <div class="card">
     <h2>截图库 <span class="count" id="gal-count">0 / 60</span>
-      <button type="button" class="ghost" id="gal-refresh" style="float:right">刷新</button>
+      <span class="h2-right"><button type="button" class="ghost" id="gal-refresh">刷新</button></span>
     </h2>
-    <p class="card-sub">刷一轮时顺手截的帧会落在这里；想让它顺手截图，去设置里把「刷一轮时顺手截几张」改成大于 0。</p>
+    <p class="card-sub">刷一轮时顺手截的帧落在这里；想让她顺手截图，把「看画面」里的「刷一轮时顺手截几张」改成大于 0。</p>
     <div id="gallery"><div class="empty">还没有截图</div></div>
   </div>
 
   <div class="card">
-    <h2>ta 刷过什么</h2>
+    <h2>ta 刷过什么
+      <span class="h2-right">
+        <button type="button" id="act-replies">看看有没有人回 ta</button>
+        <button type="button" class="primary" id="act-feed">现在刷一轮</button>
+      </span>
+    </h2>
     <p class="card-sub" id="act-line">今天自动刷了 0 轮 · 截图 0 张 · 评论 0 条</p>
-    <div id="recent"><div class="empty">还没有记录。点上面的「现在刷一轮」试试。</div></div>
-    <div class="toolbar" style="margin-top:12px">
-      <button type="button" id="act-replies">看看有没有人回 ta</button>
-      <span class="note" id="replies-note"></span>
-    </div>
-    <div id="replies"></div>
-  </div>
-
-  <div class="card">
-    <h2>B 站设置</h2>
-    <p class="card-sub">改完点最下面的「保存」。标着 secret 的项只存宿主，不回显明文。</p>
-    <div id="settings"><div class="empty">读着…</div></div>
-    <div class="savebar">
-      <button type="button" class="primary" id="save">保存</button>
-      <span class="note">Cookie 保存后立即生效；其它项保存后扩展会重启一次，约两秒。</span>
-    </div>
-    <div class="err" id="save-err"></div>
+    <div id="recent"><div class="empty">还没有记录。点右上角「现在刷一轮」试试。</div></div>
+    <div class="sub-h" style="margin-top:14px">谁回了 ta <span class="note" id="replies-note"></span></div>
+    <div id="replies"><div class="empty">还没查过。点右上角「看看有没有人回 ta」。</div></div>
   </div>
 
   <div class="card">
     <h2>发弹幕</h2>
-    <p class="card-sub">走的是同一套写动作：默认只试运行，关掉「写操作试运行」才真的提交；自动弹幕开关管的是定时刷，这里是你手动发。</p>
+    <p class="card-sub">走的是同一套写动作：默认只试运行，关掉「写操作试运行」才真的提交；自动弹幕开关管的是她刷的时候，这里是你手动发。</p>
     <div class="dm-form">
       <div class="full">
         <input type="text" id="dm-link" placeholder="视频链接或 BV 号，例如 BV1xx411c7mD">
@@ -267,7 +265,9 @@
   </div>
 
   <div class="card">
-    <h2>热门</h2>
+    <h2>热门
+      <span class="h2-right"><button type="button" id="act-refresh">刷新热门</button></span>
+    </h2>
     <div class="grid" id="videos"><div class="empty">读着…</div></div>
   </div>
 </div>
@@ -310,12 +310,29 @@
     }
   }
 
+  /**
+   * 设置分组，顺序照 aurabot 那页：
+   *   「刷 B 站」（Cookie + 登录，单独一张卡）→「怎么刷」→「评论、回复和分享」→「看画面」。
+   *
+   * 每一项都必须是**她真会用的**：没有模板、没有占位开关。
+   */
   const GROUPS = [
-    { title: '登录', hint: '不填也能看，看不到 AI 字幕、不能评论', keys: ['cookie'] },
-    { title: '怎么刷', hint: '只在她醒着的时间段里刷', keys: ['feedIntervalMin', 'feedActiveHours'] },
-    { title: '主动推送', hint: '刷到好视频要不要告诉她 / 发到群，走宿主的素材通道', keys: ['pushOwner', 'pushGroup', 'pushGroupTarget', 'pushApproval', 'pushMinPlay', 'pushDailyLimit'] },
-    { title: '截图', hint: '刷一轮顺手抽帧，落扩展自己的 shots/，面板「截图库」直接能看', keys: ['autoShotCount', 'shotKeep'] },
-    { title: '写动作', hint: '评论 / 点赞 / 弹幕默认只试运行，不真的发', keys: ['autoComment', 'autoLike', 'autoDanmaku', 'writeDryRun', 'writeDailyLimit'] },
+    {
+      title: '怎么刷',
+      hint: '只在「主动搭话」里设的醒着时间内刷。播完这一轮，她自己在独立会话里看内容，再决定评不评论、发不发弹幕、要不要分享。',
+      keys: ['feedIntervalMin', 'feedMaxRunsPerDay', 'feedPerRun', 'feedKeywords', 'feedMinViews', 'feedMaxAgeDays', 'feedActiveHours', 'aiDecide'],
+    },
+    {
+      title: '评论、回复和分享',
+      hint: '评论、弹幕和回复都要登录。试运行开着时只记日志不发。',
+      keys: ['autoComment', 'autoDanmaku', 'autoLike', 'pushOwner', 'pushGroup', 'pushGroupTarget', 'pushDailyLimit', 'pushPerFeed', 'pushMinPlay', 'pushApproval', 'pushCover', 'writeDryRun', 'writeDailyLimit'],
+    },
+    {
+      title: '看画面（抽帧 + 视觉）',
+      hint: '默认只读标题、简介、字幕和热评。打开后抽一帧存到本机，面板「截图库」能直接看，聊天里也能让她发。',
+      keys: ['autoShotCount', 'shotKeep', 'ffmpegPath'],
+      extra: () => visionExtra(),
+    },
   ];
 
   function useSlider(f) {
@@ -550,6 +567,44 @@
     return row;
   }
 
+  /** Cookie 单独画在「刷 B 站」卡里：它是这张卡的入口，不该混进设置分组 */
+  function renderCookie() {
+    const slot = document.querySelector('#cookie-slot');
+    if (!slot) return;
+    slot.textContent = '';
+    if (!cfg || !cfg.spec) return;
+    const el = field(cfg.spec, 'cookie');
+    if (el) slot.append(el);
+    else slot.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: '这个版本没有 Cookie 项' }));
+  }
+
+  /**
+   * 「看画面」卡底部：ffmpeg 有没有 + 一键装到框架共享目录。
+   *
+   * 装在 `<数据目录>/deps` 而不是扩展自己这里：一份装了所有扩展都能用，
+   * 扩展升级/卸载也不会把它删掉。状态来自 `meta.ffmpeg`，装完立刻回填。
+   */
+  function visionExtra() {
+    const box = document.createElement('div');
+    box.className = 'hint';
+    box.style.marginTop = '10px';
+    const f = meta && meta.ffmpeg ? meta.ffmpeg : null;
+    const ok = Boolean(f && f.ready);
+    box.textContent = ok
+      ? `✓ 已找到 ffmpeg：${f.path || ''}`
+      : `✗ 没找到 ffmpeg：抽帧会被跳过${f && f.dir ? `（共享目录：${f.dir}）` : ''}`;
+    box.style.color = ok ? 'var(--ok)' : 'var(--warn)';
+    if (!ok) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.id = 'act-ffmpeg';
+      btn.style.marginLeft = '10px';
+      btn.textContent = '装到框架共享目录（约 62 MB）';
+      box.append(btn);
+    }
+    return box;
+  }
+
   function renderSettings() {
     const box = $('#settings');
     box.textContent = '';
@@ -580,9 +635,15 @@
         const el = field(spec, k);
         if (el) card.append(el);
       });
+      /** 卡片自己带一块（比如 ffmpeg 状态行 + 装 ffmpeg 按钮） */
+      if (typeof g.extra === 'function') {
+        const more = g.extra();
+        if (more) card.append(more);
+      }
       box.append(card);
     });
-    const rest = spec.filter((f) => !used.has(f.key) && f.key !== 'enabled');
+    /** cookie 在「刷 B 站」那张卡里单独画；enabled 在页头总开关上 */
+    const rest = spec.filter((f) => !used.has(f.key) && f.key !== 'enabled' && f.key !== 'cookie');
     if (rest.length) {
       const card = document.createElement('div');
       const h = document.createElement('h2');
@@ -630,15 +691,6 @@
         small: true,
       },
     ];
-    if (meta && meta.ffmpeg) {
-      const f = meta.ffmpeg;
-      items.push({
-        k: 'ffmpeg（抽帧）',
-        v: f.ready ? '可用' : '没装（可选）',
-        dot: f.ready ? 'ok' : 'off',
-        small: true,
-      });
-    }
     if (feed && feed.error) {
       items.push({ k: '上次没刷成', v: feed.error, dot: 'warn', small: true });
     }
@@ -897,6 +949,7 @@
     cfg = r;
     draft = Object.assign({}, r.values || {});
     secrets = {};
+    renderCookie();
     renderSettings();
     syncMaster();
   }
@@ -1009,8 +1062,6 @@
       const when = j && j.updatedAt ? new Date(j.updatedAt).toLocaleString() : '还没更新过';
       $('#stamp').textContent = '更新于 ' + when;
       const pending = Array.isArray(j && j.pendingActions) ? j.pendingActions.length : 0;
-      const needFfmpeg = Boolean(meta && meta.ffmpeg && !meta.ffmpeg.ready);
-      $('#act-ffmpeg').hidden = !needFfmpeg;
       $('#pending').hidden = pending === 0;
       if (pending) $('#pending').textContent = `${pending} 个动作排队中`;
     } catch (e) {
@@ -1056,15 +1107,24 @@
    * 一份装了所有扩展都能用，扩展升级/卸载也不会把它删掉。
    * 所以这个按钮不走扩展动作，直接调宿主的共享依赖接口。
    */
-  $('#act-ffmpeg').onclick = async () => {
-    const btn = $('#act-ffmpeg');
-    if (btn.disabled) return;
+  /**
+   * 装 ffmpeg：**事件委托**。
+   *
+   * 按钮长在「看画面」卡里，而那张卡是 `renderSettings()` 每次重建的——
+   * 直接 `$('#act-ffmpeg').onclick = ...` 只对当时那个节点有效，重建一次就失效。
+   *
+   * 装到框架共享目录（`<数据目录>/deps`），不装扩展自己这里：
+   * 一份装了所有扩展都能用，扩展升级/卸载也不会把它删掉。
+   */
+  document.addEventListener('click', async (e) => {
+    const btn = e.target && e.target.id === 'act-ffmpeg' ? e.target : null;
+    if (!btn || btn.disabled) return;
     btn.disabled = true;
     btn.textContent = '安装中…（约 62 MB）';
     toast('正在装到框架共享目录，第一次要几分钟');
     const r = await op('sharedDeps.install', { name: '@ffmpeg-installer/ffmpeg' });
     btn.disabled = false;
-    btn.textContent = '装 ffmpeg';
+    btn.textContent = '装到框架共享目录（约 62 MB）';
     toast(r && r.ok ? (r.skipped ? '已经装好了' : '装好了，所有扩展都能用') : ('装失败：' + ((r && r.message) || '未知原因')));
     if (r && r.ok) {
       /**
@@ -1072,16 +1132,17 @@
        * 这里直接用宿主返回的最新状态盖掉，不必等扩展下次刷新——
        * 否则会出现「明明装好了，状态格还说没装」。
        */
-      const s = await op('sharedDeps.status');
-      if (s && s.ok) {
+      const st = await op('sharedDeps.status');
+      if (st && st.ok) {
         meta = Object.assign({}, meta, {
-          ffmpeg: { ready: Boolean(s.ffmpeg), path: String(s.ffmpeg || ''), dir: String(s.dir || '') },
+          ffmpeg: { ready: Boolean(st.ffmpeg), path: String(st.ffmpeg || ''), dir: String(st.dir || '') },
         });
-        renderStats();
+        renderSettings();
       }
     }
     await loadData();
-  };
+  });
+
   $('#master').onclick = async () => {
     const next = !$('#master').classList.contains('on');
     $('#master').classList.toggle('on', next);

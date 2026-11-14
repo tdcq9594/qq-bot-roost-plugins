@@ -20,6 +20,19 @@ test('parseDecisions：标准 JSON 数组', () => {
   assert.equal(out[0].remember, '主人喜欢猫');
 });
 
+test('parseDecisions：弹幕是独立字段，没写就不发', () => {
+  const withDm = parseDecisions(`[{"bvid":"${BV}","feeling":"","comment":"","danmaku":"这里好笑","share":"","remember":""}]`);
+  assert.equal(withDm.length, 1);
+  assert.equal(withDm[0].danmaku, '这里好笑');
+
+  /** 只给弹幕也算表达了意见 */
+  const only = parseDecisions(`[{"bvid":"${BV}","danmaku":"来了"}]`);
+  assert.equal(only.length, 1);
+
+  /** 四个字段全空就当没说话 */
+  assert.deepEqual(parseDecisions(`[{"bvid":"${BV}","feeling":"","comment":"","danmaku":"","share":"","remember":""}]`), []);
+});
+
 test('parseDecisions：模型包了 code fence / 多说了两句也能抠出来', () => {
   const out = parseDecisions('好的，我看完了：\n```json\n[{"bvid":"' + BV + '","feeling":"有意思","comment":"","share":"","remember":""}]\n```');
   assert.equal(out.length, 1);

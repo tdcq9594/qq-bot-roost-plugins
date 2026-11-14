@@ -107,16 +107,20 @@ test('每日推送额度用完就停，写动作额度独立', async () => {
   assert.equal(push.state().today.pushed, 1);
 });
 
-test('写动作：试运行也计数但不真发；模板替换后送到 write 层', async () => {
+test('写动作：这里只做点赞——评论和弹幕不再有模板', async () => {
   const w = fakeWrite();
   const push = createPush({
     cfg: cfg0({ autoComment: true, autoLike: true, autoDanmaku: true }),
     api: fakeApi(), submit: fakeSubmit(), write: w, now: () => T,
   });
   const r = await push.onFresh(POOL);
-  assert.equal(r.writes, 3);
-  assert.deepEqual(w.calls.map((x) => x[0]), ['comment', 'like', 'danmaku']);
-  assert.equal(w.calls[0][2], '第一条 挺好');
+  /**
+   * 评论和弹幕曾经按模板填空（「第一条 挺好」），那是她没看过内容的假互动。
+   * 现在只在 `aiDecideTask` 里做，话由她自己写；这条断言就是防止有人
+   * 再把模板塞回来。
+   */
+  assert.equal(r.writes, 1);
+  assert.deepEqual(w.calls.map((x) => x[0]), ['like']);
   assert.equal(push.state().switches.writeDryRun, true);
 });
 

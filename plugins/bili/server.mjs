@@ -39,7 +39,7 @@ import { createAutoShot } from './lib/auto-shot.mjs';
 import { bumpStats, readStats } from './lib/stats.mjs';
 import { countShots } from './lib/gallery.mjs';
 
-const SERVER = { name: 'bili', version: '0.11.1' };
+const SERVER = { name: 'bili', version: '0.11.2' };
 const log = (m) => process.stderr.write(`[bili] ${m}\n`);
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 
@@ -272,14 +272,41 @@ async function aiDecideTask(items) {
       if (!v) continue;
       if (d.feeling) feelings.push({ bvid: d.bvid, title: String(v.title ?? ''), text: d.feeling, at: Date.now() });
 
-      /** 评论要 aid：热门池里没有，得查一次 */
-      if (d.comment) {
+      /**
+       * 评论和弹幕：**话是她自己写的**，这里只负责发。
+       *
+       * 两个开关各管一条出口：`autoComment` / `autoDanmaku` 关着就不发——
+       * 她可以想，但主人没允许这条出口。一次 `view` 同时拿 aid 和 cid，
+       * 别为了评论、弹幕各查一遍热门接口。
+       */
+      if (d.comment || d.danmaku) {
+        let info = null;
         try {
-          const info = await api.view({ bvid: d.bvid });
-          const w = await write.comment(Number(info?.aid) || 0, d.comment);
-          if (w?.ok && !w.dryRun) bumpStats(ui, { comments: 1 });
+          info = await api.view({ bvid: d.bvid });
         } catch (e) {
-          log(`她想评论 ${d.bvid} 但没发出去：${e?.message ?? e}`);
+          log(`她想对 ${d.bvid} 说话但拿不到视频信息：${e?.message ?? e}`);
+        }
+        const aid = Number(info?.aid) || 0;
+        const cid = Number(info?.cid) || 0;
+        const dur = Math.max(1, Math.floor(Number(info?.duration) || 0));
+
+        if (d.comment && cfg.autoComment && aid) {
+          try {
+            const w = await write.comment(aid, d.comment);
+            if (w?.ok && !w.dryRun) bumpStats(ui, { comments: 1 });
+          } catch (e) {
+            log(`她想评论 ${d.bvid} 但没发出去：${e?.message ?? e}`);
+          }
+        }
+        if (d.danmaku && cfg.autoDanmaku && cid) {
+          try {
+            /** 1/3 处：开头常有片头，结尾可能没画面 */
+            const at = Math.max(1, Math.floor(dur / 3));
+            const w = await write.danmaku(cid, d.danmaku, at * 1000);
+            if (w?.ok && !w.dryRun) bumpStats(ui, { danmaku: 1 });
+          } catch (e) {
+            log(`她想发弹幕 ${d.bvid} 但没发出去：${e?.message ?? e}`);
+          }
         }
       }
       /** 分享：她写的那句直接当素材投，宿主会让主人看到 */
@@ -296,7 +323,8 @@ async function aiDecideTask(items) {
       }
     }
     if (feelings.length) ui.setMeta({ ai: { lastAt: Date.now(), count: feelings.length, top: feelings[0].text, title: feelings[0].title } });
-    log(`她看完了这一轮：说了 ${feelings.length} 句感受，${r.items.filter((x) => x.comment).length} 条评论，${r.items.filter((x) => x.share).length} 条分享`);
+    log(`她看完了这一轮：${feelings.length} 句感受，${r.items.filter((x) => x.comment).length} 条评论，`
+      + `${r.items.filter((x) => x.danmaku).length} 条弹幕，${r.items.filter((x) => x.share).length} 条分享`);
   } catch (e) {
     log(`她自己刷 B 站失败（不影响这一轮）：${e?.message ?? e}`);
   } finally {
