@@ -243,12 +243,21 @@ export function parseDecisions(text) {
   return parsePayload(text).items;
 }
 
-/** 给独立会话的材料：一行一条，够她判断，又不至于把上下文撑爆 */
-export function materialOfVideos(items = []) {
+/**
+ * 给独立会话的材料：一行一条，够她判断，又不至于把上下文撑爆。
+ *
+ * `descriptions` 是「看画面」拿到的描述（bvid → 文本）。有就多一行，
+ * 没有就不写——绝不写「画面：无」，那会让她以为视频是黑屏。
+ */
+export function materialOfVideos(items = [], { descriptions = null } = {}) {
+  const descOf = (bvid) => {
+    try { return String(descriptions?.get?.(String(bvid ?? '')) ?? '').trim(); } catch { return ''; }
+  };
   return (Array.isArray(items) ? items : []).slice(0, 8).map((v, i) => [
     `${i + 1}. 《${String(v?.title ?? '').slice(0, 70)}》`,
     `   ${v?.bvid ?? ''} · UP：${String(v?.author ?? '?').slice(0, 24)} · 播放 ${Number(v?.play) || 0}`,
     v?.tname ? `   分区：${String(v.tname).slice(0, 12)}` : '',
     v?.desc ? `   简介：${String(v.desc).slice(0, 160)}` : '',
+    descOf(v?.bvid) ? `   画面：${descOf(v?.bvid).slice(0, 500)}` : '',
   ].filter(Boolean).join('\n')).join('\n\n');
 }

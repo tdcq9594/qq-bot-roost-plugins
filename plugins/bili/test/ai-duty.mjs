@@ -155,3 +155,14 @@ test('parsePayload：数组里的对象不会被当成根对象', () => {
   assert.equal(r.items.length, 1);
   assert.equal(r.items[0].share, '看这个');
 });
+
+test('materialOfVideos：有画面描述就多一行，没有就不写「画面：无」', () => {
+  const withDesc = materialOfVideos(
+    [{ bvid: BV, title: '猫', author: 'up', play: 1 }],
+    { descriptions: new Map([[BV, '橘猫在窗台上打盹。']]) },
+  );
+  assert.match(withDesc, /画面：橘猫在窗台上打盹。/);
+
+  const without = materialOfVideos([{ bvid: BV, title: '猫', author: 'up', play: 1 }]);
+  assert.equal(/画面：/.test(without), false, '没描述就整行不出现');
+});

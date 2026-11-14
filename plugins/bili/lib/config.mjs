@@ -125,6 +125,13 @@ export function readConfig(env = process.env) {
      */
     shotChance: intOf(raw.shotChance, 0, 0, 100),
     /**
+     * 让她看画面：抽几帧交给模型描述，描述会并进这一轮的材料。
+     *
+     * 三个前提缺一个就自动跳过、只用文字：`vision` 开着、本机有 ffmpeg、
+     * 当前模型支持图片输入（宿主会查，不支持就明确拒绝，不白烧一次请求）。
+     */
+    vision: boolOf(raw.vision, false),
+    /**
      * 截图目录**固定用扩展自己的 `shots/`**。
      *
      * 面板只从扩展目录取图，指到别处等于「图库永远是空的」——这个坑
@@ -138,8 +145,10 @@ export function readConfig(env = process.env) {
     pushGroup: boolOf(raw.pushGroup, false),
     pushGroupTarget: strOf(raw.pushGroupTarget, '', 64),
     pushApproval: boolOf(raw.pushApproval, false),
-    /** 素材里带 https 封面地址。不写 <<card:>>：主动轮次会抹平标记 */
-    pushCover: boolOf(raw.pushCover, false),
+    /**
+     * 封面地址不再单独做开关：素材里有链接，模型要看封面自己会调工具。
+     * 少一个配置项，字段数刚好留给 `vision`（宿主上限 32）。
+     */
     pushMinPlay: intOf(raw.pushMinPlay, 100000, 0, 10_000_000),
     pushDailyLimit: intOf(raw.pushDailyLimit, 20, 1, 200),
     pushPerFeed: intOf(raw.pushPerFeed, 1, 1, 5),

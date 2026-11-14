@@ -36,11 +36,12 @@ import { createExtMemory } from './lib/memory.mjs';
 import { createPending } from './lib/pending.mjs';
 import { createBrowseSession, materialOfVideos } from './lib/ai-duty.mjs';
 import { createRepliedStore } from './lib/replied.mjs';
+import { lookAt } from './lib/vision.mjs';
 import { createAutoShot } from './lib/auto-shot.mjs';
 import { bumpStats, readStats } from './lib/stats.mjs';
 import { countShots } from './lib/gallery.mjs';
 
-const SERVER = { name: 'bili', version: '0.11.3' };
+const SERVER = { name: 'bili', version: '0.11.4' };
 const log = (m) => process.stderr.write(`[bili] ${m}\n`);
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 
@@ -271,7 +272,29 @@ async function aiDecideTask(items) {
       log(`查「有人回了她」失败（不影响这一轮）：${e?.message ?? e}`);
     }
 
-    const r = await aiDuty.decide(materialOfVideos(items), { replies });
+    /**
+     * 看画面（`vision`）：只对本轮前两条抽帧 + 让模型描述，描述并进材料。
+     *
+     * 只做两条是因为每条要抽 3~6 帧、再跑一次模型——一轮做十条会让「刷一轮」
+     * 从几秒变成几分钟。抽帧写进图库，面板「截图库」也能看到。
+     */
+    const descriptions = new Map();
+    if (cfg.vision) {
+      for (const v of items.slice(0, 2)) {
+        const bvid = String(v?.bvid ?? '');
+        if (!bvid) continue;
+        try {
+          const info = await api.view({ bvid });
+          const d = await lookAt({ v, info, shots, cfg, env: process.env, log });
+          if (d) descriptions.set(bvid, d);
+        } catch (e) {
+          log(`看画面失败 ${bvid}（不影响这一轮）：${e?.message ?? e}`);
+        }
+      }
+      if (descriptions.size) log(`看画面：${descriptions.size} 条有了画面描述`);
+    }
+
+    const r = await aiDuty.decide(materialOfVideos(items, { descriptions }), { replies });
     if (!r.ok) {
       log(`她这轮没看成：${r.why}`);
       /** 没看成也把材料留在待处理队列里，别丢 */

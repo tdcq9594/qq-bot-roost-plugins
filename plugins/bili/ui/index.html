@@ -325,12 +325,12 @@
     {
       title: '评论、回复和分享',
       hint: '评论、弹幕和回复都要登录。试运行开着时只记日志不发。',
-      keys: ['ownerName', 'autoComment', 'autoDanmaku', 'autoLike', 'pushOwner', 'pushGroup', 'pushGroupTarget', 'pushDailyLimit', 'pushPerFeed', 'pushMinPlay', 'pushApproval', 'pushCover', 'writeDryRun', 'writeDailyLimit'],
+      keys: ['ownerName', 'autoComment', 'autoDanmaku', 'autoLike', 'pushOwner', 'pushGroup', 'pushGroupTarget', 'pushDailyLimit', 'pushPerFeed', 'pushMinPlay', 'pushApproval', 'writeDryRun', 'writeDailyLimit'],
     },
     {
       title: '看画面（抽帧 + 视觉）',
-      hint: '默认只读标题、简介、字幕和热评。打开后抽一帧存到本机，面板「截图库」能直接看，聊天里也能让她发。',
-      keys: ['autoShotCount', 'shotKeep', 'ffmpegPath'],
+      hint: '默认只读标题、简介、字幕和热评。打开「让她看画面」会抽几帧交给模型描述；截的图同时进「截图库」，聊天里也能让她发。',
+      keys: ['vision', 'autoShotCount', 'shotKeep', 'ffmpegPath'],
       extra: () => visionExtra(),
     },
   ];
