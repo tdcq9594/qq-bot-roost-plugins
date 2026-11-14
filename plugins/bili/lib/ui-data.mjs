@@ -22,7 +22,7 @@
  * 打 B 站接口，412 是迟早的事，而用户一天可能根本不打开面板。
  */
 
-import { writeFileSync, renameSync, mkdirSync } from 'node:fs';
+import { writeFileSync, renameSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export const UI_FILE = 'ui-data.json';
@@ -74,11 +74,19 @@ export function createUiData({ dir, log = () => {} } = {}) {
    * 面板随时可能来读，直接覆盖会读到半截 JSON（那时面板显示「数据文件不是
    * 合法 JSON」，看起来像扩展坏了）。
    */
-  function write(rows) {
+  /** 上一次写进去的运行状态；`write()` 不传 meta 时沿用它，不会被热门覆盖掉 */
+  let lastMeta = null;
+
+  function write(rows, meta) {
     try {
       mkdirSync(dir, { recursive: true });
+      if (meta !== undefined) lastMeta = meta;
       const tmp = `${file()}.${process.pid}.tmp`;
-      writeFileSync(tmp, `${JSON.stringify({ updatedAt: Date.now(), rows }, null, 0)}\n`, 'utf8');
+      writeFileSync(
+        tmp,
+        `${JSON.stringify({ updatedAt: Date.now(), rows, meta: lastMeta }, null, 0)}\n`,
+        'utf8',
+      );
       renameSync(tmp, file());
       log(`面板数据已更新：${rows.length} 条`);
       return true;
@@ -88,15 +96,32 @@ export function createUiData({ dir, log = () => {} } = {}) {
     }
   }
 
+  /**
+   * 只更新运行状态，不动 rows。
+   *
+   * 面板上的「今日刷了几轮 / 上次为什么没刷」跟热门列表是两件事，
+   * 为了刷新状态而重写一遍热门没有必要，也会让「更新于」跳来跳去。
+   */
+  function setMeta(meta) {
+    lastMeta = meta;
+    let rows = [];
+    try {
+      const cur = JSON.parse(readFileSync(file(), 'utf8'));
+      if (Array.isArray(cur?.rows)) rows = cur.rows;
+    } catch { /* 还没有数据文件：先只写 meta */ }
+    return write(rows, meta);
+  }
+
   return {
     /** 从已拉到的热门池写一份（零额外请求） */
-    fromPool(items) {
+    fromPool(items, meta) {
       const rows = rowsOf(items);
       /** 空池不覆盖旧数据：一次失败不该把面板清空 */
       if (!rows.length) return false;
-      return write(rows);
+      return write(rows, meta);
     },
     write,
+    setMeta,
     file,
   };
 }

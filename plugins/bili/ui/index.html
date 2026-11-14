@@ -7,107 +7,243 @@
 <style>
   :root {
     color-scheme: light dark;
-    --bg: transparent;
-    --fg: #1c1c1e;
-    --muted: #6b7280;
-    --line: #e5e7eb;
-    --card: #fafafa;
-    --accent: #2f6fed;
-    --ok: #1f8a4c;
-    --warn: #b45309;
-    --danger: #b91c1c;
+    --fg: #1f2329; --fg-2: #4e5969; --muted: #86909c;
+    --line: #eef0f3; --card: #fff; --page: #fafbfc;
+    --accent: #1668dc; --accent-soft: #e8f1ff;
+    --ok: #1f8a4c; --warn: #b45309; --danger: #c0392b;
+    --shadow: 0 1px 2px rgba(16,24,40,.04);
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --fg: #e6e6e6;
-      --muted: #9aa0a6;
-      --line: #33383f;
-      --card: #1b1e23;
-      --accent: #6f9dff;
-      --ok: #4cc38a;
-      --warn: #e0a458;
-      --danger: #f07171;
+      --fg: #e8eaed; --fg-2: #c2c7cf; --muted: #8b919b;
+      --line: #2a2f37; --card: #1b1e24; --page: #14171c;
+      --accent: #6f9dff; --accent-soft: #1e2a3d;
+      --ok: #4cc38a; --warn: #e0a458; --danger: #f07171; --shadow: none;
     }
-    body { background: #14171b; }
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; padding: 12px 14px 28px;
-    font: 13px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
-    color: var(--fg); background: var(--bg);
+    margin: 0; padding: 18px 22px 40px;
+    font: 13px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    color: var(--fg); background: var(--page); -webkit-font-smoothing: antialiased;
   }
-  h1 { font-size: 15px; margin: 0 0 2px; }
-  h2 { font-size: 12.5px; margin: 0 0 8px; color: var(--muted); font-weight: 600; letter-spacing: .02em; }
-  .sub { color: var(--muted); font-size: 11.5px; }
-  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
+  .wrap { max-width: 990px; margin: 0 auto; }
+
+  .top { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; }
+  .top h1 { font-size: 17px; font-weight: 650; margin: 0; }
+  .top .stamp { color: var(--muted); font-size: 11.5px; margin-left: auto; }
+  .lead { color: var(--fg-2); font-size: 12.5px; margin: 0 0 14px; line-height: 1.7; }
+
   .card {
-    border: 1px solid var(--line); border-radius: 10px;
-    padding: 12px 14px; margin-bottom: 12px; background: var(--card);
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 4px 18px 16px; margin-bottom: 14px; box-shadow: var(--shadow);
   }
+  .card > h2 {
+    display: flex; align-items: center; font-size: 13px; font-weight: 650; margin: 14px 0 2px;
+  }
+  .card > h2::before {
+    content: ''; width: 3px; height: 13px; border-radius: 2px;
+    background: var(--accent); margin-right: 8px;
+  }
+  .card > .card-sub { color: var(--muted); font-size: 11.5px; margin: 2px 0 0 11px; }
+
   button {
-    font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 7px;
-    border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer;
+    font: inherit; font-size: 12.5px; padding: 6px 14px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--card); color: var(--fg);
+    cursor: pointer; transition: .15s; white-space: nowrap;
   }
   button:hover { border-color: var(--accent); color: var(--accent); }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  button.primary:hover { opacity: .9; color: #fff; }
+  button.primary:hover { filter: brightness(1.06); color: #fff; }
+  button.ghost { border-color: transparent; color: var(--muted); padding: 6px 8px; }
+  button.ghost:hover { color: var(--accent); background: var(--accent-soft); }
   button:disabled { opacity: .45; cursor: default; }
+
   input[type=text], input[type=password], input[type=number], select {
-    font: inherit; font-size: 12px; width: 100%; padding: 5px 8px;
-    border: 1px solid var(--line); border-radius: 6px;
-    background: transparent; color: var(--fg);
+    font: inherit; font-size: 12.5px; width: 100%; padding: 7px 10px;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: var(--page); color: var(--fg); transition: .15s;
   }
-  input:focus, select:focus { outline: 1px solid var(--accent); }
-  .row { margin-top: 10px; }
-  .row > label { display: block; font-size: 11.5px; margin-bottom: 3px; }
-  .hint { color: var(--muted); font-size: 11px; margin-left: 6px; }
-  .check { display: flex; align-items: center; gap: 8px; margin-top: 10px; cursor: pointer; }
-  .check span { font-size: 12px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(238px, 1fr)); gap: 10px; }
-  .video { border: 1px solid var(--line); border-radius: 9px; overflow: hidden; display: flex; flex-direction: column; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+  /* 运行状态 */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .stat {
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--page);
+  }
+  .stat .k { color: var(--muted); font-size: 11px; margin-bottom: 3px; }
+  .stat .v { font-size: 13px; font-weight: 600; }
+  .stat .v.small { font-size: 12px; font-weight: 500; color: var(--fg-2); }
+  .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; }
+  .dot.ok { background: var(--ok); }
+  .dot.off { background: var(--muted); }
+  .dot.warn { background: var(--warn); }
+
+  /* 两列 */
+  .row {
+    display: grid; grid-template-columns: minmax(168px, 252px) 1fr;
+    gap: 26px; padding: 15px 0; border-top: 1px solid var(--line); align-items: center;
+  }
+  .row:first-of-type { border-top: 0; }
+  .side .label { font-size: 12.5px; font-weight: 600; }
+  .side .hint { font-size: 11.5px; color: var(--muted); margin-top: 4px; line-height: 1.6; }
+  .ctl { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
+  @media (max-width: 640px) {
+    .row { grid-template-columns: 1fr; gap: 8px; }
+    body { padding: 14px 14px 32px; }
+  }
+
+  .switch {
+    position: relative; width: 52px; height: 30px; border-radius: 99px;
+    background: #d5dae2; cursor: pointer; flex: 0 0 auto; transition: background .18s;
+    border: 0; padding: 0;
+  }
+  .switch::after {
+    content: ''; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px;
+    border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.18); transition: left .18s;
+  }
+  .switch.on { background: var(--accent); }
+  .switch.on::after { left: 25px; }
+  .switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .slider { display: flex; align-items: center; gap: 12px; width: 100%; }
+  .slider input[type=range] {
+    -webkit-appearance: none; appearance: none; flex: 1 1 auto; min-width: 90px;
+    height: 4px; border-radius: 99px; background: var(--line); outline: none;
+  }
+  .slider input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+    background: var(--accent); border: 2px solid var(--card); box-shadow: 0 1px 3px rgba(0,0,0,.2);
+    cursor: pointer;
+  }
+  .slider input[type=range]::-moz-range-thumb {
+    width: 14px; height: 14px; border-radius: 50%; background: var(--accent);
+    border: 2px solid var(--card); cursor: pointer;
+  }
+  .bubble {
+    flex: 0 0 auto; min-width: 62px; text-align: center; padding: 3px 9px;
+    border-radius: 6px; background: var(--accent-soft); color: var(--accent);
+    font-size: 11.5px; font-weight: 600;
+  }
+  .slider input[type=number] { flex: 0 0 82px; width: 82px; text-align: center; padding: 5px 6px; }
+
+  .cookie-line { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; width: 100%; }
+  .cookie-line code {
+    flex: 0 0 auto; width: 76px; text-align: right; color: var(--muted);
+    font-size: 11.5px; font-family: ui-monospace, Consolas, monospace;
+  }
+  .cookie-acts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+  .cookie-acts .note { color: var(--muted); font-size: 11px; }
+
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 14px 0 16px; }
+  .toolbar .spacer { flex: 1 1 auto; }
+  .savebar { display: flex; align-items: center; gap: 12px; padding-top: 14px; border-top: 1px solid var(--line); margin-top: 4px; }
+  .savebar .note { color: var(--muted); font-size: 11.5px; }
+
+  .dm-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-top: 6px; }
+  .dm-form .full { grid-column: 1 / -1; }
+  .dm-acts { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .dm-result { margin-top: 10px; font-size: 12px; color: var(--fg-2); }
+  .dm-result.ok { color: var(--ok); }
+  .dm-result.warn { color: var(--warn); }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(228px, 1fr)); gap: 12px; }
+  .video {
+    border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+    display: flex; flex-direction: column; background: var(--card); transition: .15s;
+  }
+  .video:hover { border-color: var(--accent); box-shadow: 0 4px 14px rgba(22,104,220,.08); }
   .video img { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; background: #0001; }
-  .video .body { padding: 8px 9px 10px; }
-  .video .title { font-weight: 600; font-size: 12.5px; line-height: 1.45; margin-bottom: 4px; }
-  .video .meta { color: var(--muted); font-size: 11px; }
+  .video .body { padding: 9px 10px 11px; }
+  .video .title { font-weight: 600; font-size: 12.5px; line-height: 1.5; margin-bottom: 5px; }
+  .video .meta { color: var(--muted); font-size: 11px; margin-bottom: 5px; }
   .video a { color: var(--accent); text-decoration: none; font-size: 11.5px; }
-  .pill { display: inline-block; padding: 1px 7px; border-radius: 99px; font-size: 10.5px; border: 1px solid var(--line); color: var(--muted); }
+  .video a:hover { text-decoration: underline; }
+
+  .empty { color: var(--muted); font-size: 12.5px; padding: 26px 0; text-align: center; }
+  .err { color: var(--danger); font-size: 11.5px; margin-top: 8px; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 10.5px; background: var(--accent-soft); color: var(--accent); }
+
   .toast {
-    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
-    background: #111c; color: #fff; padding: 8px 16px; border-radius: 8px;
-    font-size: 12px; opacity: 0; pointer-events: none; transition: opacity .18s; max-width: 80%;
+    position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+    background: rgba(17,24,39,.92); color: #fff; padding: 9px 18px; border-radius: 9px;
+    font-size: 12.5px; opacity: 0; pointer-events: none; transition: opacity .18s;
+    max-width: 80%; z-index: 40;
   }
   .toast.show { opacity: 1; }
-  .err { color: var(--danger); font-size: 11.5px; margin-top: 6px; }
-  .empty { color: var(--muted); font-size: 12px; padding: 18px 0; text-align: center; }
-  .split { display: flex; gap: 8px; align-items: center; }
 </style>
 </head>
 <body>
-  <h1>刷 B 站</h1>
-  <div class="sub" id="status">读着…</div>
+<div class="wrap">
+  <div class="top">
+    <h1>刷 B 站</h1>
+    <span class="stamp" id="stamp">读着…</span>
+    <button type="button" id="reload">刷新</button>
+  </div>
+  <p class="lead">她会定时去 B 站刷几个视频，读简介、字幕和热评，按自己的性格决定评不评论、要不要私聊分享给你。这一页改的是她的行为偏好：登录态、刷的频率、推送门槛、写动作开关。</p>
 
-  <div class="bar">
-    <button class="primary" id="act-refresh">刷新热门</button>
-    <button id="act-feed">现在刷一轮</button>
-    <button id="act-login">检查登录</button>
+  <div class="card">
+    <h2>现在什么状态</h2>
+    <div class="stats" id="stats">
+      <div class="stat"><div class="k">登录</div><div class="v small">读着…</div></div>
+    </div>
   </div>
 
-  <div class="card" id="settings-card">
-    <h2>设置</h2>
+  <div class="toolbar">
+    <button type="button" class="primary" id="act-refresh">刷新热门</button>
+    <button type="button" id="act-feed">现在刷一轮</button>
+    <button type="button" id="act-login">检查登录</button>
+    <span class="spacer"></span>
+    <span class="tag" id="pending" hidden>动作排队中</span>
+  </div>
+
+  <div class="card">
+    <h2>B 站设置</h2>
+    <p class="card-sub">改完点最下面的「保存」。标着 secret 的项只存宿主，不回显明文。</p>
     <div id="settings"><div class="empty">读着…</div></div>
-    <div class="bar" style="margin-bottom:0">
-      <button class="primary" id="save">保存</button>
-      <span class="hint">Cookie 只存宿主 secrets，保存后不回显明文；其它项保存后扩展会重启一次。</span>
+    <div class="savebar">
+      <button type="button" class="primary" id="save">保存</button>
+      <span class="note">Cookie 保存后立即生效；其它项保存后扩展会重启一次，约两秒。</span>
     </div>
     <div class="err" id="save-err"></div>
+  </div>
+
+  <div class="card">
+    <h2>发弹幕</h2>
+    <p class="card-sub">走的是同一套写动作：默认只试运行，关掉「写操作试运行」才真的提交；自动弹幕开关管的是定时刷，这里是你手动发。</p>
+    <div class="dm-form">
+      <div class="full">
+        <input type="text" id="dm-link" placeholder="视频链接或 BV 号，例如 BV1xx411c7mD">
+      </div>
+      <div>
+        <input type="number" id="dm-seconds" min="0" step="1" placeholder="出现时间（秒）">
+      </div>
+      <div>
+        <select id="dm-position">
+          <option value="scroll">滚动</option>
+          <option value="top">顶部</option>
+          <option value="bottom">底部</option>
+        </select>
+      </div>
+      <div class="full">
+        <input type="text" id="dm-text" maxlength="100" placeholder="弹幕文字，最多 100 字">
+      </div>
+    </div>
+    <div class="dm-acts">
+      <button type="button" id="dm-inspect">检查视频（不发送）</button>
+      <button type="button" class="primary" id="dm-send">发送弹幕</button>
+      <span class="note" id="dm-hint"></span>
+    </div>
+    <div class="dm-result" id="dm-result"></div>
   </div>
 
   <div class="card">
     <h2>热门</h2>
     <div class="grid" id="videos"><div class="empty">读着…</div></div>
   </div>
+</div>
 
-  <div class="toast" id="toast"></div>
+<div class="toast" id="toast"></div>
 
 <script>
 (() => {
@@ -115,10 +251,11 @@
   const API = '/roost/api';
   const $ = (s) => document.querySelector(s);
 
-  let cfg = null;           // { spec, values, secretSet }
-  let draft = {};           // 非敏感值
-  let secrets = {};         // 用户改过的 secret
+  let cfg = null;
+  let draft = {};
+  let secrets = {};
   let busy = false;
+  let meta = null;
 
   const toast = (msg) => {
     const t = $('#toast');
@@ -142,58 +279,157 @@
     }
   }
 
-  /** 分组顺序固定：登录 → 定时刷 → 推送 → 写动作 → 其它，未列出的进「其它」 */
   const GROUPS = [
-    { title: '登录', keys: ['cookie'] },
-    { title: '定时刷', keys: ['feedIntervalMin', 'feedActiveHours'] },
-    { title: '主动推送', keys: ['pushOwner', 'pushGroup', 'pushGroupTarget', 'pushApproval', 'pushMinPlay', 'pushDailyLimit'] },
-    { title: '写动作（默认试运行）', keys: ['autoShot', 'autoComment', 'autoLike', 'autoDanmaku', 'writeDryRun', 'writeDailyLimit', 'commentTemplate', 'danmakuTemplate'] },
-    { title: '其它', keys: ['shotKeep', 'shotDir', 'shotWidth', 'ffmpegPath', 'hotPoolSize', 'defaultLimit'] },
+    { title: '登录', hint: '不填也能看，看不到 AI 字幕、不能评论', keys: ['cookie'] },
+    { title: '怎么刷', hint: '只在她醒着的时间段里刷', keys: ['feedIntervalMin', 'feedActiveHours'] },
+    { title: '主动推送', hint: '刷到好视频要不要告诉她 / 发到群，走宿主的素材通道', keys: ['pushOwner', 'pushGroup', 'pushGroupTarget', 'pushApproval', 'pushMinPlay', 'pushDailyLimit'] },
+    { title: '写动作', hint: '评论 / 点赞 / 弹幕默认只试运行，不真的发', keys: ['autoShot', 'autoComment', 'autoLike', 'autoDanmaku', 'writeDryRun', 'writeDailyLimit'] },
   ];
+
+  function useSlider(f) {
+    if (f.type !== 'number') return false;
+    const min = Number.isFinite(Number(f.min)) ? Number(f.min) : 0;
+    const max = Number.isFinite(Number(f.max)) ? Number(f.max) : null;
+    return max !== null && max - min <= 300;
+  }
+
+  function unitOf(key) {
+    if (key === 'feedIntervalMin') return (v) => (Number(v) === 0 ? '关' : `${v} 分钟`);
+    if (key === 'pushDailyLimit') return (v) => `${v} 条`;
+    if (key === 'writeDailyLimit') return (v) => `${v} 次`;
+    if (key === 'shotKeep') return (v) => `${v} 张`;
+    if (key === 'hotPoolSize') return (v) => `${v} 条`;
+    if (key === 'defaultLimit') return (v) => `${v} 条`;
+    return (v) => String(v);
+  }
+
+  function rowEl(label, hint) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const side = document.createElement('div');
+    side.className = 'side';
+    const l = document.createElement('div');
+    l.className = 'label';
+    l.textContent = label;
+    side.append(l);
+    if (hint) {
+      const h = document.createElement('div');
+      h.className = 'hint';
+      h.textContent = hint;
+      side.append(h);
+    }
+    const ctl = document.createElement('div');
+    ctl.className = 'ctl';
+    row.append(side, ctl);
+    return { row, ctl };
+  }
+
+  function makeSwitch(on, onChange) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'switch' + (on ? ' on' : '');
+    b.setAttribute('role', 'switch');
+    b.setAttribute('aria-checked', String(on));
+    b.onclick = () => {
+      const next = !b.classList.contains('on');
+      b.classList.toggle('on', next);
+      b.setAttribute('aria-checked', String(next));
+      onChange(next);
+    };
+    return b;
+  }
 
   function field(spec, key) {
     const f = spec.find((x) => x.key === key);
     if (!f) return null;
-    const wrap = document.createElement('div');
-    wrap.className = 'row';
+
+    if (f.key === 'cookie') {
+      const { row, ctl } = rowEl(f.label, f.hint);
+      ctl.style.display = 'block';
+      const wrap = document.createElement('div');
+      wrap.style.width = '100%';
+      ['sessdata', 'bili_jct'].forEach((part) => {
+        const line = document.createElement('div');
+        line.className = 'cookie-line';
+        const code = document.createElement('code');
+        code.textContent = part === 'sessdata' ? 'SESSDATA=' : 'bili_jct=';
+        const input = document.createElement('input');
+        input.type = 'password';
+        input.autocomplete = 'off';
+        const isSet = Boolean(cfg && cfg.secretSet && cfg.secretSet[key]);
+        input.placeholder = isSet ? '已设置（留空不改）' : (part === 'sessdata' ? '粘贴 SESSDATA 的值' : '粘贴 bili_jct 的值');
+        input.dataset.part = part;
+        input.oninput = () => {
+          const s = (wrap.querySelector('[data-part=sessdata]').value || '').trim();
+          const j = (wrap.querySelector('[data-part=bili_jct]').value || '').trim();
+          const pieces = [];
+          if (s) pieces.push('SESSDATA=' + s);
+          if (j) pieces.push('bili_jct=' + j);
+          secrets[key] = pieces.join('; ');
+        };
+        line.append(code, input);
+        wrap.append(line);
+      });
+      const acts = document.createElement('div');
+      acts.className = 'cookie-acts';
+      const show = document.createElement('button');
+      show.type = 'button';
+      show.className = 'ghost';
+      show.textContent = '显示';
+      show.onclick = () => {
+        const showing = show.textContent === '隐藏';
+        wrap.querySelectorAll('input').forEach((i) => { i.type = showing ? 'password' : 'text'; });
+        show.textContent = showing ? '显示' : '隐藏';
+      };
+      const note = document.createElement('span');
+      note.className = 'note';
+      note.textContent = '也可以直接粘整串 Cookie；两行填一行也能用';
+      acts.append(show, note);
+      wrap.append(acts);
+      ctl.append(wrap);
+      return row;
+    }
+
     if (f.type === 'boolean') {
-      const lab = document.createElement('label');
-      lab.className = 'check';
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.checked = draft[key] === true;
-      cb.onchange = () => { draft[key] = cb.checked; };
-      const span = document.createElement('span');
-      span.textContent = f.label;
-      lab.append(cb, span);
-      if (f.hint) {
-        const h = document.createElement('span');
-        h.className = 'hint';
-        h.textContent = f.hint;
-        lab.append(h);
-      }
-      return lab;
+      const { row, ctl } = rowEl(f.label, f.hint);
+      ctl.append(makeSwitch(draft[key] === true, (v) => { draft[key] = v; }));
+      return row;
     }
-    const label = document.createElement('label');
-    label.textContent = f.label;
-    if (f.hint) {
-      const h = document.createElement('span');
-      h.className = 'hint';
-      h.textContent = f.hint;
-      label.append(h);
+
+    if (useSlider(f)) {
+      const { row, ctl } = rowEl(f.label, f.hint);
+      const box = document.createElement('div');
+      box.className = 'slider';
+      const range = document.createElement('input');
+      range.type = 'range';
+      range.min = String(f.min);
+      range.max = String(f.max);
+      range.step = '1';
+      range.value = String(Number(draft[key]) || 0);
+      const bubble = document.createElement('span');
+      bubble.className = 'bubble';
+      const fmt = unitOf(key);
+      const num = document.createElement('input');
+      num.type = 'number';
+      num.min = String(f.min);
+      num.max = String(f.max);
+      num.value = String(Number(draft[key]) || 0);
+      bubble.textContent = fmt(Number(draft[key]) || 0);
+      const sync = (v) => {
+        const n = Number(v);
+        draft[key] = n;
+        range.value = String(n);
+        num.value = String(n);
+        bubble.textContent = fmt(n);
+      };
+      range.oninput = () => sync(range.value);
+      num.oninput = () => { if (num.value !== '') sync(num.value); };
+      box.append(range, bubble, num);
+      ctl.append(box);
+      return row;
     }
-    wrap.append(label);
-    if (f.secret) {
-      const input = document.createElement('input');
-      input.type = 'password';
-      input.autocomplete = 'off';
-      const isSet = Boolean(cfg && cfg.secretSet && cfg.secretSet[key]);
-      input.placeholder = isSet ? '已设置（留空不改）' : '未设置';
-      input.value = secrets[key] === undefined ? '' : secrets[key];
-      input.oninput = () => { secrets[key] = input.value; };
-      wrap.append(input);
-      return wrap;
-    }
+
+    const { row, ctl } = rowEl(f.label, f.hint);
     if (f.type === 'select') {
       const sel = document.createElement('select');
       (f.options || []).forEach((o) => {
@@ -205,8 +441,8 @@
       });
       sel.value = draft[key] == null ? '' : String(draft[key]);
       sel.onchange = () => { draft[key] = sel.value; };
-      wrap.append(sel);
-      return wrap;
+      ctl.append(sel);
+      return row;
     }
     const input = document.createElement('input');
     input.type = f.type === 'number' ? 'number' : 'text';
@@ -219,15 +455,18 @@
         ? (input.value === '' ? '' : Number(input.value))
         : input.value;
     };
-    wrap.append(input);
-    return wrap;
+    ctl.append(input);
+    return row;
   }
 
   function renderSettings() {
     const box = $('#settings');
     box.textContent = '';
     if (!cfg || !cfg.spec || !cfg.spec.length) {
-      box.innerHTML = '<div class="empty">这个扩展没有声明设置项</div>';
+      const d = document.createElement('div');
+      d.className = 'empty';
+      d.textContent = '这个扩展没有声明设置项';
+      box.append(d);
       return;
     }
     const spec = cfg.spec;
@@ -235,33 +474,115 @@
     GROUPS.forEach((g) => {
       const keys = g.keys.filter((k) => spec.some((f) => f.key === k));
       if (!keys.length) return;
-      const title = document.createElement('h2');
-      title.textContent = g.title;
-      title.style.marginTop = '14px';
-      box.append(title);
+      const card = document.createElement('div');
+      const h = document.createElement('h2');
+      h.textContent = g.title;
+      card.append(h);
+      if (g.hint) {
+        const sub = document.createElement('p');
+        sub.className = 'card-sub';
+        sub.textContent = g.hint;
+        card.append(sub);
+      }
       keys.forEach((k) => {
         used.add(k);
         const el = field(spec, k);
-        if (el) box.append(el);
+        if (el) card.append(el);
       });
+      box.append(card);
     });
     const rest = spec.filter((f) => !used.has(f.key));
     if (rest.length) {
-      const title = document.createElement('h2');
-      title.textContent = '其它';
-      title.style.marginTop = '14px';
-      box.append(title);
+      const card = document.createElement('div');
+      const h = document.createElement('h2');
+      h.textContent = '其它';
+      card.append(h);
       rest.forEach((f) => {
         const el = field(spec, f.key);
-        if (el) box.append(el);
+        if (el) card.append(el);
       });
+      box.append(card);
     }
+  }
+
+  function renderStats() {
+    const box = $('#stats');
+    box.textContent = '';
+    const acc = meta && meta.account ? meta.account : null;
+    const feed = meta && meta.feed ? meta.feed : null;
+    const push = meta && meta.push ? meta.push : null;
+    const items = [
+      {
+        k: '登录',
+        v: acc ? (acc.isLogin ? acc.uname || '已登录' : '没登录（只能看）') : '还没检查',
+        dot: acc ? (acc.isLogin ? 'ok' : 'warn') : 'off',
+        small: true,
+      },
+      {
+        k: '定时刷',
+        v: feed ? (feed.enabled ? `每 ${feed.minutes} 分钟` : '关着') : '—',
+        dot: feed && feed.enabled ? 'ok' : 'off',
+      },
+      {
+        k: '上次刷',
+        v: feed && feed.lastAt ? new Date(feed.lastAt).toLocaleString() : '还没刷过',
+        small: true,
+      },
+      {
+        k: '今日推送',
+        v: push ? `${push.pushed} / ${push.pushLimit} 条` : '—',
+        small: true,
+      },
+      {
+        k: '今日写动作',
+        v: push ? `${push.writes} / ${push.writeLimit} 次` : '—',
+        small: true,
+      },
+    ];
+    if (feed && feed.error) {
+      items.push({ k: '上次没刷成', v: feed.error, dot: 'warn', small: true });
+    }
+    if (meta && meta.write && meta.write.paused) {
+      items.push({ k: '写动作暂停', v: meta.write.paused, dot: 'warn', small: true });
+    }
+    items.forEach((it) => {
+      const d = document.createElement('div');
+      d.className = 'stat';
+      const k = document.createElement('div');
+      k.className = 'k';
+      k.textContent = it.k;
+      const v = document.createElement('div');
+      v.className = 'v' + (it.small ? ' small' : '');
+      if (it.dot) {
+        const dot = document.createElement('span');
+        dot.className = 'dot ' + it.dot;
+        v.append(dot);
+      }
+      v.append(document.createTextNode(String(it.v)));
+      d.append(k, v);
+      box.append(d);
+    });
+  }
+
+  function renderDanmaku() {
+    const d = meta && meta.danmaku;
+    const out = $('#dm-result');
+    out.className = 'dm-result';
+    out.textContent = d
+      ? `《${d.title || d.bvid}》 · ${d.duration || 0} 秒${d.text ? ` · 「${d.text}」` : ''} · ${d.message || ''}`
+      : '';
+    if (d && d.dryRun) out.classList.add('warn');
+    else if (d && d.ok) out.classList.add('ok');
   }
 
   async function loadConfig() {
     const r = await op('extensions.config.get', { id: ID });
     if (!r || r.ok === false) {
-      $('#settings').innerHTML = '<div class="empty">读不到设置：' + String(r && r.message || '未知原因') + '</div>';
+      const d = document.createElement('div');
+      d.className = 'empty';
+      d.textContent = '读不到设置：' + String((r && r.message) || '未知原因');
+      $('#settings').textContent = '';
+      $('#settings').append(d);
       return;
     }
     cfg = r;
@@ -281,7 +602,7 @@
     busy = false;
     $('#save').disabled = false;
     if (!r || r.ok === false) {
-      $('#save-err').textContent = String(r && r.message || '保存失败');
+      $('#save-err').textContent = String((r && r.message) || '保存失败');
       return;
     }
     toast(r.message || '已保存');
@@ -289,15 +610,27 @@
     await loadData();
   }
 
+  function bvOf(s) {
+    const m = String(s || '').match(/BV[0-9A-Za-z]{10}/);
+    return m ? m[0] : '';
+  }
+
   async function loadData() {
     try {
       const r = await fetch(`${API}/extensions/ui/data?id=${encodeURIComponent(ID)}`);
       const j = await r.json();
+      meta = j && j.meta ? j.meta : null;
+      renderStats();
+      renderDanmaku();
+
       const box = $('#videos');
       box.textContent = '';
       const rows = Array.isArray(j && j.rows) ? j.rows : [];
       if (!rows.length) {
-        box.innerHTML = '<div class="empty">还没有数据。点「刷新热门」试试。</div>';
+        const d = document.createElement('div');
+        d.className = 'empty';
+        d.textContent = '还没有数据。点「刷新热门」试试。';
+        box.append(d);
       } else {
         rows.forEach((v) => {
           const card = document.createElement('div');
@@ -311,10 +644,10 @@
           const title = document.createElement('div');
           title.className = 'title';
           title.textContent = v.title || '';
-          const meta = document.createElement('div');
-          meta.className = 'meta';
-          meta.textContent = [v.author, v.playText, v.durText, v.area].filter(Boolean).join(' · ');
-          body.append(title, meta);
+          const m = document.createElement('div');
+          m.className = 'meta';
+          m.textContent = [v.author, v.playText, v.durText, v.area].filter(Boolean).join(' · ');
+          body.append(title, m);
           if (typeof v.url === 'string' && /^https?:\/\//i.test(v.url)) {
             const a = document.createElement('a');
             a.href = v.url; a.target = '_blank'; a.rel = 'noreferrer noopener';
@@ -326,25 +659,46 @@
         });
       }
       const when = j && j.updatedAt ? new Date(j.updatedAt).toLocaleString() : '还没更新过';
-      $('#status').textContent = `热门更新于 ${when}`;
+      $('#stamp').textContent = '更新于 ' + when;
+      const pending = Array.isArray(j && j.pendingActions) ? j.pendingActions.length : 0;
+      $('#pending').hidden = pending === 0;
+      if (pending) $('#pending').textContent = `${pending} 个动作排队中`;
     } catch (e) {
-      $('#status').textContent = '读不到数据：' + (e && e.message ? e.message : e);
+      $('#stamp').textContent = '读不到数据：' + (e && e.message ? e.message : e);
     }
   }
 
-  async function act(name) {
-    const r = await op('extensions.ui.action', { id: ID, action: name });
+  async function act(name, payload) {
+    const arg = { id: ID, action: name };
+    if (payload) arg.payload = payload;
+    const r = await op('extensions.ui.action', arg);
     toast(r && r.message ? r.message : (r && r.ok ? '已交给扩展' : '没交上'));
-    if (r && r.ok) {
-      /** 动作是扩展轮询执行，给它两秒再刷新；没变就让人再点一次 */
-      setTimeout(() => { loadData(); }, 2200);
-    }
+    if (r && r.ok) setTimeout(() => { loadData(); }, 2200);
+    return r;
   }
 
   $('#act-refresh').onclick = () => act('refresh_hot');
   $('#act-feed').onclick = () => act('feed_now');
   $('#act-login').onclick = () => act('check_login');
+  $('#reload').onclick = () => { loadConfig(); loadData(); };
   $('#save').onclick = save;
+
+  $('#dm-inspect').onclick = () => {
+    const bvid = bvOf($('#dm-link').value);
+    if (!bvid) return toast('没认出 BV 号，贴视频链接或 BV 号都行');
+    act('danmaku_inspect', { bvid });
+  };
+  $('#dm-send').onclick = () => {
+    const bvid = bvOf($('#dm-link').value);
+    const text = $('#dm-text').value.trim();
+    if (!bvid) return toast('没认出 BV 号');
+    if (!text) return toast('弹幕文字是空的');
+    act('danmaku_send', {
+      bvid, text,
+      seconds: Number($('#dm-seconds').value) || 0,
+      position: $('#dm-position').value,
+    });
+  };
 
   loadConfig();
   loadData();

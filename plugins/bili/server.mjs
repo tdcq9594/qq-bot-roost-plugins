@@ -30,7 +30,7 @@ import { createWriteApi } from './lib/write.mjs';
 import { createPush } from './lib/push.mjs';
 import { createUiActions } from './lib/ui-actions.mjs';
 
-const SERVER = { name: 'bili', version: '0.5.0' };
+const SERVER = { name: 'bili', version: '0.5.1' };
 const log = (m) => process.stderr.write(`[bili] ${m}\n`);
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 
@@ -79,6 +79,7 @@ const feed = createFeed({
   onFresh: (items) => {
     box?.setPool(items);
     ui.fromPool(items);
+    syncMeta();
     /** 推送失败不该让「这一轮刷成功了」变红，单独吞掉并记进 push.state() */
     if (push) void push.onFresh(items, '定时').catch((e) => log(`推送这一轮失败：${e?.message ?? e}`));
   },
@@ -92,6 +93,56 @@ const shots = createShots({
 
 push = createPush({ cfg, api, shots, submit, write, log });
 box = createToolbox({ api, log, config: cfg, feed, shots, push });
+
+/* ------------------------------------------------------------------ */
+/* 面板运行状态（0.5.1）                                              */
+/* ------------------------------------------------------------------ */
+
+/** 最近一次「检查登录」/「发弹幕」的结果，面板下次刷新就能看到 */
+let lastAccount = null;
+let lastDanmaku = null;
+
+/** 从链接或 BV 号里抠出 BV 号（面板只让填一行，不逼用户分开填） */
+const bvOf = (s) => {
+  const m = String(s || '').match(/BV[0-9A-Za-z]{10}/);
+  return m ? m[0] : '';
+};
+
+function metaOf() {
+  const fs = feed.state();
+  const ps = push.state();
+  return {
+    account: lastAccount
+      ? { isLogin: Boolean(lastAccount.isLogin), uname: String(lastAccount.uname || '') }
+      : null,
+    feed: {
+      enabled: Boolean(fs.enabled),
+      minutes: Number(fs.minutes) || 0,
+      lastAt: Number(fs.at) || 0,
+      count: Number(fs.count) || 0,
+      reason: String(fs.reason || ''),
+      error: String(fs.error || ''),
+      activeHours: String(fs.activeHours || ''),
+    },
+    push: {
+      pushed: Number(ps.today?.pushed) || 0,
+      pushLimit: Number(ps.today?.pushLimit) || 0,
+      writes: Number(ps.today?.writes) || 0,
+      writeLimit: Number(ps.today?.writeLimit) || 0,
+      channel: Boolean(ps.channel),
+      last: ps.last
+        ? { at: Number(ps.last.at) || 0, picked: Number(ps.last.picked) || 0, delivered: Number(ps.last.delivered) || 0, reason: String(ps.last.reason || '') }
+        : null,
+    },
+    write: { paused: String(write.state()?.paused || '') },
+    danmaku: lastDanmaku,
+  };
+}
+
+/** 状态写盘失败不影响任何功能，面板少一块信息而已 */
+function syncMeta() {
+  try { ui.setMeta(metaOf()); } catch (e) { log(`面板状态写盘失败：${e?.message ?? e}`); }
+}
 
 /**
  * 面板按钮的动作处理（0.5）。
@@ -115,8 +166,39 @@ const uiActions = createUiActions({
       if (!r?.ok) log(`手动刷一轮没有完成：${r?.why ?? '未知原因'}`);
     },
     async check_login() {
-      const a = await api.account();
-      log(a?.isLogin ? `登录态正常：${a.uname}` : '没有登录（只能看，不能评论）');
+      lastAccount = await api.account();
+      log(lastAccount?.isLogin ? `登录态正常：${lastAccount.uname}` : '没有登录（只能看，不能评论）');
+      syncMeta();
+    },
+    /**
+     * 弹幕：先查一遍视频（拿 cid / 时长），不发送。
+     * 面板上「检查视频」按钮走这里，结果写进 state 供页面回显。
+     */
+    async danmaku_inspect(payload) {
+      const bvid = bvOf(payload?.bvid || payload?.link);
+      if (!bvid) throw new Error('没认出 BV 号（支持 BV 号或 B 站链接）');
+      const v = await api.view({ bvid });
+      lastDanmaku = {
+        bvid: v.bvid, title: v.title, cid: v.cid, duration: v.duration,
+        at: Date.now(), ok: null, dryRun: false, message: `《${v.title}》· ${v.duration} 秒`,
+      };
+      syncMeta();
+    },
+    /** 真发弹幕：走 write 层（默认试运行、每日上限、风控当天暂停都在那里） */
+    async danmaku_send(payload) {
+      const bvid = bvOf(payload?.bvid || payload?.link);
+      const text = String(payload?.text || '').trim().slice(0, 100);
+      if (!bvid) throw new Error('没认出 BV 号');
+      if (!text) throw new Error('弹幕文字是空的');
+      const v = await api.view({ bvid });
+      const seconds = Math.max(0, Number(payload?.seconds) || 0);
+      const r = await write.danmaku(v.cid, text, seconds * 1000);
+      lastDanmaku = {
+        bvid: v.bvid, title: v.title, cid: v.cid, duration: v.duration,
+        text, seconds, at: Date.now(), ok: true, dryRun: Boolean(r?.dryRun),
+        message: r?.dryRun ? '试运行：没有真的发出去（关掉 writeDryRun 才会发）' : '已提交到 B 站',
+      };
+      syncMeta();
     },
   },
 });
@@ -160,6 +242,7 @@ async function handle(msg) {
         const pool = box.hotPool();
         ui.fromPool(pool);
         feed.seed(pool, 'hot');
+        syncMeta();
       }
       return ok(id, { content: [{ type: 'text', text: String(text) }] });
     } catch (e) {
@@ -261,6 +344,7 @@ function serve() {
         const pool = box.hotPool();
         ui.fromPool(pool);
         feed.seed(pool);
+        syncMeta();
       })
       .catch((e) => log(`预热面板数据失败（不影响使用）：${e?.message ?? e}`));
   }, 1200).unref?.();
