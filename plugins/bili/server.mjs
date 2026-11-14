@@ -37,7 +37,7 @@ import { createAutoShot } from './lib/auto-shot.mjs';
 import { bumpStats, readStats } from './lib/stats.mjs';
 import { countShots } from './lib/gallery.mjs';
 
-const SERVER = { name: 'bili', version: '0.10.0' };
+const SERVER = { name: 'bili', version: '0.10.1' };
 const log = (m) => process.stderr.write(`[bili] ${m}\n`);
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 
@@ -140,7 +140,8 @@ const shots = createShots({
 /** 宿主记忆：推成功记一笔，下次别推同一条（写不进去不影响推送） */
 const memory = createExtMemory(process.env);
 push = createPush({ cfg, api, shots, submit, write, memory, log });
-box = createToolbox({ api, log, config: cfg, feed, shots, push });
+/** `write` 直通给模型：它在对话里写的评论/点赞不该再套模板 */
+box = createToolbox({ api, log, config: cfg, feed, shots, push, write });
 
 /** 扫码登录：headless 浏览器出码，拿到 cookie 就写 cookie.txt */
 /** `depsDir` 里如果有 `qrcode` 就用它生成二维码，没有则退回内置编码器 */

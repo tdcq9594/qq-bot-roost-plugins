@@ -123,6 +123,31 @@ export const TOOLS = [
     },
   },
   {
+    name: 'comment',
+    description: '在一条 B 站视频下面发评论。**先把话想好再调**：text 就是最终发出去的内容，不会再加任何模板。别人让你「去评论一下」「给这个视频留句话」时用。默认试运行（不会真的发出去），开关在面板「写动作」里；每天有次数上限，被风控时会明确报错。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        link: { type: 'string', description: 'B 站链接 / BV 号 / av 号 / b23 短链' },
+        text: { type: 'string', description: '评论内容，最多 200 字' },
+      },
+      required: ['link', 'text'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'like',
+    description: '给一条 B 站视频点赞。别人让你「点个赞」时用；默认试运行，开关和次数上限和评论共用一套。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        link: { type: 'string', description: 'B 站链接 / BV 号 / av 号 / b23 短链' },
+      },
+      required: ['link'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'push_state',
     description: '看主动推送的开关、今日额度和上一轮结果。用户问「你怎么不推了」「推送开了吗」时先调这个。',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
@@ -182,7 +207,7 @@ function boolOf(v, def) {
   return def;
 }
 
-export function createToolbox({ api, log = () => {}, config = {}, feed = null, shots = null, push = null }) {
+export function createToolbox({ api, log = () => {}, config = {}, feed = null, shots = null, push = null, write = null }) {
   /**
    * 设置取值：面板保存前已经校验过，但用户可能手改 `config.json`，
    * 所以这里再夹一次范围 —— 这是最后一道。
@@ -381,7 +406,49 @@ export function createToolbox({ api, log = () => {}, config = {}, feed = null, s
     ].filter(Boolean).join('\n');
   }
 
-  const handlers = { hot, weekly, search, video, up, feed: feedTool, card, shot, push: pushTool, push_state: pushStateTool };
+  /**
+   * 写评论 / 点赞：**文案由调用方给**，这里不套模板。
+   *
+   * 定时刷的自动评论用的是模板（无人参与，只能这样）；而模型在对话里
+   * 被要求「去评论一下」时，它自己写的那句话才是要发出去的。所以这两个
+   * 工具必须直通 write 层，不能再经过 fillTemplate——否则模型写得再好，
+   * 发出去的还是「这个视频真不错」。
+   *
+   * 试运行、每日额度、风控暂停都在 `write` 里，这里只管把错误翻成人话。
+   */
+  async function comment(args) {
+    if (!write) throw new BiliError('写动作没接上（这个宿主版本没给 write）');
+    const a = argsOf(args, ['link', 'text']);
+    const text = String(a.text || '').trim().slice(0, 200);
+    if (!text) throw new BiliError('评论内容是空的');
+    const id = await resolveId(a.link);
+    if (id.ep || id.ss) throw new BiliError('番剧不能按普通视频评论');
+    const info = await api.view(id);
+    const aid = Number(info.aid) || 0;
+    if (!aid) throw new BiliError('拿不到这个视频的 aid，没法评论');
+    const r = await write.comment(aid, text);
+    if (!r?.ok) throw new BiliError(String(r?.why || '没发出去'), { hint: '面板「写动作」里看试运行开关和每日上限' });
+    return r.dryRun
+      ? `试运行：没有真的发出去（本来要在《${info.title}》下评论「${text}」）`
+      : `已在《${info.title}》下发了评论：「${text}」`;
+  }
+
+  async function like(args) {
+    if (!write) throw new BiliError('写动作没接上（这个宿主版本没给 write）');
+    const a = argsOf(args, ['link']);
+    const id = await resolveId(a.link);
+    if (id.ep || id.ss) throw new BiliError('番剧不能按普通视频点赞');
+    const info = await api.view(id);
+    const aid = Number(info.aid) || 0;
+    if (!aid) throw new BiliError('拿不到这个视频的 aid，没法点赞');
+    const r = await write.like(aid);
+    if (!r?.ok) throw new BiliError(String(r?.why || '没点上'), { hint: '面板「写动作」里看试运行开关和每日上限' });
+    return r.dryRun
+      ? `试运行：没有真的点赞（本来要给《${info.title}》点赞）`
+      : `已给《${info.title}》点赞`;
+  }
+
+  const handlers = { hot, weekly, search, video, up, feed: feedTool, card, shot, push: pushTool, push_state: pushStateTool, comment, like };
 
   return {
     tools: TOOLS,

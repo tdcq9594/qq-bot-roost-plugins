@@ -63,7 +63,9 @@ try {
   const list = await rpc('tools/list', {});
   const tools = list.result?.tools || [];
   const names = tools.map((t) => t.name);
-  check(names.length === 10, `tools/list 有 10 个工具（实际 ${names.length}）`);
+  check(names.length === 12, `tools/list 有 12 个工具（实际 ${names.length}）`);
+  /** 0.10.1：模型要能自己写评论 / 点赞，这两个必须是真工具 */
+  check(names.includes('comment') && names.includes('like'), 'tools/list 里有 comment / like');
   for (const n of ['hot', 'weekly', 'search', 'video', 'up', 'feed', 'card', 'shot', 'push', 'push_state']) {
     check(names.includes(n), `工具有 ${n}`);
   }

@@ -90,3 +90,64 @@ test('setPool：定时刷喂进来的池子被 hot 直接复用，不再打 B �
   assert.deepEqual(calls, [], '刚刷完不该再请求一次');
   assert.equal(box.setPool([]), false);
 });
+
+/* ---------------- 0.10.1：模型自己写评论 / 点赞 ---------------- */
+
+function makeWritable({ dryRun = false, fail = '' } = {}) {
+  const seen = [];
+  const write = {
+    async comment(aid, text) {
+      seen.push(['comment', aid, text]);
+      if (fail) return { ok: false, why: fail };
+      return { ok: true, dryRun };
+    },
+    async like(aid) {
+      seen.push(['like', aid]);
+      if (fail) return { ok: false, why: fail };
+      return { ok: true, dryRun };
+    },
+  };
+  const api = {
+    async view() { return VIEW; },
+    async resolveShort() { return 'BV1ZAWM61Evb'; },
+  };
+  return { box: createToolbox({ api, config: {}, write }), seen };
+}
+
+test('comment：把模型写的那句原样发出去，不套模板', async () => {
+  const { box, seen } = makeWritable();
+  const text = await box.call('comment', { link: 'BV1ZAWM61Evb', text: '这只猫跟我家的一样懒' });
+  assert.deepEqual(seen, [['comment', 1, '这只猫跟我家的一样懒']]);
+  assert.match(text, /已在《一只猫》下发了评论/);
+  assert.match(text, /这只猫跟我家的一样懒/);
+});
+
+test('comment：试运行时如实说没发出去，但仍把话复述一遍', async () => {
+  const { box } = makeWritable({ dryRun: true });
+  const text = await box.call('comment', { link: 'BV1ZAWM61Evb', text: '好' });
+  assert.match(text, /试运行/);
+  assert.match(text, /本来要在《一只猫》下评论「好」/);
+});
+
+test('comment：空文案 / 写层拒绝都要说清原因', async () => {
+  const { box } = makeWritable();
+  await assert.rejects(() => box.call('comment', { link: 'BV1ZAWM61Evb', text: '   ' }), /空的/);
+
+  const bad = makeWritable({ fail: '今日写操作额度用完了' });
+  await assert.rejects(() => bad.box.call('comment', { link: 'BV1ZAWM61Evb', text: 'x' }), /额度/);
+});
+
+test('like：走 write 层，试运行如实返回', async () => {
+  const { box, seen } = makeWritable();
+  const text = await box.call('like', { link: 'BV1ZAWM61Evb' });
+  assert.deepEqual(seen, [['like', 1]]);
+  assert.match(text, /已给《一只猫》点赞/);
+
+  const dry = makeWritable({ dryRun: true });
+  assert.match(await dry.box.call('like', { link: 'BV1ZAWM61Evb' }), /试运行/);
+});
+
+test('没接 write 时明确拒绝，不假装成功', async () => {
+  const box = createToolbox({ api: { async view() { return VIEW; } }, config: {} });
+  await assert.rejects(() => box.call('like', { link: 'BV1ZAWM61Evb' }), /写动作没接上/);
+});
