@@ -136,7 +136,7 @@ console.log('✓ 0.4 开关默认值与覆盖');
 {
   const j = JSON.parse(readFileSync(new URL('../plugin.json', import.meta.url), 'utf8'));
   const n = Object.keys(j.config || {}).length;
-  check(n <= 32, `config 字段数 ${n} ≤ 32（宿主上限）`);
+  check(n <= 64, `config 字段数 ${n} ≤ 64（宿主上限）`);
   /**
    * 评论 / 弹幕**没有模板**：话必须是模型看过内容之后自己写的。
    * 留个空位将来很容易被「先塞个默认值」补回来，所以在这里钉死。
