@@ -810,8 +810,8 @@
       const stamp = document.querySelector('#stamp');
       if (stamp) stamp.textContent = '动作没提交上：' + msg;
     }
-    /** 长轮询下动作基本是立刻执行的，等半秒刷新就够 */
-    if (ok) setTimeout(() => { loadData(); }, 700);
+    /** 进程内动作是同步返回的，几乎不用等；走队列的才需要留一点时间 */
+    if (ok) setTimeout(() => { loadData(); }, r && r.mode === 'inprocess' ? 120 : 700);
     return r;
   }
 

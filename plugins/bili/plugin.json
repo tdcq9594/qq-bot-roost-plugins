@@ -341,7 +341,9 @@
           "type": "time"
         }
       ]
-    }
+    },
+    "runtime": "inprocess",
+    "entry": "ui/main.mjs"
   },
   "scopes": [
     "memory:write",
