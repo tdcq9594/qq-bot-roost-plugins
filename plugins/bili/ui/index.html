@@ -395,8 +395,11 @@
       /** 扫码登录：点一下起 headless 浏览器出码，扫完自动写 cookie.txt */
       const qrBtn = document.createElement('button');
       qrBtn.type = 'button';
-      qrBtn.className = 'ghost';
+      /** 用普通按钮而不是 ghost：之前它是灰字，实际没人看见 */
+      qrBtn.className = '';
       qrBtn.textContent = '扫码登录';
+      qrBtn.style.borderColor = 'var(--accent)';
+      qrBtn.style.color = 'var(--accent)';
       qrBtn.onclick = () => act('qr_start');
       const qrCancel = document.createElement('button');
       qrCancel.type = 'button';
