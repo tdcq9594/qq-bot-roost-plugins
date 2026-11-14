@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { createBrowseSession, materialOfVideos, parseDecisions } from '../lib/ai-duty.mjs';
+import { createBrowseSession, materialOfVideos, parseDecisions, parsePayload } from '../lib/ai-duty.mjs';
 import { createPending } from '../lib/pending.mjs';
 
 const BV = 'BV1xx411c7mD';
@@ -130,4 +130,28 @@ test('待处理队列：加进去、取一次就清空，处理过的不再回�
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('parsePayload：对象格式带 replies（新提示词）', () => {
+  const r = parsePayload(`{"items":[{"bvid":"${BV}","comment":"好"}],"replies":[{"id":"123","text":"回你"}]}`);
+  assert.equal(r.items.length, 1);
+  assert.equal(r.items[0].comment, '好');
+  assert.equal(r.replies.length, 1);
+  assert.equal(r.replies[0].id, '123');
+});
+
+test('parsePayload：纯数组仍兼容（模型偶尔按老格式写）', () => {
+  const r = parsePayload(`[{"bvid":"${BV}","feeling":"x"}]`);
+  assert.equal(r.items.length, 1);
+  assert.deepEqual(r.replies, []);
+});
+
+test('parsePayload：数组里的对象不会被当成根对象', () => {
+  /**
+   * 关键回归：`[{...}]` 里也有 `{`，若先按对象切，会切成单个对象、
+   * items 取不到，整轮变成「她什么都没想做」。
+   */
+  const r = parsePayload(`好的：[{"bvid":"${BV}","share":"看这个"}]`);
+  assert.equal(r.items.length, 1);
+  assert.equal(r.items[0].share, '看这个');
 });

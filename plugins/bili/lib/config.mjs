@@ -117,6 +117,14 @@ export function readConfig(env = process.env) {
     shotWidth: 512,
     shotKeep: intOf(raw.shotKeep, 60, 1, 300),
     /**
+     * 推给主人时顺手截一张的概率（百分比，0 = 从不）。
+     *
+     * 发不发得出去由**宿主**决定：宿主没有「主动消息带图」的通道，所以这里
+     * 的做法是把截图路径写进素材，让模型自己决定要不要写 `<<image-alone:>>`
+     * 发那张图。写清楚比假装能保证更诚实。
+     */
+    shotChance: intOf(raw.shotChance, 0, 0, 100),
+    /**
      * 截图目录**固定用扩展自己的 `shots/`**。
      *
      * 面板只从扩展目录取图，指到别处等于「图库永远是空的」——这个坑
@@ -148,6 +156,13 @@ export function readConfig(env = process.env) {
      * 就不发——不再拿一句「这个视频不错」凑数。
      */
     autoComment: boolOf(raw.autoComment, false),
+    /**
+     * 主人的 B 站昵称：她自动评论 / 回复时会在末尾 @ 一下。
+     *
+     * 注意 B 站的 @ 只是**文本**，不会真的给对方发提醒（那是客户端行为），
+     * 所以这里的作用是「让人看得见我提到了你」，不是通知。
+     */
+    ownerName: strOf(raw.ownerName, '', 40),
     autoLike: boolOf(raw.autoLike, false),
     /** 同上：弹幕内容由她决定，没有模板可填 */
     autoDanmaku: boolOf(raw.autoDanmaku, false),

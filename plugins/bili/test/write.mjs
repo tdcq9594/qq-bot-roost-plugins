@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createWriteApi } from '../lib/write.mjs';
+import { createWriteApi, withMention } from '../lib/write.mjs';
 
 const COOKIE = 'SESSDATA=abc; bili_jct=csrf123; DedeUserID=1';
 const T = new Date('2026-11-14T10:00:00+08:00').getTime();
@@ -75,4 +75,16 @@ test('跨天自动解除暂停', async () => {
   assert.ok(w.state().paused);
   now += 24 * 3600_000;
   assert.equal(w.state().paused, '');
+});
+
+/* ---------------- @ 主人 ---------------- */
+
+test('withMention：末尾加 @昵称，已有就不重复，超长整体截断', () => {
+  assert.equal(withMention('这猫真懒', '小明'), '这猫真懒 @小明');
+  assert.equal(withMention('这猫真懒 @小明', '小明'), '这猫真懒 @小明', '她自己写了就别再加一遍');
+  assert.equal(withMention('  好  ', ''), '好', '没填昵称就原样返回');
+  /** 评论上限 200 字：整条截断，不能把 @ 截掉 */
+  const long = withMention('x'.repeat(300), '小明');
+  assert.equal(long.length, 200);
+  assert.ok(long.endsWith('@小明'));
 });

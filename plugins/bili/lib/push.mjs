@@ -78,8 +78,36 @@ export function createPush({
     return out;
   }
 
+  /**
+   * 推送时顺手截一张（`shotChance` 百分比）。
+   *
+   * 宿主没有「主动消息带图」的通道，所以这里**只把路径写进素材**，发不发
+   * 由模型决定（它可以写 `<<image-alone: 路径>>`）。做不到的事不假装能做到：
+   * 概率是「截了一张」的概率，不是「一定会发出图」。
+   */
+  async function maybeShot(v) {
+    const chance = Math.max(0, Math.min(100, Number(cfg?.shotChance) || 0));
+    if (!chance || !shots?.take) return '';
+    if (Math.random() * 100 >= chance) return '';
+    try {
+      const info = await api?.view?.({ bvid: String(v?.bvid ?? '') });
+      if (!info?.cid) return '';
+      /** 取 1/3 处：开头常见片头/黑帧 */
+      const dur = Math.max(1, Math.floor(Number(info?.duration) || 0));
+      const r = await shots.take({ info: { ...v, ...info }, at: Math.max(1, Math.floor(dur / 3)) });
+      return String(r?.path || '');
+    } catch {
+      /** 没装 ffmpeg / 拿不到流：这一条就不带图，不影响推送 */
+      return '';
+    }
+  }
+
   async function deliver(v, reason) {
-    const text = materialOf(v, { withCover: Boolean(cfg?.pushCover) });
+    let text = materialOf(v, { withCover: Boolean(cfg?.pushCover) });
+    const shot = await maybeShot(v);
+    if (shot) {
+      text += `\n（顺手截了一张画面：${shot}。想直接发这张图就原样写 <<image-alone: ${shot}>>，不想发就别提它。）`;
+    }
     const targets = [];
     if (cfg?.pushOwner) targets.push({ target: 'owner', approve: false });
     if (cfg?.pushGroup && String(cfg?.pushGroupTarget || '').trim()) {

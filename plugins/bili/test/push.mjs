@@ -136,3 +136,51 @@ test('push_state / pushOne：手动补推与自检都能离线跑', async () => 
   assert.equal(sub.calls[0].key, 'BV1ZAWM61Evb|owner');
   assert.equal(push.state().today.pushed, 1);
 });
+
+/* ---------------- 推送时偶尔顺手截一张 ---------------- */
+
+test('shotChance 命中：把截图路径写进素材，让模型自己决定发不发', async () => {
+  const sub = fakeSubmit();
+  const taken = [];
+  const push = createPush({
+    cfg: cfg0({ pushOwner: true, shotChance: 100 }),
+    api: { view: async () => ({ aid: 1, cid: 2, duration: 60 }) },
+    shots: {
+      take: async ({ at }) => { taken.push(at); return { path: 'C:/tmp/shots/BV1ZAWM61Eva-20.jpg' }; },
+    },
+    submit: sub, write: fakeWrite(), now: () => T,
+  });
+  await push.onFresh(POOL);
+  assert.equal(taken.length, 1, '概率 100 就一定要截一张');
+  assert.equal(taken[0], 20, '取时长 1/3 处，避开片头');
+  const text = String(sub.calls[0]?.text || '');
+  assert.match(text, /顺手截了一张/);
+  assert.match(text, /image-alone/);
+});
+
+test('shotChance = 0：不截、素材里也不提截图', async () => {
+  const sub = fakeSubmit();
+  let called = 0;
+  const push = createPush({
+    cfg: cfg0({ pushOwner: true }),
+    api: fakeApi(),
+    shots: { take: async () => { called += 1; return { path: 'x' }; } },
+    submit: sub, write: fakeWrite(), now: () => T,
+  });
+  await push.onFresh(POOL);
+  assert.equal(called, 0);
+  assert.equal(/image-alone/.test(String(sub.calls[0]?.text || '')), false);
+});
+
+test('截帧失败不影响推送：素材照发，只是没图', async () => {
+  const sub = fakeSubmit();
+  const push = createPush({
+    cfg: cfg0({ pushOwner: true, shotChance: 100 }),
+    api: fakeApi(),
+    shots: { take: async () => { throw new Error('没有 ffmpeg'); } },
+    submit: sub, write: fakeWrite(), now: () => T,
+  });
+  await push.onFresh(POOL);
+  assert.equal(sub.calls.length, 1, '推送不能因为截不了图而失败');
+  assert.equal(/image-alone/.test(String(sub.calls[0]?.text || '')), false);
+});

@@ -325,7 +325,7 @@
     {
       title: '评论、回复和分享',
       hint: '评论、弹幕和回复都要登录。试运行开着时只记日志不发。',
-      keys: ['autoComment', 'autoDanmaku', 'autoLike', 'pushOwner', 'pushGroup', 'pushGroupTarget', 'pushDailyLimit', 'pushPerFeed', 'pushMinPlay', 'pushApproval', 'pushCover', 'writeDryRun', 'writeDailyLimit'],
+      keys: ['ownerName', 'autoComment', 'autoDanmaku', 'autoLike', 'pushOwner', 'pushGroup', 'pushGroupTarget', 'pushDailyLimit', 'pushPerFeed', 'pushMinPlay', 'pushApproval', 'pushCover', 'writeDryRun', 'writeDailyLimit'],
     },
     {
       title: '看画面（抽帧 + 视觉）',
@@ -464,11 +464,20 @@
      * 一个群都没配时退回输入框，并写清为什么。
      */
     if (f.key === 'pushGroupTarget') {
-      const { row, ctl } = rowEl(f.label, groups.length ? f.hint : '还没有配置过群，先填群号；配过群之后这里会变成下拉');
+      /**
+       * 群一律从下拉选，**不让用户碰 openid**。
+       *
+       * 候选来自宿主的 `groups.list`：已配置的唤醒群 + 框架里**收到过消息的群**
+       * （后者带群名）。一个都没有时才退回输入框——那种情况下确实没东西可选，
+       * 提示要写清楚怎么让它出现。
+       */
+      const { row, ctl } = rowEl(f.label, groups.length
+        ? '从收到过消息的群里选，不用记 openid'
+        : '还没有收到过群消息。让群里有人说一句话，回到这里点右上角「刷新」就会出现');
       if (!groups.length) {
         const input = document.createElement('input');
         input.type = 'text';
-        input.placeholder = '群 openid（不是数字群号）';
+        input.placeholder = '群 openid（一般不用手填）';
         input.value = draft[key] || '';
         input.oninput = () => { draft[key] = input.value; };
         ctl.append(input);
@@ -482,12 +491,24 @@
       groups.forEach((g) => {
         const o = document.createElement('option');
         o.value = g.chatId;
-        /** 显示群名，openid 放进 title：32 位 openid 铺在下拉里太占地方 */
-        o.textContent = g.name ? g.name : g.chatId;
-        o.title = g.chatId;
+        /**
+         * 只显示群名。名字还没学到时给一句「未命名群 · 尾号」——
+         * 32 位 openid 铺在下拉里既看不完也记不住，本来就是要摆脱它的东西。
+         */
+        o.textContent = g.name ? g.name : `未命名群 · ${String(g.chatId).slice(-6)}`;
+        o.title = g.name ? g.name : '群名还没学到（群里有人说话之后会补上）';
         sel.append(o);
       });
-      sel.value = draft[key] || '';
+      /** 已保存的值不在候选里（换过机器人 / 群名字没学到）：补一项，别让下拉变空白 */
+      const cur = String(draft[key] || '');
+      if (cur && !groups.some((g) => g.chatId === cur)) {
+        const o = document.createElement('option');
+        o.value = cur;
+        o.textContent = `当前设置 · ${cur.slice(-6)}`;
+        o.title = '这一项不在候选里，可能机器人换过或群名还没学到';
+        sel.append(o);
+      }
+      sel.value = cur;
       sel.onchange = () => { draft[key] = sel.value; };
       ctl.append(sel);
       return row;
@@ -587,36 +608,50 @@
   /**
    * 「看画面」卡底部的 ffmpeg 状态。
    *
-   * 三点要求：
-   *   1. 状态来自 `meta.ffmpeg`，而 meta 是 `loadData()` 才拿到的 —— 所以
-   *      渲染时**还要能单独刷新**（`loadData` 末尾调 `syncVisionNote()`），
-   *      否则页面一开是「没找到 ffmpeg」，装好了也不变。
-   *   2. 没装时给一个「装到框架共享目录」的按钮：装在 `<数据目录>/deps`，
-   *      一份装了所有扩展都能用，扩展升级/卸载也不会删它。
-   *   3. 按钮用事件委托绑（见下面 `document.addEventListener`）——这张卡
-   *      是每次 `renderSettings()` 重建的，直接绑 onclick 重建一次就失效。
+   * 安装要跑十几秒到几分钟，**必须有进度可见**：只弹一个 toast 再消失，
+   * 用户只看到屏幕闪一下，会以为没点上。所以这里维护一份 `ffmpegJob`：
+   *   · running —— 按钮禁用，旁边一直显示「已等待 N 秒」；
+   *   · error —— 失败原因常驻在行里，带「重试」；
+   *   · 结束后用宿主返回的真实路径刷新，不等扩展写盘。
+   *
+   * 状态行要能**单独刷新**（`syncVisionNote`）：`meta` 是 `loadData()` 才有的，
+   * 只在 `renderSettings()` 画一次的话，页面一开永远是「没找到」。
    */
+  let ffmpegJob = null;
+
+  function ffmpegLine() {
+    const f = meta && meta.ffmpeg ? meta.ffmpeg : null;
+    if (ffmpegJob && ffmpegJob.state === 'running') {
+      const sec = Math.max(0, Math.round((Date.now() - ffmpegJob.startedAt) / 1000));
+      return { color: 'var(--muted)', text: `正在安装 ffmpeg（约 62 MB）… 已等待 ${sec} 秒，第一次要几分钟`, btn: 'none' };
+    }
+    if (ffmpegJob && ffmpegJob.state === 'error') {
+      return { color: 'var(--bad)', text: `装失败：${ffmpegJob.message || '未知原因'}`, btn: '重试' };
+    }
+    if (!f) return { color: 'var(--muted)', text: 'ffmpeg 状态还没读出来…', btn: 'none' };
+    if (f.ready) return { color: 'var(--ok)', text: `✓ 已找到 ffmpeg：${f.path || ''}`, btn: 'none' };
+    return {
+      color: 'var(--warn)',
+      text: `✗ 没找到 ffmpeg：抽帧会被跳过${f.dir ? `（共享目录：${f.dir}）` : ''}`,
+      btn: '装到框架共享目录（约 62 MB）',
+    };
+  }
+
   function fillVisionNote(box) {
     box.textContent = '';
-    const f = meta && meta.ffmpeg ? meta.ffmpeg : null;
-    if (!f) {
-      box.style.color = 'var(--muted)';
-      box.textContent = 'ffmpeg 状态还没读出来…';
-      return;
-    }
-    const ok = Boolean(f.ready);
-    box.style.color = ok ? 'var(--ok)' : 'var(--warn)';
-    box.append(document.createTextNode(ok
-      ? `✓ 已找到 ffmpeg：${f.path || ''}`
-      : `✗ 没找到 ffmpeg：抽帧会被跳过${f.dir ? `（共享目录：${f.dir}）` : ''}`));
-    if (!ok) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.id = 'act-ffmpeg';
-      btn.style.marginLeft = '10px';
-      btn.textContent = '装到框架共享目录（约 62 MB）';
-      box.append(btn);
-    }
+    const line = ffmpegLine();
+    box.style.color = line.color;
+    const span = document.createElement('span');
+    span.id = 'vision-text';
+    span.textContent = line.text;
+    box.append(span);
+    if (line.btn === 'none') return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.id = 'act-ffmpeg';
+    btn.style.marginLeft = '10px';
+    btn.textContent = line.btn;
+    box.append(btn);
   }
 
   function visionExtra() {
@@ -628,10 +663,61 @@
     return box;
   }
 
-  /** meta 更新后单独刷这一块，不重画整张设置卡（否则正在输入的数字会丢） */
+  /**
+   * meta 或安装状态变了就刷这一行。
+   *
+   * 安装中只改文字、不重建按钮——每秒重建一次会让按钮闪，也容易点错。
+   */
   function syncVisionNote() {
     const box = document.querySelector('#vision-note');
-    if (box) fillVisionNote(box);
+    if (!box) return;
+    if (ffmpegJob && ffmpegJob.state === 'running') {
+      const text = document.querySelector('#vision-text');
+      if (text) {
+        const sec = Math.max(0, Math.round((Date.now() - ffmpegJob.startedAt) / 1000));
+        text.textContent = `正在安装 ffmpeg（约 62 MB）… 已等待 ${sec} 秒，第一次要几分钟`;
+      }
+      return;
+    }
+    fillVisionNote(box);
+  }
+
+  /**
+   * 真正去装。
+   *
+   * 装在 `<数据目录>/deps`（框架共享目录）而不是扩展自己这里：一份装了所有
+   * 扩展都能用，扩展升级/卸载也不会把它删掉。
+   */
+  async function installFfmpeg() {
+    if (ffmpegJob && ffmpegJob.state === 'running') return;
+    ffmpegJob = { state: 'running', startedAt: Date.now(), message: '' };
+    syncVisionNote();
+    /** 每秒刷一次「已等待 N 秒」：这十几秒里界面必须有动静 */
+    const tick = setInterval(() => { syncVisionNote(); }, 1000);
+    let r = null;
+    try {
+      r = await op('sharedDeps.install', { name: '@ffmpeg-installer/ffmpeg' });
+    } catch (e) {
+      r = { ok: false, message: String((e && e.message) || e) };
+    } finally {
+      clearInterval(tick);
+    }
+    if (r && r.ok) {
+      /** 拿宿主的最新状态：ui-data.json 里还是安装前的快照 */
+      const st = await op('sharedDeps.status');
+      if (st && st.ok) {
+        meta = Object.assign({}, meta, {
+          ffmpeg: { ready: Boolean(st.ffmpeg), path: String(st.ffmpeg || ''), dir: String(st.dir || '') },
+        });
+      }
+      ffmpegJob = { state: 'done', startedAt: 0, message: '' };
+      toast(r.skipped ? '已经装好了' : `装好了：${String((st && st.ffmpeg) || '已就绪')}`);
+    } else {
+      ffmpegJob = { state: 'error', startedAt: 0, message: String((r && r.message) || '未知原因') };
+      toast('装失败：' + ffmpegJob.message);
+    }
+    syncVisionNote();
+    await loadData();
   }
 
   function renderSettings() {
@@ -1146,32 +1232,13 @@
    * 装到框架共享目录（`<数据目录>/deps`），不装扩展自己这里：
    * 一份装了所有扩展都能用，扩展升级/卸载也不会把它删掉。
    */
-  document.addEventListener('click', async (e) => {
-    const btn = e.target && e.target.id === 'act-ffmpeg' ? e.target : null;
-    if (!btn || btn.disabled) return;
-    btn.disabled = true;
-    btn.textContent = '安装中…（约 62 MB）';
-    toast('正在装到框架共享目录，第一次要几分钟');
-    const r = await op('sharedDeps.install', { name: '@ffmpeg-installer/ffmpeg' });
-    btn.disabled = false;
-    btn.textContent = '装到框架共享目录（约 62 MB）';
-    toast(r && r.ok ? (r.skipped ? '已经装好了' : '装好了，所有扩展都能用') : ('装失败：' + ((r && r.message) || '未知原因')));
-    if (r && r.ok) {
-      /**
-       * ui-data.json 里的 ffmpeg 状态是扩展上次写盘时的快照，刚装完还是旧的。
-       * 这里直接用宿主返回的最新状态盖掉，不必等扩展下次刷新——
-       * 否则会出现「明明装好了，状态格还说没装」。
-       */
-      const st = await op('sharedDeps.status');
-      if (st && st.ok) {
-        meta = Object.assign({}, meta, {
-          ffmpeg: { ready: Boolean(st.ffmpeg), path: String(st.ffmpeg || ''), dir: String(st.dir || '') },
-        });
-        /** 只刷那一行：重画整张设置卡会把正在输入的数字冲掉 */
-        syncVisionNote();
-      }
-    }
-    await loadData();
+  /**
+   * 装 ffmpeg 的按钮用**事件委托**：它长在「看画面」卡里，而那张卡是
+   * `renderSettings()` 每次重建的——直接 `$('#act-ffmpeg').onclick = ...`
+   * 只对当时那个节点有效，重建一次就失效（点了没反应）。
+   */
+  document.addEventListener('click', (e) => {
+    if (e.target && e.target.id === 'act-ffmpeg') void installFfmpeg();
   });
 
   $('#master').onclick = async () => {

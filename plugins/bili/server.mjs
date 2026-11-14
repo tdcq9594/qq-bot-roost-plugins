@@ -26,7 +26,7 @@ import { readConfig } from './lib/config.mjs';
 import { createFeed, createHostState } from './lib/feed.mjs';
 import { createShots } from './lib/shots.mjs';
 import { createProactiveClient } from './lib/proactive.mjs';
-import { createWriteApi } from './lib/write.mjs';
+import { createWriteApi, withMention } from './lib/write.mjs';
 import { createPush } from './lib/push.mjs';
 import { createUiActions } from './lib/ui-actions.mjs';
 import { resolveFfmpeg, ffmpegState, sharedDepsDir } from './lib/ffmpeg.mjs';
@@ -35,11 +35,12 @@ import { createLiveConfig } from './lib/live-config.mjs';
 import { createExtMemory } from './lib/memory.mjs';
 import { createPending } from './lib/pending.mjs';
 import { createBrowseSession, materialOfVideos } from './lib/ai-duty.mjs';
+import { createRepliedStore } from './lib/replied.mjs';
 import { createAutoShot } from './lib/auto-shot.mjs';
 import { bumpStats, readStats } from './lib/stats.mjs';
 import { countShots } from './lib/gallery.mjs';
 
-const SERVER = { name: 'bili', version: '0.11.2' };
+const SERVER = { name: 'bili', version: '0.11.3' };
 const log = (m) => process.stderr.write(`[bili] ${m}\n`);
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 
@@ -244,6 +245,9 @@ const autoShotTask = createAutoShot({ api, shots, ui, config: cfg, log });
  * 每轮一次模型调用，所以默认关；关着的时候结果会进 `pending` 队列，
  * 等她下次调 `feed` 工具时接手。
  */
+/** 「已经回过的评论」：每轮都会看到同一批「有人回了你」，不记下来会回十遍 */
+const replied = createRepliedStore({ dir: HERE, log });
+
 const aiDuty = createBrowseSession(process.env, { log });
 let aiBusy = false;
 
@@ -253,14 +257,29 @@ async function aiDecideTask(items) {
   if (!Array.isArray(items) || !items.length) return;
   aiBusy = true;
   try {
-    const r = await aiDuty.decide(materialOfVideos(items));
+    /**
+     * 有人回了她吗？
+     *
+     * 取最近的一批，**过滤掉她已经回过的**（`replied`）——B 站会把同一条回复
+     * 一直留在消息列表里，不去重就是每轮回一遍同一句话。
+     */
+    let replies = [];
+    try {
+      const list = await api.replyFeed({ limit: 15 });
+      replies = list.filter((x) => x.id && x.root && !replied.has(x.id));
+    } catch (e) {
+      log(`查「有人回了她」失败（不影响这一轮）：${e?.message ?? e}`);
+    }
+
+    const r = await aiDuty.decide(materialOfVideos(items), { replies });
     if (!r.ok) {
       log(`她这轮没看成：${r.why}`);
       /** 没看成也把材料留在待处理队列里，别丢 */
       pending.add(items);
       return;
     }
-    if (!r.items.length) {
+    /** 视频可以一条都不评论，但「有人回了她」仍然要处理，所以不能在这里直接 return */
+    if (!r.items.length && !(r.replies || []).length) {
       log('她这轮看完，什么都没想做');
       return;
     }
@@ -292,7 +311,7 @@ async function aiDecideTask(items) {
 
         if (d.comment && cfg.autoComment && aid) {
           try {
-            const w = await write.comment(aid, d.comment);
+            const w = await write.comment(aid, withMention(d.comment, cfg.ownerName));
             if (w?.ok && !w.dryRun) bumpStats(ui, { comments: 1 });
           } catch (e) {
             log(`她想评论 ${d.bvid} 但没发出去：${e?.message ?? e}`);
@@ -322,9 +341,36 @@ async function aiDecideTask(items) {
         await memory.remember(d.remember);
       }
     }
+    /**
+     * 回别人回她的评论。
+     *
+     * 只认**材料里给过的那几条 id**：模型有时会编 id，拿它对不上就直接跳过——
+     * 否则可能回到别的视频、别的楼层去。楼层信息（oid/root/parent）也全用
+     * 扩展这边查到的，绝不采信模型。
+     */
+    let replyN = 0;
+    for (const rep of r.replies || []) {
+      if (!cfg.autoComment) break;
+      const src = replies.find((x) => String(x.id) === String(rep.id));
+      if (!src) continue;
+      try {
+        const w = await write.comment(Number(src.oid) || 0, withMention(rep.text, cfg.ownerName), {
+          root: Number(src.root) || 0,
+          parent: Number(src.parent) || 0,
+        });
+        if (w?.ok) {
+          replied.add(src.id);
+          replyN += 1;
+          if (!w.dryRun) bumpStats(ui, { replies: 1 });
+        }
+      } catch (e) {
+        log(`她想回 ${src.id} 但没发出去：${e?.message ?? e}`);
+      }
+    }
+
     if (feelings.length) ui.setMeta({ ai: { lastAt: Date.now(), count: feelings.length, top: feelings[0].text, title: feelings[0].title } });
     log(`她看完了这一轮：${feelings.length} 句感受，${r.items.filter((x) => x.comment).length} 条评论，`
-      + `${r.items.filter((x) => x.danmaku).length} 条弹幕，${r.items.filter((x) => x.share).length} 条分享`);
+      + `${r.items.filter((x) => x.danmaku).length} 条弹幕，${replyN} 条回复，${r.items.filter((x) => x.share).length} 条分享`);
   } catch (e) {
     log(`她自己刷 B 站失败（不影响这一轮）：${e?.message ?? e}`);
   } finally {

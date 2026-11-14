@@ -32,16 +32,22 @@ const SECTION = `你是「刷 B 站」的值班员。每次会收到一批刚刷
 3. 要不要发一条弹幕。想发就写出那一句（口语、更短，不超过 20 字）；不想就留空。
 4. 要不要分享给主人。想分享就写一句你会对主人说的话；不想就留空。
 
-只输出一个 JSON 数组，每条一个对象，字段固定：
+只输出**一个 JSON 对象**，两个字段：
 
-[{"bvid":"BV号","feeling":"…","comment":"…","danmaku":"…","share":"…","remember":"…"}]
+{"items":[{"bvid":"BV号","feeling":"…","comment":"…","danmaku":"…","share":"…","remember":"…"}],"replies":[]}
+
+- items：每条视频一个对象，就是上面那五个字段。
+- replies：只在材料里出现「有人回了你」时才有内容，格式
+  [{"id":"材料里给的那个 id","text":"你要回的那一句"}]。没有就写空数组。
 
 规则：
-- 不想评论 / 不想发弹幕 / 不想分享就写 ""，**不要**省略字段，也**不要**编造填充。
+- 不想评论 / 不想发弹幕 / 不想分享就写空字符串，**不要**省略字段，也**不要**编造填充。
 - **没有模板可套**：这三个字段会原样发到 B 站，写什么就发什么。看过材料再写；没感觉就留空，没人要求你每条都说话。
 - \`remember\` 只写「以后还用得上的事」（比如主人的口味、你发现的规律），不是这条视频的内容摘要；没有就写 ""。
 - 不要输出 JSON 以外的任何内容，不要用 markdown 代码块包起来。
-- 拿不准的事宁可不做：评论和分享都是对外的，宁可少说一句。`;
+- 有人回了你的时候：只有对方说的是**真的在对你说**（问你、接你的话、夸你或骂你）才回；
+  只是路过、复读、或者你没什么可说的就别回。回复同样是公开发出去的。
+- 拿不准的事宁可不做：评论、弹幕、回复和分享都是对外的，宁可少说一句。`;
 
 /**
  * 与 `createProactiveClient` / `createExtMemory` 同一个形状：
@@ -109,18 +115,29 @@ export function createBrowseSession(env = process.env, {
      * @param {string} material 已经排好版的材料（标题/UP/播放/简介…）
      * @returns {Promise<{ok:boolean, items?:object[], why?:string}>}
      */
-    async decide(material) {
+    async decide(material, { replies = [] } = {}) {
       if (!base || !token) return { ok: false, why: '没有 ROOST_API_URL / ROOST_API_TOKEN（手动跑扩展时正常）' };
       try {
         await ensure();
+        /**
+         * 回复清单单独一段：它和「这一轮刷到的视频」是两件事，
+         * 混在一起模型会拿评论当视频材料去「感受」。
+         */
+        const list = Array.isArray(replies) ? replies.slice(0, 6) : [];
+        const replyBlock = list.length
+          ? `\n\n【有人回了你】\n${list.map((r, i) => (
+            `${i + 1}. ${r.name || '有人'} 在《${String(r.title || '').slice(0, 40)}》下回你：「${String(r.text || '').slice(0, 120)}」  id=${r.id}`
+          )).join('\n')}\n想回就写进 replies（id 用上面那个）；不想回就写空数组。`
+          : '';
         const j = await call('/agent.prompt', {
           sessionId: SESSION_ID,
-          text: `这一轮刷到的视频：\n\n${String(material || '').slice(0, 6000)}`,
+          text: `这一轮刷到的视频：\n\n${String(material || '').slice(0, 5600)}${replyBlock}`,
         }, { wait: true });
         turns += 1;
         /** 聊了太多轮就重建，别让历史把新材料挤出去 */
         if (turns >= 12) { ready = false; turns = 0; }
-        return { ok: true, items: parseDecisions(j?.text) };
+        const parsed = parsePayload(j?.text);
+        return { ok: true, items: parsed.items, replies: parsed.replies };
       } catch (e) {
         const status = Number(e?.status) || 0;
         /**
@@ -149,22 +166,44 @@ export function createBrowseSession(env = process.env, {
 }
 
 /**
- * 从她的回复里抠出 JSON 数组。
+ * 从她的回复里抠出 JSON。
  *
- * 模型偶尔会包一层 ```json、或者在前面写一句「好的」——所以先找第一个
- * `[` 到最后一个 `]`，再解析。解不出来就是**什么都不做**，绝不能猜。
+ * 期望是 `{ items: [...], replies: [...] }`，但模型有时还是给一个纯数组
+ * （旧提示词的习惯），两种都认：
+ *   · 对象 → 分别取 items / replies；
+ *   · 数组 → 整个当 items。
+ *
+ * 解析失败一律返回空，**绝不猜**：她的每一句话都可能真的发到 B 站上。
  */
-export function parseDecisions(text) {
-  const raw = String(text ?? '');
-  const start = raw.indexOf('[');
-  const end = raw.lastIndexOf(']');
-  if (start < 0 || end <= start) return [];
-  let arr;
-  try {
-    arr = JSON.parse(raw.slice(start, end + 1));
-  } catch {
-    return [];
+function extractJson(raw) {
+  const s = String(raw ?? '');
+  const oStart = s.indexOf('{');
+  const aStart = s.indexOf('[');
+  /**
+   * 按**先出现的那个括号**判断形态。
+   *
+   * 不能「先试对象再试数组」：纯数组 `[{"bvid":…}]` 里也有 `{`，
+   * 从第一个 `{` 切到最后一个 `}` 能解析成功，于是整段被当成一个对象，
+   * `items` 取不到 —— 老格式（数组）会静默变成「这轮她什么都没想做」。
+   */
+  if (aStart >= 0 && (oStart < 0 || aStart < oStart)) {
+    const aEnd = s.lastIndexOf(']');
+    if (aEnd > aStart) {
+      try { return JSON.parse(s.slice(aStart, aEnd + 1)); } catch { return null; }
+    }
+    return null;
   }
+  if (oStart >= 0) {
+    const oEnd = s.lastIndexOf('}');
+    if (oEnd > oStart) {
+      try { return JSON.parse(s.slice(oStart, oEnd + 1)); } catch { return null; }
+    }
+  }
+  return null;
+}
+
+/** 视频决策：只认 BV 号合法、且至少表达了一件事的 */
+function parseItems(arr) {
   if (!Array.isArray(arr)) return [];
   return arr
     .filter((x) => x && typeof x === 'object')
@@ -178,6 +217,30 @@ export function parseDecisions(text) {
     }))
     .filter((x) => /^BV[0-9A-Za-z]{10}$/.test(x.bvid) && (x.feeling || x.comment || x.danmaku || x.share || x.remember))
     .slice(0, 10);
+}
+
+/** 回复：id 必须是数字串，text 不能空 */
+export function parseReplies(list) {
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((x) => x && typeof x === 'object')
+    .map((x) => ({ id: String(x.id ?? '').trim(), text: String(x.text ?? '').trim().slice(0, 200) }))
+    .filter((x) => /^\d{1,20}$/.test(x.id) && x.text)
+    .slice(0, 5);
+}
+
+export function parsePayload(text) {
+  const j = extractJson(text);
+  if (Array.isArray(j)) return { items: parseItems(j), replies: [] };
+  if (j && typeof j === 'object') {
+    return { items: parseItems(j.items), replies: parseReplies(j.replies) };
+  }
+  return { items: [], replies: [] };
+}
+
+/** 只要视频决策时用这个（兼容老调用与测试） */
+export function parseDecisions(text) {
+  return parsePayload(text).items;
 }
 
 /** 给独立会话的材料：一行一条，够她判断，又不至于把上下文撑爆 */

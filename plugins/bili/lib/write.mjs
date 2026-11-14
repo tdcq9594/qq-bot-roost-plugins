@@ -31,6 +31,30 @@ export const PAUSE_CODES = {
 
 const dayOf = (t) => new Date(t).toDateString();
 
+/**
+ * 评论末尾 @ 主人。
+ *
+ * B 站的 @ 只是**文本**，不会真的给对方发提醒（那是客户端行为），所以这里
+ * 只是「让人看得见我提到了你」。已经写过就不重复加；评论上限 200 字，
+ * 整体截断而不是把 @ 截掉。
+ *
+ * @param {string} text
+ * @param {string} name 主人的 B 站昵称；空 = 不加
+ */
+export function withMention(text, name) {
+  const t = String(text || '').trim();
+  const n = String(name || '').trim();
+  if (!n || !t) return t.slice(0, 200);
+  if (t.includes(`@${n}`)) return t.slice(0, 200);
+  /**
+   * 先把正文裁到「留得下 @」的长度再拼——直接整条 slice 会把 @ 截掉，
+   * 那就白加了（用户看到的是一句没有提到任何人的话）。
+   */
+  const suffix = ` @${n}`;
+  const room = Math.max(0, 200 - suffix.length);
+  return `${t.slice(0, room)}${suffix}`;
+}
+
 export function createWriteApi({
   getCookie = () => '', fetchImpl = fetch, dryRunOf = () => true,
   log = () => {}, now = () => Date.now(), timeoutMs = 12000,
