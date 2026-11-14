@@ -804,7 +804,10 @@
     const tag = document.querySelector('#pending');
     if (tag) {
       tag.hidden = false;
-      tag.textContent = ok ? '已提交，等扩展处理' : '没提交上：' + msg;
+      /** 进程内是同步执行完才返回的，说「等扩展处理」会让人以为还没跑 */
+      tag.textContent = ok
+        ? (r && r.mode === 'inprocess' ? '已执行' : '已提交，等扩展处理')
+        : '没提交上：' + msg;
     }
     if (!ok) {
       const stamp = document.querySelector('#stamp');

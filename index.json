@@ -84,7 +84,7 @@
       "kind": "dsh-extension",
       "runtime": "mcp",
       "path": "plugins/bili",
-      "sha256": "97a7703b59638574aeefcf24738818a0f9cda147e6b285c417b1517a923bcaf2"
+      "sha256": "e58b16da0acd7f5dbfc87ae4ccbceb5d87bfdce57180066a07246c67d85af1a5"
     },
     {
       "id": "comfy-draw",
