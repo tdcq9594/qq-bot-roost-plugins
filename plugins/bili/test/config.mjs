@@ -9,6 +9,7 @@
  * CI 里不能依赖 B 站可用性；而「配置有没有被读到」这件事在 toolbox 边界就看得清。
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { createToolbox } from '../lib/tools.mjs';
 import { readConfig } from '../lib/config.mjs';
@@ -125,16 +126,19 @@ assert.equal(c1.writeDryRun, false, '用户显式关掉试运行才生效');
 assert.equal(c1.pushPerFeed, 3);
 console.log('✓ 0.4 开关默认值与覆盖');
 
-console.log(fail.length ? `\n✗ ${fail.length} 项未通过` : '\n✓ 全部通过');
-process.exit(fail.length ? 1 : 0);
-
-test('清单的配置字段不超过 32 个（宿主 validateManifest 的硬上限）', () => {
+// ---- 5. 清单本身要能被宿主接受 ----
+/**
+ * 宿主 `validateManifest` 的硬上限：**config 最多 32 个字段**。
+ * 超了整份清单判定无效 → 扩展从已装列表和左侧导航一起消失，
+ * 面板只显示「还没有东西」（0.11.0 用 35 个字段撞过）。
+ * 加配置项之前先想清楚能不能和已有的合并。
+ */
+{
   const j = JSON.parse(readFileSync(new URL('../plugin.json', import.meta.url), 'utf8'));
   const n = Object.keys(j.config || {}).length;
-  /**
-   * 超过 32 宿主会直接判清单无效：扩展从已装列表和左侧导航**一起消失**，
-   * 面板只显示「还没有东西」。0.11.0 就是这么丢的（35 个字段）。
-   * 加配置项前先想清楚要不要合并。
-   */
-  assert.ok(n <= 32, `config 有 ${n} 个字段，超过宿主上限 32`);
-});
+  check(n <= 32, `config 字段数 ${n} ≤ 32（宿主上限）`);
+  check(Object.keys(j.config || {}).length === n && !!j.ui?.nav, '清单里有左侧导航声明');
+}
+
+console.log(fail.length ? `\n✗ ${fail.length} 项未通过` : '\n✓ 全部通过');
+process.exit(fail.length ? 1 : 0);
