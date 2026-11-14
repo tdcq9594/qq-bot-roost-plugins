@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>刷 B 站</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: transparent;
+    --fg: #1c1c1e;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+    --card: #fafafa;
+    --accent: #2f6fed;
+    --ok: #1f8a4c;
+    --warn: #b45309;
+    --danger: #b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fg: #e6e6e6;
+      --muted: #9aa0a6;
+      --line: #33383f;
+      --card: #1b1e23;
+      --accent: #6f9dff;
+      --ok: #4cc38a;
+      --warn: #e0a458;
+      --danger: #f07171;
+    }
+    body { background: #14171b; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 12px 14px 28px;
+    font: 13px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    color: var(--fg); background: var(--bg);
+  }
+  h1 { font-size: 15px; margin: 0 0 2px; }
+  h2 { font-size: 12.5px; margin: 0 0 8px; color: var(--muted); font-weight: 600; letter-spacing: .02em; }
+  .sub { color: var(--muted); font-size: 11.5px; }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
+  .card {
+    border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 14px; margin-bottom: 12px; background: var(--card);
+  }
+  button {
+    font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 7px;
+    border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { opacity: .9; color: #fff; }
+  button:disabled { opacity: .45; cursor: default; }
+  input[type=text], input[type=password], input[type=number], select {
+    font: inherit; font-size: 12px; width: 100%; padding: 5px 8px;
+    border: 1px solid var(--line); border-radius: 6px;
+    background: transparent; color: var(--fg);
+  }
+  input:focus, select:focus { outline: 1px solid var(--accent); }
+  .row { margin-top: 10px; }
+  .row > label { display: block; font-size: 11.5px; margin-bottom: 3px; }
+  .hint { color: var(--muted); font-size: 11px; margin-left: 6px; }
+  .check { display: flex; align-items: center; gap: 8px; margin-top: 10px; cursor: pointer; }
+  .check span { font-size: 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(238px, 1fr)); gap: 10px; }
+  .video { border: 1px solid var(--line); border-radius: 9px; overflow: hidden; display: flex; flex-direction: column; }
+  .video img { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; background: #0001; }
+  .video .body { padding: 8px 9px 10px; }
+  .video .title { font-weight: 600; font-size: 12.5px; line-height: 1.45; margin-bottom: 4px; }
+  .video .meta { color: var(--muted); font-size: 11px; }
+  .video a { color: var(--accent); text-decoration: none; font-size: 11.5px; }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 99px; font-size: 10.5px; border: 1px solid var(--line); color: var(--muted); }
+  .toast {
+    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+    background: #111c; color: #fff; padding: 8px 16px; border-radius: 8px;
+    font-size: 12px; opacity: 0; pointer-events: none; transition: opacity .18s; max-width: 80%;
+  }
+  .toast.show { opacity: 1; }
+  .err { color: var(--danger); font-size: 11.5px; margin-top: 6px; }
+  .empty { color: var(--muted); font-size: 12px; padding: 18px 0; text-align: center; }
+  .split { display: flex; gap: 8px; align-items: center; }
+</style>
+</head>
+<body>
+  <h1>刷 B 站</h1>
+  <div class="sub" id="status">读着…</div>
+
+  <div class="bar">
+    <button class="primary" id="act-refresh">刷新热门</button>
+    <button id="act-feed">现在刷一轮</button>
+    <button id="act-login">检查登录</button>
+  </div>
+
+  <div class="card" id="settings-card">
+    <h2>设置</h2>
+    <div id="settings"><div class="empty">读着…</div></div>
+    <div class="bar" style="margin-bottom:0">
+      <button class="primary" id="save">保存</button>
+      <span class="hint">Cookie 只存宿主 secrets，保存后不回显明文；其它项保存后扩展会重启一次。</span>
+    </div>
+    <div class="err" id="save-err"></div>
+  </div>
+
+  <div class="card">
+    <h2>热门</h2>
+    <div class="grid" id="videos"><div class="empty">读着…</div></div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  const ID = 'bili';
+  const API = '/roost/api';
+  const $ = (s) => document.querySelector(s);
+
+  let cfg = null;           // { spec, values, secretSet }
+  let draft = {};           // 非敏感值
+  let secrets = {};         // 用户改过的 secret
+  let busy = false;
+
+  const toast = (msg) => {
+    const t = $('#toast');
+    t.textContent = String(msg || '');
+    t.classList.add('show');
+    clearTimeout(t._h);
+    t._h = setTimeout(() => t.classList.remove('show'), 2200);
+  };
+
+  async function op(name, arg) {
+    try {
+      const r = await fetch(`${API}/quick`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ op: name, arg: arg || {}, chatId: '' }),
+      });
+      const j = await r.json().catch(() => null);
+      return j || { ok: false, message: `HTTP ${r.status}` };
+    } catch (e) {
+      return { ok: false, message: '连不上面板：' + (e && e.message ? e.message : e) };
+    }
+  }
+
+  /** 分组顺序固定：登录 → 定时刷 → 推送 → 写动作 → 其它，未列出的进「其它」 */
+  const GROUPS = [
+    { title: '登录', keys: ['cookie'] },
+    { title: '定时刷', keys: ['feedIntervalMin', 'feedActiveHours'] },
+    { title: '主动推送', keys: ['pushOwner', 'pushGroup', 'pushGroupTarget', 'pushApproval', 'pushMinPlay', 'pushDailyLimit'] },
+    { title: '写动作（默认试运行）', keys: ['autoShot', 'autoComment', 'autoLike', 'autoDanmaku', 'writeDryRun', 'writeDailyLimit', 'commentTemplate', 'danmakuTemplate'] },
+    { title: '其它', keys: ['shotKeep', 'shotDir', 'shotWidth', 'ffmpegPath', 'hotPoolSize', 'defaultLimit'] },
+  ];
+
+  function field(spec, key) {
+    const f = spec.find((x) => x.key === key);
+    if (!f) return null;
+    const wrap = document.createElement('div');
+    wrap.className = 'row';
+    if (f.type === 'boolean') {
+      const lab = document.createElement('label');
+      lab.className = 'check';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = draft[key] === true;
+      cb.onchange = () => { draft[key] = cb.checked; };
+      const span = document.createElement('span');
+      span.textContent = f.label;
+      lab.append(cb, span);
+      if (f.hint) {
+        const h = document.createElement('span');
+        h.className = 'hint';
+        h.textContent = f.hint;
+        lab.append(h);
+      }
+      return lab;
+    }
+    const label = document.createElement('label');
+    label.textContent = f.label;
+    if (f.hint) {
+      const h = document.createElement('span');
+      h.className = 'hint';
+      h.textContent = f.hint;
+      label.append(h);
+    }
+    wrap.append(label);
+    if (f.secret) {
+      const input = document.createElement('input');
+      input.type = 'password';
+      input.autocomplete = 'off';
+      const isSet = Boolean(cfg && cfg.secretSet && cfg.secretSet[key]);
+      input.placeholder = isSet ? '已设置（留空不改）' : '未设置';
+      input.value = secrets[key] === undefined ? '' : secrets[key];
+      input.oninput = () => { secrets[key] = input.value; };
+      wrap.append(input);
+      return wrap;
+    }
+    if (f.type === 'select') {
+      const sel = document.createElement('select');
+      (f.options || []).forEach((o) => {
+        const v = typeof o === 'object' ? o.value : o;
+        const l = typeof o === 'object' ? (o.label || o.value) : o;
+        const opt = document.createElement('option');
+        opt.value = String(v); opt.textContent = String(l);
+        sel.append(opt);
+      });
+      sel.value = draft[key] == null ? '' : String(draft[key]);
+      sel.onchange = () => { draft[key] = sel.value; };
+      wrap.append(sel);
+      return wrap;
+    }
+    const input = document.createElement('input');
+    input.type = f.type === 'number' ? 'number' : 'text';
+    if (f.min !== undefined) input.min = String(f.min);
+    if (f.max !== undefined) input.max = String(f.max);
+    if (f.placeholder) input.placeholder = f.placeholder;
+    input.value = draft[key] == null ? '' : String(draft[key]);
+    input.oninput = () => {
+      draft[key] = f.type === 'number'
+        ? (input.value === '' ? '' : Number(input.value))
+        : input.value;
+    };
+    wrap.append(input);
+    return wrap;
+  }
+
+  function renderSettings() {
+    const box = $('#settings');
+    box.textContent = '';
+    if (!cfg || !cfg.spec || !cfg.spec.length) {
+      box.innerHTML = '<div class="empty">这个扩展没有声明设置项</div>';
+      return;
+    }
+    const spec = cfg.spec;
+    const used = new Set();
+    GROUPS.forEach((g) => {
+      const keys = g.keys.filter((k) => spec.some((f) => f.key === k));
+      if (!keys.length) return;
+      const title = document.createElement('h2');
+      title.textContent = g.title;
+      title.style.marginTop = '14px';
+      box.append(title);
+      keys.forEach((k) => {
+        used.add(k);
+        const el = field(spec, k);
+        if (el) box.append(el);
+      });
+    });
+    const rest = spec.filter((f) => !used.has(f.key));
+    if (rest.length) {
+      const title = document.createElement('h2');
+      title.textContent = '其它';
+      title.style.marginTop = '14px';
+      box.append(title);
+      rest.forEach((f) => {
+        const el = field(spec, f.key);
+        if (el) box.append(el);
+      });
+    }
+  }
+
+  async function loadConfig() {
+    const r = await op('extensions.config.get', { id: ID });
+    if (!r || r.ok === false) {
+      $('#settings').innerHTML = '<div class="empty">读不到设置：' + String(r && r.message || '未知原因') + '</div>';
+      return;
+    }
+    cfg = r;
+    draft = Object.assign({}, r.values || {});
+    secrets = {};
+    renderSettings();
+  }
+
+  async function save() {
+    if (busy) return;
+    busy = true;
+    $('#save').disabled = true;
+    $('#save-err').textContent = '';
+    const payloadSecrets = {};
+    Object.keys(secrets).forEach((k) => { payloadSecrets[k] = secrets[k]; });
+    const r = await op('extensions.config.save', { id: ID, values: draft, secrets: payloadSecrets });
+    busy = false;
+    $('#save').disabled = false;
+    if (!r || r.ok === false) {
+      $('#save-err').textContent = String(r && r.message || '保存失败');
+      return;
+    }
+    toast(r.message || '已保存');
+    await loadConfig();
+    await loadData();
+  }
+
+  async function loadData() {
+    try {
+      const r = await fetch(`${API}/extensions/ui/data?id=${encodeURIComponent(ID)}`);
+      const j = await r.json();
+      const box = $('#videos');
+      box.textContent = '';
+      const rows = Array.isArray(j && j.rows) ? j.rows : [];
+      if (!rows.length) {
+        box.innerHTML = '<div class="empty">还没有数据。点「刷新热门」试试。</div>';
+      } else {
+        rows.forEach((v) => {
+          const card = document.createElement('div');
+          card.className = 'video';
+          const img = document.createElement('img');
+          img.loading = 'lazy';
+          img.alt = '';
+          if (typeof v.cover === 'string' && /^https?:\/\//i.test(v.cover)) img.src = v.cover;
+          const body = document.createElement('div');
+          body.className = 'body';
+          const title = document.createElement('div');
+          title.className = 'title';
+          title.textContent = v.title || '';
+          const meta = document.createElement('div');
+          meta.className = 'meta';
+          meta.textContent = [v.author, v.playText, v.durText, v.area].filter(Boolean).join(' · ');
+          body.append(title, meta);
+          if (typeof v.url === 'string' && /^https?:\/\//i.test(v.url)) {
+            const a = document.createElement('a');
+            a.href = v.url; a.target = '_blank'; a.rel = 'noreferrer noopener';
+            a.textContent = '在 B 站打开';
+            body.append(a);
+          }
+          card.append(img, body);
+          box.append(card);
+        });
+      }
+      const when = j && j.updatedAt ? new Date(j.updatedAt).toLocaleString() : '还没更新过';
+      $('#status').textContent = `热门更新于 ${when}`;
+    } catch (e) {
+      $('#status').textContent = '读不到数据：' + (e && e.message ? e.message : e);
+    }
+  }
+
+  async function act(name) {
+    const r = await op('extensions.ui.action', { id: ID, action: name });
+    toast(r && r.message ? r.message : (r && r.ok ? '已交给扩展' : '没交上'));
+    if (r && r.ok) {
+      /** 动作是扩展轮询执行，给它两秒再刷新；没变就让人再点一次 */
+      setTimeout(() => { loadData(); }, 2200);
+    }
+  }
+
+  $('#act-refresh').onclick = () => act('refresh_hot');
+  $('#act-feed').onclick = () => act('feed_now');
+  $('#act-login').onclick = () => act('check_login');
+  $('#save').onclick = save;
+
+  loadConfig();
+  loadData();
+})();
+</script>
+</body>
+</html>

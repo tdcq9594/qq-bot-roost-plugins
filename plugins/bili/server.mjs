@@ -28,8 +28,9 @@ import { createShots } from './lib/shots.mjs';
 import { createProactiveClient } from './lib/proactive.mjs';
 import { createWriteApi } from './lib/write.mjs';
 import { createPush } from './lib/push.mjs';
+import { createUiActions } from './lib/ui-actions.mjs';
 
-const SERVER = { name: 'bili', version: '0.4.0' };
+const SERVER = { name: 'bili', version: '0.5.0' };
 const log = (m) => process.stderr.write(`[bili] ${m}\n`);
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 
@@ -91,6 +92,34 @@ const shots = createShots({
 
 push = createPush({ cfg, api, shots, submit, write, log });
 box = createToolbox({ api, log, config: cfg, feed, shots, push });
+
+/**
+ * 面板按钮的动作处理（0.5）。
+ *
+ * 宿主只把动作名排队，这里取走执行；动作名与 `plugin.json` 的 `ui.actions`
+ * 一一对应。取动作是读即消费 —— 失败一次不重放（「现在刷一轮」重试三次
+ * 就是连刷三轮）。
+ */
+const uiActions = createUiActions({
+  env: process.env,
+  log,
+  handlers: {
+    async refresh_hot() {
+      await box.call('hot', { limit: 8 });
+      const pool = box.hotPool();
+      ui.fromPool(pool);
+      feed.seed(pool, '手动刷新');
+    },
+    async feed_now() {
+      const r = await feed.tick('手动');
+      if (!r?.ok) log(`手动刷一轮没有完成：${r?.why ?? '未知原因'}`);
+    },
+    async check_login() {
+      const a = await api.account();
+      log(a?.isLogin ? `登录态正常：${a.uname}` : '没有登录（只能看，不能评论）');
+    },
+  },
+});
 
 function ok(id, result) {
   send({ jsonrpc: '2.0', id, result });
@@ -213,6 +242,8 @@ function serve() {
   // 宿主关掉管道时别抛 EPIPE 栈。
   process.stdout.on('error', () => process.exit(0));
   if (feed.enabled) feed.start();
+  /** 面板按钮的轮询：没有宿主地址/令牌时（手动 --call）自动不启动 */
+  if (uiActions.start()) log('面板动作通道已接上（每 2 秒取一次）');
   log(`就绪（${box.tools.length} 个工具，定时刷${feed.enabled ? `每 ${feed.minutes} 分钟` : '关闭'}）`);
 
   /**
