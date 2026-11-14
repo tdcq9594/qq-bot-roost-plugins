@@ -51,10 +51,19 @@ export class BiliError extends Error {
   }
 }
 
-/** B 站很多图地址写成 `//i0.hdslb.com/…`；官方卡片和 ffmpeg 都要完整 https。 */
+/**
+ * B 站很多图地址写成 `//i0.hdslb.com/…`，热门榜 `popular` 的 `pic` 更干脆
+ * 直接给 `http://i0.hdslb.com/…`；官方图文卡片和 ffmpeg 都只收完整 https。
+ *
+ * 以前只补了协议相对的 `//`，`http://` 原样放过去 → `cardOf()` 的
+ * `isHttps()` 当场拒，面板上「现在分享」在扩展内部就失败了，请求根本
+ * 到不了框架，表现就是「点了没反应、roost 日志里也没有消息」。
+ * B 站 CDN 全站支持 https，这里统一升级。
+ */
 export function httpsOf(u) {
   const s = String(u ?? '').trim();
   if (s.startsWith('//')) return `https:${s}`;
+  if (/^http:\/\//i.test(s)) return `https://${s.slice(7)}`;
   return s;
 }
 

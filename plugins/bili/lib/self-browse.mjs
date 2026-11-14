@@ -19,7 +19,8 @@
  * 用户明确按了按钮，就该真的开会话，别让一个默认关的开关把按钮变哑。
  */
 
-import { createBrowseSession, materialOfVideos } from './ai-duty.mjs';
+import { createBrowseSession, materialOfVideos, shareMaterial } from './ai-duty.mjs';
+import { cardOf } from './card.mjs';
 import { lookAt } from './vision.mjs';
 import { withMention } from './write.mjs';
 
@@ -37,6 +38,8 @@ import { withMention } from './write.mjs';
  * @param {(patch: object) => void} [o.bump] 今日计数（`bumpStats` 的包装）
  * @param {(patch: object) => void} [o.setMeta] 面板状态
  * @param {object} [o.env] 读 `ROOST_API_URL` / `ROOST_API_TOKEN`
+ * @param {Function} [o.systemTurn] 宿主内部系统会话轮次；有它就不走 HTTP 三步
+ * @param {object} [o.roostLink] 宿主直连协议客户端；分享优先发官方图文卡片
  * @param {Function} [o.log]
  */
 export function createSelfBrowse({
@@ -52,9 +55,11 @@ export function createSelfBrowse({
   bump = () => {},
   setMeta = () => {},
   env = process.env,
+  systemTurn = null,
+  roostLink = null,
   log = () => {},
 } = {}) {
-  const session = createBrowseSession(env, { log });
+  const session = createBrowseSession(env, { log, systemTurn });
   let busy = false;
 
   /** 取「有人回了她」的清单，去掉已经回过的（B 站会一直留着同一条） */
@@ -180,15 +185,52 @@ export function createSelfBrowse({
           }
         }
 
-        /** 分享：她写的那句直接当素材投，宿主会让主人看到 */
+        /**
+         * 分享 = 一张官方图文卡片直发主人。
+         *
+         * 以前把她写的那句话当「素材」投给主动搭话模型改写：模型既看不到
+         * 视频，素材里也没有链接，最后只发出一句「刷到个…要不要看看」，
+         * 主人问链接时她只能说「我这儿只剩个标题」。卡片四段（标题/描述/
+         * 跳转/封面）扩展手里全有，模型一个字都不用凑；她那句话写进卡片
+         * 描述，链接由 `card.url` 带着，点一下就能开。
+         */
         if (d.share) {
-          try {
-            await submit.submit({ cause: '她刷 B 站看到的', key: `${d.bvid}|owner`, text: d.share, target: 'owner' });
+          let shared = false;
+          if (roostLink?.available) {
+            try {
+              const { card } = cardOf(v);
+              /**
+               * 官方 msg_type=8 不带正文，宿主 `narrowMsgSend` 也会把 content
+               * 清空。她写的那句话改成卡片描述：不额外多占一条主动额度，
+               * 主人点开卡片前就能看见，链接仍在 card.url 里。
+               */
+              if (d.share) card.description = String(d.share).slice(0, 200);
+              const r = await roostLink.sendCard(card);
+              if (r?.ok) shared = true;
+              else log(`她想分享 ${d.bvid} 但卡片没发出去：${String(r?.why || '未知原因')}`);
+            } catch (e) {
+              log(`她想分享 ${d.bvid} 但卡片拼不出来：${e?.message ?? e}`);
+            }
+          }
+          /** 没直连能力（MCP 旧宿主 / 手动跑）才回退素材通道，且素材必须带链接 */
+          if (!shared) {
+            try {
+              const r = await submit.submit({
+                cause: '她刷 B 站看到的',
+                key: `${d.bvid}|owner`,
+                text: shareMaterial(v, d.share),
+                target: 'owner',
+              });
+              shared = Boolean(r?.ok);
+              if (!shared) log(`她想分享 ${d.bvid} 但素材没投出去：${String(r?.why || '未知原因')}`);
+            } catch (e) {
+              log(`她想分享 ${d.bvid} 但素材通道失败：${e?.message ?? e}`);
+            }
+          }
+          if (shared) {
             bump({ shares: 1 });
             acts.push('share');
             tally.share += 1;
-          } catch (e) {
-            log(`她想分享 ${d.bvid} 但没投出去：${e?.message ?? e}`);
           }
         }
         if (d.remember && memory?.available) {

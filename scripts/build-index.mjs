@@ -83,6 +83,17 @@ async function readMeta(dir) {
       tags: Array.isArray(raw.tags) ? raw.tags : [],
       frameworkVersion: raw.frameworkVersion ?? '',
       ...(isExt ? { kind: 'dsh-extension', runtime: 'mcp' } : { runtime: raw.runtime ?? 'python' }),
+      /**
+       * 权限分级的**原始声明**（2026-11-14）。
+       *
+       * 只把作者要的 scope / 要接管的内置能力 / 运行形态写进索引，等级本身
+       * 由宿主 `ext-tier.js` 实时推导 —— 索引里存一个 `permissionTier` 等于
+       * 让作者自己填等级，签名也防不住虚标。这些字段受 index.json.sig 保护，
+       * 市场卡片和安装确认都从它们算风险。
+       */
+      ...(isExt && Array.isArray(raw.scopes) ? { scopes: raw.scopes.map(String) } : {}),
+      ...(isExt && Array.isArray(raw.overrides) ? { overrides: raw.overrides.map(String) } : {}),
+      ...(isExt && typeof raw.form === 'string' && raw.form ? { form: raw.form } : {}),
     };
   }
 
@@ -129,7 +140,11 @@ async function readMeta(dir) {
  * 框架侧一直当扩展跳过。存量插件没有 `kind`，`merged` 不写入，
  * 产出与之前逐字节一致。
  */
-const STRUCT_FIELDS = ['id', 'version', 'path', 'runtime', 'sha256', 'frameworkVersion', 'kind'];
+const STRUCT_FIELDS = [
+  'id', 'version', 'path', 'runtime', 'sha256', 'frameworkVersion', 'kind',
+  /** 权限声明：改了 plugin.json 忘了重建索引，--check 必须能拦住 */
+  'scopes', 'overrides', 'form',
+];
 
 /**
  * 插件分级。
@@ -233,6 +248,10 @@ async function build() {
        */
       if (p.kind === undefined) delete out.kind;
       if (!p.version) delete out.version;
+      /** 权限声明同样不能继承旧值：扩展删掉一个敏感 scope 必须能降档 */
+      for (const k of ['scopes', 'overrides', 'form']) {
+        if (p[k] === undefined) delete out[k];
+      }
       return out;
     })
     .map((p) => {
@@ -292,7 +311,10 @@ function diff(prev, next) {
     for (const k of [...STRUCT_FIELDS, 'verified']) {
       const a = old[k] ?? '';
       const b = p[k] ?? '';
-      if (String(a) !== String(b)) problems.push(`${p.id}: ${k} 索引里是 ${a || '(空)'}，实际是 ${b || '(空)'}`);
+      /** scopes / overrides 是数组，String() 会把 ['a','b'] 和 ['a,b'] 混为一谈 */
+      const sa = typeof a === 'object' ? JSON.stringify(a) : String(a);
+      const sb = typeof b === 'object' ? JSON.stringify(b) : String(b);
+      if (sa !== sb) problems.push(`${p.id}: ${k} 索引里是 ${sa || '(空)'}，实际是 ${sb || '(空)'}`);
     }
   }
   for (const id of byId.keys()) problems.push(`${id}: 索引里有，但 plugins/ 下已经没有这个目录`);

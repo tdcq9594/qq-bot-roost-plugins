@@ -56,7 +56,7 @@ const bvOf = (s) => {
  * @param {{ config?: object, secrets?: object, log?: Function, id?: string }} ctx
  * @returns {Record<string, (payload?: object) => Promise<{ok:boolean,message:string,data?:any}>>}
  */
-export function createActions({ config = {}, secrets = {}, env = {}, log = () => {} } = {}) {
+export function createActions({ config = {}, secrets = {}, env = {}, log = () => {}, systemTurn = null } = {}) {
   /**
    * Cookie 有两个来源：
    *   · 面板「B 站 Cookie」存的 secret（宿主在这里把明文递进来了）；
@@ -161,16 +161,18 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
   /**
    * 她自己看这一轮 —— **和定时刷同一个实现**。
    *
-   * 宿主会在每次点击前把 `/v1` 的地址与令牌原地塞进 `env`
-   * （见 `host.js` 的 `inprocessApiEnv`），所以这里能建独立会话。
-   * 拿不到令牌时 `available` 是 false，`run()` 会明确回一句
+   * 宿主还会在进程内注入 `systemTurn`（aurabot `runSystemTurn` 的对等实现）：
+   * 有它就直接跑宿主内部的系统会话，窗口会出现在 DSH 侧栏，模型与超时
+   * 走私聊那条已验证的链路；没有才回退 `/v1/agent.*` 三步 HTTP。
+   * 拿不到两者时 `available` 是 false，`run()` 会明确回一句
    * 「没有 API 令牌」，不会静默变成「没反应」。
    */
   const selfBrowse = createSelfBrowse({
-    api, shots, cfg: config, write, submit: proactive, memory, replied, history, pending,
+    api, shots, cfg: config, write, submit: proactive, roostLink, memory, replied, history, pending,
     bump: (patch) => bumpStats(ui, patch),
     setMeta: (patch) => setMeta(patch),
     env: env || process.env,
+    systemTurn,
     log,
   });
 
@@ -405,12 +407,19 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
       }
       if (!v) return { ok: false, message: '还没有视频可分享，先点「现在刷一轮」' };
 
-      /** 卡片四个字段都用现成数据拼；没封面的视频发不了官方图文卡片 */
-      let card;
-      try {
-        ({ card } = cardOf(v));
-      } catch (e) {
-        return { ok: false, message: '这张卡片拼不出来：' + (e?.message ?? e) };
+      /**
+       * 卡片四个字段都用现成数据拼。第一条缺 https 封面 / BV 号不合法时
+       * 顺着往 newer→older 找下一条，别让某一脏数据把整个按钮变哑 ——
+       * 以前这里只试第一条，B 站热门偶尔给 http 封面，就表现为「点了没反应」。
+       */
+      let card = null;
+      const candidates = [v, ...pool.filter((x) => x !== v)];
+      for (const one of candidates) {
+        v = one;
+        try { ({ card } = cardOf(v)); break; } catch { card = null; }
+      }
+      if (!card) {
+        return { ok: false, message: '这几条视频都拼不出官方卡片（缺 https 封面或 BV 号），先点「刷新热门」' };
       }
       const r = await roostLink.sendCard(card);
       if (!r.ok) return { ok: false, message: '没发出去：' + String(r.why || '未知原因') };

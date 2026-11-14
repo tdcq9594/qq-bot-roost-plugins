@@ -24,14 +24,14 @@
 const SESSION_ID = 'bili';
 
 /** 她在这个会话里的身份与输出格式 */
-const SECTION = `你是「刷 B 站」的值班员。每次会收到一批刚刷到的视频材料（标题、UP、播放量、简介，可能还有字幕节选和热评）。
+const SECTION = `你是「刷 B 站」的值班员。每次会收到一批刚刷到的视频材料（标题、UP、播放量、简介、链接，可能还有字幕节选和热评）。
 
 按顺序逐个看，对每一条想清楚三件事：
 
 1. 你的感受——一句话，像发朋友圈那样，不要复述标题。
 2. 要不要去评论区说句话。想说的话，写出真正要发出去的那一句（口语、短、不超过 40 字）；不想说就留空字符串。
 3. 要不要发一条弹幕。想发就写出那一句（口语、更短，不超过 20 字）；不想就留空。
-4. 要不要分享给主人。想分享就写一句你会对主人说的话；不想就留空。
+4. 要不要分享给主人。想分享就写一句你会对主人说的话，并把这一条的「链接：https://…」原样写进那句话里（主人要能点开）；不想就留空。
 
 只输出**一个 JSON 对象**，两个字段：
 
@@ -43,6 +43,7 @@ const SECTION = `你是「刷 B 站」的值班员。每次会收到一批刚刷
 
 规则：
 - 不想评论 / 不想发弹幕 / 不想分享就写空字符串，**不要**省略字段，也**不要**编造填充。
+- share 字段里必须带上材料给的那条链接。只写标题或一句「你要不要看看」等于没分享——主人点不开。
 - **没有模板可套**：这三个字段会原样发到 B 站，写什么就发什么。看过材料再写；没感觉就留空，没人要求你每条都说话。
 - \`remember\` 只写「以后还用得上的事」（比如主人的口味、你发现的规律），不是这条视频的内容摘要；没有就写 ""。
 - 不要输出 JSON 以外的任何内容，不要用 markdown 代码块包起来。
@@ -59,6 +60,14 @@ const SECTION = `你是「刷 B 站」的值班员。每次会收到一批刚刷
  */
 export function createBrowseSession(env = process.env, {
   fetchImpl = fetch, log = () => {}, timeoutMs = 90_000,
+  /**
+   * 宿主注入的「系统会话轮次」（aurabot `runSystemTurn` 的对等实现）。
+   *
+   * 有它就直接跑宿主内部那一轮：会话写 sessions.json、侧栏能看见窗口、
+   * 模型与超时由宿主那套已验证的链路负责。没有它（MCP 子进程 / 旧宿主 /
+   * 手动跑扩展）才回退 `/v1/agent.*` 三步 HTTP。
+   */
+  systemTurn = null,
 } = {}) {
   const base = String(env?.ROOST_API_URL || '').replace(/\/+$/, '');
   const token = String(env?.ROOST_API_TOKEN || '');
@@ -108,7 +117,7 @@ export function createBrowseSession(env = process.env, {
   }
 
   return {
-    get available() { return Boolean(base && token); },
+    get available() { return Boolean(systemTurn) || Boolean(base && token); },
 
     /**
      * 把一批视频交给她，拿回她的决定。
@@ -117,22 +126,48 @@ export function createBrowseSession(env = process.env, {
      * @returns {Promise<{ok:boolean, items?:object[], why?:string}>}
      */
     async decide(material, { replies = [] } = {}) {
+      /**
+       * 回复清单单独一段：它和「这一轮刷到的视频」是两件事，
+       * 混在一起模型会拿评论当视频材料去「感受」。
+       */
+      const list = Array.isArray(replies) ? replies.slice(0, 6) : [];
+      const replyBlock = list.length
+        ? `\n\n【有人回了你】\n${list.map((r, i) => (
+          `${i + 1}. ${r.name || '有人'} 在《${String(r.title || '').slice(0, 40)}》下回你：「${String(r.text || '').slice(0, 120)}」  id=${r.id}`
+        )).join('\n')}\n想回就写进 replies（id 用上面那个）；不想回就写空数组。`
+        : '';
+      /**
+       * 值班会话是**常驻窗口**：上一轮自己输出的 JSON 还留在历史里。
+       * 材料又刚好一样时（热门榜几分钟内不变），模型会整段复读上一轮，
+       * 主人看到的就是「两次刷刷的是一样的」。先把「这是新的一轮」钉在
+       * 材料前面，配合 feed 那边的轮换，两边都别偷懒。
+       */
+      const text = '【新的一轮】只看下面这批材料重新判断，不要照抄这个窗口里以前任何一轮的回答。\n\n'
+        + `这一轮刷到的视频：\n\n${String(material || '').slice(0, 5600)}${replyBlock}`;
+
+      /**
+       * 宿主内部系统会话：一次调用完成「建/复用窗口 → 投材料 → 收文本」。
+       * 不再有 agent.new / prompt / close 三步，也不会撞独立会话那串坑。
+       * SECTION 以前靠 agent.new 的 sections 注册，这里要自己拼进正文。
+       */
+      if (systemTurn) {
+        try {
+          const out = await systemTurn('bili',
+            `${SECTION}\n\n【刷 B 站，不是聊天，这一轮不会发到聊天里】\n${text}`,
+            { windowName: '刷B站' });
+          const parsed = parsePayload(out);
+          return { ok: true, items: parsed.items, replies: parsed.replies };
+        } catch (e) {
+          return { ok: false, why: String(e?.message ?? e).slice(0, 200) };
+        }
+      }
+
       if (!base || !token) return { ok: false, why: '没有 ROOST_API_URL / ROOST_API_TOKEN（手动跑扩展时正常）' };
       try {
         await ensure();
-        /**
-         * 回复清单单独一段：它和「这一轮刷到的视频」是两件事，
-         * 混在一起模型会拿评论当视频材料去「感受」。
-         */
-        const list = Array.isArray(replies) ? replies.slice(0, 6) : [];
-        const replyBlock = list.length
-          ? `\n\n【有人回了你】\n${list.map((r, i) => (
-            `${i + 1}. ${r.name || '有人'} 在《${String(r.title || '').slice(0, 40)}》下回你：「${String(r.text || '').slice(0, 120)}」  id=${r.id}`
-          )).join('\n')}\n想回就写进 replies（id 用上面那个）；不想回就写空数组。`
-          : '';
         const j = await call('/agent.prompt', {
           sessionId: SESSION_ID,
-          text: `这一轮刷到的视频：\n\n${String(material || '').slice(0, 5600)}${replyBlock}`,
+          text,
         }, { wait: true });
         turns += 1;
         /** 聊了太多轮就重建，别让历史把新材料挤出去 */
@@ -157,6 +192,8 @@ export function createBrowseSession(env = process.env, {
 
     /** 用完关掉（扩展退出前调用，避免留一个空会话） */
     async close() {
+      /** 系统会话是常驻窗口，侧栏要能看见「刷 B 站」那一轮，不能关掉 */
+      if (systemTurn) return;
       if (!ready) return;
       ready = false;
       try {
@@ -250,6 +287,27 @@ export function parseDecisions(text) {
  * `descriptions` 是「看画面」拿到的描述（bvid → 文本）。有就多一行，
  * 没有就不写——绝不写「画面：无」，那会让她以为视频是黑屏。
  */
+/** 一条视频的可点链接。BV 号不合法就不给，别让模型自己编一个 URL。 */
+export function videoUrl(bvid) {
+  const bv = String(bvid ?? '').trim();
+  return /^BV[0-9A-Za-z]{10}$/.test(bv) ? `https://www.bilibili.com/video/${bv}` : '';
+}
+
+/**
+ * 没有直连协议时退回「主动素材通道」用的完整素材。
+ *
+ * 扩展手里有标题、UP 和链接，别把这些交给模型去回忆：以前只投
+ * `d.share`（她写的一句话），模型只能说「我这儿只剩个标题，链接没跟着过来」。
+ */
+export function shareMaterial(v, shareText = '') {
+  return [
+    `她刚刷到《${String(v?.title ?? '').slice(0, 80)}》`,
+    videoUrl(v?.bvid) ? `链接：${videoUrl(v.bvid)}` : '',
+    v?.author ? `UP：${String(v.author).slice(0, 30)}` : '',
+    String(shareText ?? '').trim() ? `她想对你说：${String(shareText).trim().slice(0, 300)}` : '',
+  ].filter(Boolean).join('\n');
+}
+
 export function materialOfVideos(items = [], { descriptions = null } = {}) {
   const descOf = (bvid) => {
     try { return String(descriptions?.get?.(String(bvid ?? '')) ?? '').trim(); } catch { return ''; }
@@ -257,6 +315,7 @@ export function materialOfVideos(items = [], { descriptions = null } = {}) {
   return (Array.isArray(items) ? items : []).slice(0, 8).map((v, i) => [
     `${i + 1}. 《${String(v?.title ?? '').slice(0, 70)}》`,
     `   ${v?.bvid ?? ''} · UP：${String(v?.author ?? '?').slice(0, 24)} · 播放 ${Number(v?.play) || 0}`,
+    videoUrl(v?.bvid) ? `   链接：${videoUrl(v.bvid)}` : '',
     v?.tname ? `   分区：${String(v.tname).slice(0, 12)}` : '',
     v?.desc ? `   简介：${String(v.desc).slice(0, 160)}` : '',
     descOf(v?.bvid) ? `   画面：${descOf(v?.bvid).slice(0, 500)}` : '',

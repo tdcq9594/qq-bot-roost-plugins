@@ -98,6 +98,8 @@ export function createFeed({
   let timer = null;
   let running = false;
   let items = [];
+  /** 最近给过她的 BV 号：连着刷两轮时用来换一批，见 tick 里的轮换 */
+  let recently = [];
   let last = { at: 0, count: 0, error: '', hostMood: null, reason: '' };
 
   async function tick(reason = '定时') {
@@ -174,7 +176,24 @@ export function createFeed({
         throw new Error(`筛得太严了：${raw.length} 条热门里一条都没剩（播放量门槛 / 只看最近）`);
       }
       const perRun = Math.max(1, Math.min(10, Number(cfg?.feedPerRun) || 6));
-      const got = filtered.slice(0, perRun);
+      /**
+       * 连着点两次「现在刷一轮」不该刷到同一批。
+       *
+       * 热门榜 `popular?pn=1` 在几分钟内就是同一份，直接 `slice(0, perRun)`
+       * 每轮切出来的都是同样的几条；值班会话又是常驻窗口，模型看到上一轮
+       * 自己输出的 JSON、又遇到一模一样的材料，就会整段复读 —— 主人看到的
+       * 是「两次刷刷的是一样的」。
+       *
+       * 按 BV 记住最近给过的一整个热门池，优先取没给过的；池子转完一圈
+       * 再从头开始。顺序仍然跟着 B 站的热门榜，不改「热门优先」的语义。
+       */
+      const seen = new Set(recently);
+      const fresh = filtered.filter((v) => !seen.has(String(v?.bvid ?? '')));
+      const old = filtered.filter((v) => seen.has(String(v?.bvid ?? '')));
+      const got = [...fresh, ...old].slice(0, perRun);
+      recently = [...recently, ...got.map((v) => String(v?.bvid ?? ''))]
+        .filter(Boolean)
+        .slice(-Math.max(perRun, filtered.length));
       items = got;
       onFresh(got);
       last = { at: now(), count: got.length, error: '', hostMood: hs.mood ?? null, reason };

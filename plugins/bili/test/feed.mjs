@@ -239,6 +239,28 @@ test('一轮看几个：筛完再截断', async () => {
   assert.equal(seen, 3, 'onFresh 拿到的也应该是截断后的');
 });
 
+test('连着刷几轮：热门榜没变也要换一批，不能每轮都是同样几条', async () => {
+  const pool = Array.from({ length: 10 }, (_, i) => ({ bvid: `BV${String(i).padStart(2, '0')}`, title: `视频 ${i}` }));
+  const feed = createFeed({
+    cfg: { enabled: true, feedIntervalMin: 30, hotPoolSize: 20, feedActiveHours: '', feedPerRun: 3 },
+    api: { hot: async () => pool, state: () => ({}) },
+    hostState: async () => ({ ok: true }),
+  });
+  await feed.tick('手动');
+  const a = feed.items().map((v) => v.bvid);
+  await feed.tick('手动');
+  const b = feed.items().map((v) => v.bvid);
+  await feed.tick('手动');
+  const c = feed.items().map((v) => v.bvid);
+  assert.equal(a.length, 3);
+  assert.equal(a.filter((x) => b.includes(x)).length, 0, '第二轮不能和第一轮撞车');
+  assert.equal(c.filter((x) => a.includes(x) || b.includes(x)).length, 0, '第三轮也得是没给过的');
+  /** 转完一圈允许从头再来，别因为记住了全部就把热门池锁死 */
+  await feed.tick('手动');
+  const d = feed.items().map((v) => v.bvid);
+  assert.equal(d.length, 3);
+});
+
 test('筛得太严时明确报错，不是静默返回 0 条', async () => {
   const feed = createFeed({
     cfg: { enabled: true, feedIntervalMin: 30, hotPoolSize: 5, feedActiveHours: '', feedMinViews: 9_999_999 },

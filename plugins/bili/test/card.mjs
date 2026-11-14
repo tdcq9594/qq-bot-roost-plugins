@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { cardOf, cardText } from '../lib/card.mjs';
-import { BiliError } from '../lib/api.mjs';
+import { BiliError, httpsOf } from '../lib/api.mjs';
 
 const V = {
   bvid: 'BV1ZAWM61Evb',
@@ -53,6 +53,18 @@ test('cardOf：封面不是 https / 没有 BV 号就当场拒，别让模型抄�
   assert.throws(() => cardOf({ ...V, cover: '//i0.hdslb.com/a.jpg' }), (e) => e instanceof BiliError && /https 封面/.test(e.message));
   assert.throws(() => cardOf({ ...V, cover: '' }), (e) => e instanceof BiliError && Boolean(e.hint));
   assert.throws(() => cardOf({ ...V, bvid: 'ep12345' }), (e) => e instanceof BiliError);
+});
+
+test('httpsOf：热门榜给的 http:// 封面要升成 https，否则 cardOf 当场拒', () => {
+  assert.equal(
+    httpsOf('http://i0.hdslb.com/bfs/archive/a.jpg'),
+    'https://i0.hdslb.com/bfs/archive/a.jpg',
+    'popular 接口给的 pic 是 http，不升级就永远发不出卡片',
+  );
+  assert.equal(httpsOf('//i0.hdslb.com/bfs/archive/a.jpg'), 'https://i0.hdslb.com/bfs/archive/a.jpg');
+  assert.equal(httpsOf('https://i0.hdslb.com/a.jpg'), 'https://i0.hdslb.com/a.jpg', '已经是 https 的别动');
+  const { card } = cardOf({ ...V, cover: httpsOf('http://i0.hdslb.com/bfs/archive/a.jpg') });
+  assert.match(card.picUrl, /^https:\/\//);
 });
 
 test('cardText：把「原样写进回复」说清楚，模型不必猜怎么发', () => {

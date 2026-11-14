@@ -26,6 +26,7 @@ import { readConfig } from './lib/config.mjs';
 import { createFeed, createHostState } from './lib/feed.mjs';
 import { createShots } from './lib/shots.mjs';
 import { createProactiveClient } from './lib/proactive.mjs';
+import { createRoostLink } from './lib/roost-link.mjs';
 import { createWriteApi } from './lib/write.mjs';
 import { createPush } from './lib/push.mjs';
 import { createUiActions } from './lib/ui-actions.mjs';
@@ -77,6 +78,8 @@ let push = null;
 
 /** 素材通道与写动作都由宿主/配置注入，手动 `--call` 时缺令牌是正常状态 */
 const submit = createProactiveClient(process.env);
+/** 直连协议：她决定分享时发官方图文卡片，不把没链接的话丢给主动搭话模型 */
+const roostLink = createRoostLink(process.env);
 const write = createWriteApi({
   getCookie: () => cfg.cookie,
   dryRunOf: () => cfg.writeDryRun !== false,
@@ -187,7 +190,7 @@ const replied = createRepliedStore({ dir: HERE, log });
  * 那时 `selfBrowse.available` 是 false，刷数据本身照常。
  */
 selfBrowse = createSelfBrowse({
-  api, shots, cfg, write, submit, memory, replied, history, pending,
+  api, shots, cfg, write, submit, roostLink, memory, replied, history, pending,
   bump: (patch) => bumpStats(ui, patch),
   setMeta: (patch) => ui.setMeta(patch),
   env: process.env,
