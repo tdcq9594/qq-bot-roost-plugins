@@ -34,6 +34,7 @@ import { withMention } from './write.mjs';
  * @param {object} [o.memory] 宿主记忆
  * @param {object} o.replied 「已经回过的评论」记录
  * @param {object} [o.history] 刷过什么的账本
+ * @param {object} [o.seen] 跨重启的「已看过」账本；她给的下轮关键词写回这里
  * @param {object} [o.pending] 待处理队列
  * @param {(patch: object) => void} [o.bump] 今日计数（`bumpStats` 的包装）
  * @param {(patch: object) => void} [o.setMeta] 面板状态
@@ -51,6 +52,7 @@ export function createSelfBrowse({
   memory = null,
   replied,
   history = null,
+  seen = null,
   pending = null,
   bump = () => {},
   setMeta = () => {},
@@ -129,6 +131,16 @@ export function createSelfBrowse({
         /** 没看成也把材料留在待处理队列里，别丢 */
         pending?.add(items);
         return { ok: false, why: String(r.why || '没看成') };
+      }
+      /**
+       * 她顺手给出的「下轮想搜什么」写回落盘账本，`feed.tick()` 下一轮
+       * 会拿去 `api.search()`（aurabot `chooseKeywords()` 的对等做法，
+       * 但放在本轮末尾，不用额外再跑一次模型、也不多开一个侧栏窗口）。
+       * 放在所有 early return 之前：就算这轮她什么都没想做，方向也该留着。
+       */
+      if (r.nextKeywords?.length) {
+        try { seen?.setNextKeywords(r.nextKeywords); }
+        catch (e) { log(`下轮关键词没记下来（不影响这一轮）：${e?.message ?? e}`); }
       }
       /** 视频可以一条都不评论，但「有人回了她」仍然要处理，所以不能在这里直接 return */
       if (!r.items.length && !(r.replies || []).length) {

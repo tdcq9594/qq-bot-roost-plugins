@@ -2,9 +2,23 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { inActiveHours, parseActiveHours, readConfig, secretEnv } from '../lib/config.mjs';
 import { createFeed, createHostState, filterItems, MIN_FEED_MINUTES } from '../lib/feed.mjs';
+import { createSeenStore } from '../lib/seen.mjs';
+
+/**
+ * 必须 `await fn(dir)`：同步 `finally` 会在异步回调跑完之前就把目录删掉，
+ * 于是落盘的 seen 文件读不到，表现为「跨实例去重没生效」的假失败。
+ */
+async function withDir(fn) {
+  const dir = mkdtempSync(join(tmpdir(), 'bili-feed-'));
+  try { return await fn(dir); }
+  finally { try { rmSync(dir, { recursive: true, force: true }); } catch { /* 系统回收 */ } }
+}
 
 const POOL = Array.from({ length: 5 }, (_, i) => ({ bvid: `BV${i}`, title: `视频 ${i}` }));
 
@@ -271,3 +285,113 @@ test('筛得太严时明确报错，不是静默返回 0 条', async () => {
   assert.equal(r.ok, false);
   assert.match(r.why, /筛得太严/);
 });
+
+/* ---------------------------------------------------------------- *
+ * 2026-11-14 对齐 aurabot duty.js 的四方面：
+ *   ① seen 落盘跨实例 ② 候选阶段排除已看
+ *   ③ 关键词 search 为主（热门只补缺口） ④ 按来源轮流取
+ * ---------------------------------------------------------------- */
+
+test('关键词走 search(keyword,{limit})：以前把对象当关键词，方向一直没生效', async () => {
+  const calls = [];
+  const feed = createFeed({
+    cfg: { feedActiveHours: '', feedPerRun: 3, feedKeywords: '猫咪\n做菜', hotPages: 1 },
+    api: {
+      hot: async () => [{ bvid: 'BVHOT1', title: '热门' }],
+      search: async (kw, opts) => { calls.push([kw, opts]); return [{ bvid: `BV_${kw}`, title: kw }]; },
+      state: () => ({}),
+    },
+    hostState: async () => ({ ok: true }),
+  });
+  const r = await feed.tick('手动');
+  assert.equal(r.ok, true);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0][0], '猫咪', '第一个参数必须是字符串关键词');
+  assert.deepEqual(calls[0][1], { limit: 4 });
+});
+
+test('按来源轮流取：一轮里搜索词和热门各占，不整轮都是同一类', async () => {
+  const feed = createFeed({
+    cfg: { feedActiveHours: '', feedPerRun: 4, feedKeywords: '猫咪', hotPages: 1 },
+    api: {
+      hot: async () => ['h1', 'h2', 'h3', 'h4'].map((i) => ({ bvid: `BVH${i}`, title: i })),
+      search: async () => ['s1', 's2', 's3', 's4'].map((i) => ({ bvid: `BVS${i}`, title: i })),
+      state: () => ({}),
+    },
+    hostState: async () => ({ ok: true }),
+  });
+  await feed.tick('手动');
+  assert.equal(feed.items().length, 4);
+  assert.equal(new Set(feed.items().map((v) => String(v.src))).size, 2);
+});
+
+test('seen 落盘：换一个 feed 实例仍不重复给同一批', async () => withDir(async (dir) => {
+  const pool = Array.from({ length: 6 }, (_, i) => ({ bvid: `BV${i}`, title: `视频${i}` }));
+  const api = { hot: async () => pool, state: () => ({}) };
+  const mk = () => createFeed({
+    cfg: { feedActiveHours: '', feedPerRun: 3, hotPages: 1 },
+    api, hostState: async () => ({ ok: true }),
+    seen: createSeenStore({ dir }),
+  });
+  const a = mk();
+  await a.tick('手动');
+  const b = mk();
+  await b.tick('手动');
+  const A = a.items().map((v) => v.bvid);
+  const B = b.items().map((v) => v.bvid);
+  assert.equal(A.length, 3);
+  assert.equal(A.filter((x) => B.includes(x)).length, 0, '新实例读到落盘 seen');
+}));
+
+test('她上一轮给的关键词进下一轮搜索；关掉开关就不读', async () => withDir(async (dir) => {
+  const seen = createSeenStore({ dir });
+  seen.setNextKeywords(['折纸', '观鸟']);
+  const calls = [];
+  const mk = (smart) => createFeed({
+    cfg: { feedActiveHours: '', feedPerRun: 2, hotPages: 1, feedSmartKeywords: smart },
+    api: {
+      hot: async () => [{ bvid: 'BVHOT1', title: '热门' }],
+      search: async (kw) => { calls.push(kw); return []; },
+      state: () => ({}),
+    },
+    hostState: async () => ({ ok: true }),
+    seen,
+  });
+  await mk(true).tick('手动');
+  assert.deepEqual(calls, ['折纸', '观鸟']);
+  calls.length = 0;
+  await mk(false).tick('手动');
+  assert.deepEqual(calls, [], '关掉「让她挑下一轮想看的」就不该用模型给的词');
+}));
+
+test('热门翻页：pn=1/2 都拉，候选池比只翻第一页大', async () => {
+  const pns = [];
+  const feed = createFeed({
+    cfg: { feedActiveHours: '', feedPerRun: 4, hotPages: 2 },
+    api: {
+      hot: async ({ pn }) => { pns.push(pn); return [{ bvid: `BVHOT${pn}`, title: `热门${pn}` }]; },
+      state: () => ({}),
+    },
+    hostState: async () => ({ ok: true }),
+  });
+  await feed.tick('手动');
+  assert.deepEqual(pns, [1, 2]);
+  assert.equal(feed.items().length, 2, '两个不同 BV 都该进候选');
+});
+
+test('候选全看过时按最久没看的借几条，手动按钮不空手', async () => withDir(async (dir) => {
+  const seen = createSeenStore({ dir });
+  const pool = [0, 1, 2].map((i) => ({ bvid: `BV${i}`, title: `视频${i}` }));
+  seen.add(pool);
+  const feed = createFeed({
+    cfg: { feedActiveHours: '', feedPerRun: 2, hotPages: 1 },
+    api: { hot: async () => pool, state: () => ({}) },
+    hostState: async () => ({ ok: true }),
+    seen,
+  });
+  const r = await feed.tick('手动');
+  assert.equal(r.ok, true, 'aurabot 会回「没搜到」，但面板手动点了不该空手');
+  assert.equal(feed.items().length, 2);
+  assert.equal(feed.state().reused, 2);
+  assert.deepEqual(feed.items().map((v) => v.bvid), ['BV0', 'BV1'], '优先借最久没看的');
+}));

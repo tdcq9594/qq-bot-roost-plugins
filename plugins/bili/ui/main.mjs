@@ -27,6 +27,7 @@ import { fileURLToPath } from 'node:url';
 import { createBiliApi } from '../lib/api.mjs';
 import { createUiData } from '../lib/ui-data.mjs';
 import { createFeed } from '../lib/feed.mjs';
+import { createSeenStore } from '../lib/seen.mjs';
 import { createWriteApi } from '../lib/write.mjs';
 import { createQrLogin } from '../lib/qr-login.mjs';
 import { createShots } from '../lib/shots.mjs';
@@ -57,6 +58,12 @@ const bvOf = (s) => {
  * @returns {Record<string, (payload?: object) => Promise<{ok:boolean,message:string,data?:any}>>}
  */
 export function createActions({ config = {}, secrets = {}, env = {}, log = () => {}, systemTurn = null } = {}) {
+  /**
+   * 跨重启的「已看过」账本。进程内动作每次点击都新建 `createActions()`，
+   * 状态必须落盘，否则连刷两轮又从零开始（见 lib/seen.mjs）。
+   */
+  const seen = createSeenStore({ dir: HERE, log });
+
   /**
    * Cookie 有两个来源：
    *   · 面板「B 站 Cookie」存的 secret（宿主在这里把明文递进来了）；
@@ -95,6 +102,7 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
   const feed = createFeed({
     cfg: config,
     api,
+    seen,
     hostState: async () => ({ ok: true }),
     /** 每日轮数上限用；`config` 是活引用，改了上限立刻按新值判断 */
     runsToday: () => readStats(ui.file()).rounds,
@@ -168,7 +176,7 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
    * 「没有 API 令牌」，不会静默变成「没反应」。
    */
   const selfBrowse = createSelfBrowse({
-    api, shots, cfg: config, write, submit: proactive, roostLink, memory, replied, history, pending,
+    api, shots, cfg: config, write, submit: proactive, roostLink, memory, replied, history, seen, pending,
     bump: (patch) => bumpStats(ui, patch),
     setMeta: (patch) => setMeta(patch),
     env: env || process.env,

@@ -38,6 +38,10 @@ const SKIP_FILES = new Set([
   'replied.json',
   /** 刷到但模型还没看过的一批：运行时状态，随时在变 */
   'pending.json',
+  /** 「ta 刷过什么」账本：运行时写入，之前漏了，用户端会算出不同哈希 */
+  'history.json',
+  /** 2026-11-14 去重四方面：跨重启的已看 BV + 下轮关键词，每轮都在变 */
+  'seen.json',
 ]);
 
 /** 文本文件 CRLF 折成 LF；二进制原样（判定依据同 git：有没有 NUL 字节） */

@@ -94,15 +94,18 @@ jobs:
           # 否则会出现：框架 master 有插件依赖的新能力但还没发布 → 插件 CI 假绿，
           # 用户装到旧版运行时坏；或 master 瞬时坏掉 → 插件 CI 假红。
           # **每次发框架新版都要改这里**（或设仓库 Variables 的 FRAMEWORK_REF 覆盖）。
-          # 当前对应框架 v1.0.14（市场索引分叉出 kind:'dsh-extension'——扩展条目框架侧
+          # 当前对应框架 v1.0.16（`msg.typing` / `media.convert` 两条协议方法；
+          # 直连协议 `msg.send` 放行纯官方图文卡片，不再要求 content/msgId/eventId；
+          # 框架插件可反向调 DSH 扩展能力 ext.list/ext.call/ext.register）。
+          # v1.0.14 起市场索引分叉出 kind:'dsh-extension'——扩展条目框架侧
           # 不装、更新时记 skipped；实例锁判活补 cmdline / exe 两路证据，修 Node 24
-          # 主线程改名 comm=MainThread 导致的「活实例被判死 → 删锁 → 同 AppID 双开」）。
+          # 主线程改名 comm=MainThread 导致的「活实例被判死 → 删锁 → 同 AppID 双开」。
           # v1.0.13 起插件管理页秒开、下载走系统代理；v1.0.11 实例锁心跳租约、语音回退，
           # 许可改 AGPL-3.0-only；v1.0.9 起发图占位空格可在面板配置；
           # v1.0.7 起有 msg_type=8 图文卡片 replyTuwen；v1.0.6 起富媒体发图不带占位空格；
           # v1.0.4 起消息带 uin / userAliases，被动回复上限群 5 / 单聊 4，
           # ai-chat 4.4.5 依赖它。v1.0.8 修的是 1.0.7 实例锁判活回归。
-          ref: ${{ vars.FRAMEWORK_REF || 'v1.0.14' }}
+          ref: ${{ vars.FRAMEWORK_REF || 'v1.0.16' }}
 
       - name: 跑插件测试
         shell: bash

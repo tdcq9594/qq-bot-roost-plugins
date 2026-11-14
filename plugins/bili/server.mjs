@@ -24,6 +24,7 @@ import { createToolbox } from './lib/tools.mjs';
 import { createUiData } from './lib/ui-data.mjs';
 import { readConfig } from './lib/config.mjs';
 import { createFeed, createHostState } from './lib/feed.mjs';
+import { createSeenStore } from './lib/seen.mjs';
 import { createShots } from './lib/shots.mjs';
 import { createProactiveClient } from './lib/proactive.mjs';
 import { createRoostLink } from './lib/roost-link.mjs';
@@ -64,6 +65,9 @@ const HERE = fileURLToPath(new URL('.', import.meta.url));
 
 /** 面板数据（6.1 声明式界面）：宿主只读这个 JSON，不执行这里的任何代码。 */
 const ui = createUiData({ dir: HERE, log });
+
+/** 跨重启的「已看过」账本：进程内动作与 MCP 子进程共用同一份 seen.json */
+const seen = createSeenStore({ dir: HERE, log });
 
 /** 登录态：面板 secret 优先，兼容 0.2 的 cookie.txt（见 api.mjs 的 cookieText）。 */
 const api = createBiliApi({ log, getCookie: () => cfg.cookie });
@@ -133,6 +137,7 @@ let selfBrowse = null;
 feed = createFeed({
   cfg,
   api,
+  seen,
   hostState: createHostState(process.env),
   beforeTick: async () => { refreshConfig(); },
   /** 每日轮数上限用：`stats.rounds` 由 onFresh 里的 bumpStats 累加 */
@@ -190,7 +195,7 @@ const replied = createRepliedStore({ dir: HERE, log });
  * 那时 `selfBrowse.available` 是 false，刷数据本身照常。
  */
 selfBrowse = createSelfBrowse({
-  api, shots, cfg, write, submit, roostLink, memory, replied, history, pending,
+  api, shots, cfg, write, submit, roostLink, memory, replied, history, seen, pending,
   bump: (patch) => bumpStats(ui, patch),
   setMeta: (patch) => ui.setMeta(patch),
   env: process.env,

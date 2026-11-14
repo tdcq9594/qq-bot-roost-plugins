@@ -10,6 +10,7 @@ import { join } from 'node:path';
 
 import { createBrowseSession, materialOfVideos, shareMaterial, videoUrl, parseDecisions, parsePayload } from '../lib/ai-duty.mjs';
 import { createSelfBrowse } from '../lib/self-browse.mjs';
+import { createSeenStore } from '../lib/seen.mjs';
 import { createPending } from '../lib/pending.mjs';
 
 const BV = 'BV1xx411c7mD';
@@ -285,4 +286,50 @@ test('没有直连协议时回退素材通道，素材里必须带可点链接',
   assert.equal(h.submits.length, 1);
   assert.match(h.submits[0].text, /一只猫/);
   assert.match(h.submits[0].text, new RegExp(`https://www\\.bilibili\\.com/video/${BV}`));
+});
+
+/* ---- 下一轮关键词（2026-11-14，对齐 aurabot duty.js 的 chooseKeywords）---- */
+
+test('parsePayload：nextKeywords 收窄去重；老格式纯数组仍兼容', () => {
+  const long = '很长的关键词'.repeat(10);
+  const p = parsePayload(JSON.stringify({
+    items: [], replies: [], nextKeywords: [' 折纸 ', '观鸟', '折纸', '', long],
+  }));
+  assert.deepEqual(p.nextKeywords, ['折纸', '观鸟']);
+  assert.deepEqual(parsePayload('[]').nextKeywords, [], '老格式（纯数组）不该炸');
+  assert.deepEqual(parsePayload('坏文本').nextKeywords, []);
+});
+
+test('值班轮次把 nextKeywords 带出来，模型不给就是空数组', async () => {
+  const s = createBrowseSession({}, {
+    systemTurn: async () => JSON.stringify({
+      items: [], replies: [], nextKeywords: ['折纸', '观鸟'],
+    }),
+  });
+  const r = await s.decide('材料');
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.nextKeywords, ['折纸', '观鸟']);
+});
+
+test('她给的下轮关键词写回 seen，下一轮 feed 才拿得到', async () => {
+  const seen = createSeenStore();
+  const self = createSelfBrowse({
+    api: { replyFeed: async () => [], view: async () => ({ aid: 1, cid: 2, duration: 30 }) },
+    shots: {},
+    cfg: { aiDecide: true, vision: false, autoComment: false, autoDanmaku: false },
+    write: { comment: async () => ({ ok: true }), danmaku: async () => ({ ok: true }) },
+    submit: { submit: async () => ({ ok: true }) },
+    roostLink: null,
+    seen,
+    replied: { has: () => false },
+    systemTurn: async () => JSON.stringify({
+      items: [{ bvid: BV, feeling: '有意思', comment: '', danmaku: '', share: '', remember: '' }],
+      replies: [],
+      nextKeywords: ['折纸', '观鸟'],
+    }),
+    log: () => {},
+  });
+  const r = await self.run([{ bvid: BV, title: '一只猫', author: '兔总裁s', play: 1234 }], { force: true });
+  assert.equal(r.ok, true);
+  assert.deepEqual(seen.nextKeywords(), ['折纸', '观鸟']);
 });

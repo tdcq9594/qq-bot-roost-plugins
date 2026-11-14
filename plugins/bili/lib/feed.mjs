@@ -15,11 +15,14 @@
  *   · 刷新前先探一次 `/v1/state`：宿主没在线就别白打 B 站；
  *   · B 站自己报的 412 退避期（`api.state().pausedUntil`）内跳过。
  *
- * 刷到的东西只留在**内存**里（`feed` 工具读它），不落盘：市场索引的 sha256
- * 按整个插件目录算，运行时多一个 JSON 就会让 `build-index --check` 变脏。
+ * 刷到的视频本体只留在**内存**里（`feed` 工具读它）；市场索引的 sha256
+ * 按整个插件目录算，往开发目录多写一个 JSON 就会让 `build-index --check` 变脏。
+ * 「已经看过哪些 BV」不一样，它必须跨重启，由调用方注入 `seen`（`lib/seen.mjs`）
+ * 写到运行时扩展目录；不注入时退化成纯内存，测试与无盘环境照常能跑。
  */
 
 import { inActiveHours } from './config.mjs';
+import { createSeenStore } from './seen.mjs';
 
 /** 最小间隔 15 分钟：比这还密就是拿扩展当爬虫用。 */
 export const MIN_FEED_MINUTES = 15;
@@ -83,6 +86,8 @@ export function createFeed({
   beforeTick = null,
   /** 今天已经刷了几轮（`feedMaxRunsPerDay` 用它判断）；由调用方从面板数据里取 */
   runsToday = () => 0,
+  /** 跨重启的「已看过」账本；不传就用纯内存实现，语义一致 */
+  seen = null,
 } = {}) {
   /**
    * **现算，不再在创建时算死**。
@@ -98,9 +103,8 @@ export function createFeed({
   let timer = null;
   let running = false;
   let items = [];
-  /** 最近给过她的 BV 号：连着刷两轮时用来换一批，见 tick 里的轮换 */
-  let recently = [];
-  let last = { at: 0, count: 0, error: '', hostMood: null, reason: '' };
+  const store = seen || createSeenStore({ log });
+  let last = { at: 0, count: 0, error: '', hostMood: null, reason: '', reused: 0 };
 
   async function tick(reason = '定时') {
     /** 先热读配置：这一轮用的必须是面板上刚存下的值 */
@@ -142,61 +146,105 @@ export function createFeed({
 
     running = true;
     try {
-      const hot = await api.hot({ ps: Number(cfg?.hotPoolSize) || 20 });
-      if (!Array.isArray(hot) || !hot.length) throw new Error('热门池是空的');
+      const perRun = Math.max(1, Math.min(10, Number(cfg?.feedPerRun) || 6));
+      const snap = store.state();
+      const seenSet = new Set(snap.seen.map((x) => String(x.bvid)));
+      /** `snap.seen` 最新在前，索引越大越久没看；兜底时优先借最久没看的 */
+      const ageOf = new Map(snap.seen.map((x, i) => [String(x.bvid), i]));
 
       /**
-       * 面板里填的「额外想看的方向」：热门榜之外按关键词各搜两条。
+       * 候选来源（对齐 aurabot `duty.js`）：
+       *   1. 她上一轮在值班会话里给出的关键词 + 面板手填的方向 → `search`；
+       *   2. 热门榜翻几页，只用来补缺口。
        *
-       * 放在热门**后面**：热门是"大家在看"，关键词是"她想看"，合并后
-       * 靠过滤和 `feedPerRun` 截断时热门优先——不然一开关键词，热门就全被挤掉了。
-       * 单个关键词失败只跳过，不让整轮失败。
+       * 以前顺序反了（热门在前、关键词在后），还把 `api.search()` 写成
+       * `search({keyword, limit})` —— 真实签名是 `search(keyword, {limit})`，
+       * 于是「额外想看的方向」一直静默失败，每轮只剩固定 20 条热门。
+       * 每个来源单独打 `src`，后面按来源轮流取，避免一轮全是同一类。
        */
-      const kws = String(cfg?.feedKeywords || '')
-        .split(/\r?\n/).map((x) => x.trim()).filter(Boolean).slice(0, 5);
-      const extra = [];
+      const smart = cfg?.feedSmartKeywords !== false ? snap.nextKeywords : [];
+      const manual = String(cfg?.feedKeywords || '')
+        .split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+      const kws = [...new Set([...smart, ...manual])].slice(0, 6);
+
+      const groups = [];
+      const used = new Set();
+      const push = (src, list) => {
+        const rows = [];
+        for (const v of (Array.isArray(list) ? list : [])) {
+          const bv = String(v?.bvid ?? '').trim();
+          if (!bv || used.has(bv)) continue;
+          used.add(bv);
+          rows.push({ ...v, src });
+        }
+        if (rows.length) groups.push({ src, rows });
+      };
+
       for (const kw of kws) {
         try {
-          const got = await api.search({ keyword: kw, limit: 2 });
-          if (Array.isArray(got)) extra.push(...got);
+          push(`搜索:${kw}`, await api.search(kw, { limit: 4 }));
         } catch (e) {
           log(`按「${kw}」搜失败（不影响这一轮）：${e?.message ?? e}`);
         }
       }
-      const seenBv = new Set(hot.map((v) => String(v?.bvid ?? '')));
-      const raw = [...hot, ...extra.filter((v) => v?.bvid && !seenBv.has(String(v.bvid)))];
-
-      /** 先按「播放量 / 新鲜度」筛，再按「一轮看几个」截 */
+      const pages = Math.max(1, Math.min(3, Number(cfg?.hotPages) || 2));
+      for (let pn = 1; pn <= pages; pn += 1) {
+        try {
+          push(`热门:${pn}`, await api.hot({ ps: Number(cfg?.hotPoolSize) || 20, pn }));
+        } catch (e) {
+          log(`热门第 ${pn} 页没拉到（不影响这一轮）：${e?.message ?? e}`);
+          break;
+        }
+      }
+      const raw = groups.flatMap((g) => g.rows);
       const filtered = filterItems(raw, {
         minViews: Number(cfg?.feedMinViews) || 0,
         maxAgeDays: Number(cfg?.feedMaxAgeDays) || 0,
         now: now(),
       });
       if (!filtered.length) {
-        throw new Error(`筛得太严了：${raw.length} 条热门里一条都没剩（播放量门槛 / 只看最近）`);
+        throw new Error(`筛得太严了：${raw.length} 条候选里一条都没剩（播放量门槛 / 只看最近）`);
       }
-      const perRun = Math.max(1, Math.min(10, Number(cfg?.feedPerRun) || 6));
+
+      /** 候选阶段就排除看过的（aurabot `filterVideos(list, {seen})` 那一步） */
+      const fresh = filtered.filter((v) => !seenSet.has(String(v?.bvid ?? '')));
+      const stale = filtered.filter((v) => seenSet.has(String(v?.bvid ?? '')))
+        .sort((a, b) => (ageOf.get(String(b?.bvid ?? '')) ?? -1) - (ageOf.get(String(a?.bvid ?? '')) ?? -1));
+
+      /** 按来源轮流取：搜索词与热门各占一点，不整轮都是同一类 */
+      function roundRobin(list, want) {
+        const bySrc = new Map();
+        for (const v of list) {
+          const k = String(v?.src || '热门');
+          if (!bySrc.has(k)) bySrc.set(k, []);
+          bySrc.get(k).push(v);
+        }
+        const queues = [...bySrc.values()];
+        const out = [];
+        while (out.length < want && queues.some((q) => q.length)) {
+          for (const q of queues) {
+            if (!q.length) continue;
+            out.push(q.shift());
+            if (out.length >= want) break;
+          }
+        }
+        return out;
+      }
+
+      let got = roundRobin(fresh, perRun);
       /**
-       * 连着点两次「现在刷一轮」不该刷到同一批。
-       *
-       * 热门榜 `popular?pn=1` 在几分钟内就是同一份，直接 `slice(0, perRun)`
-       * 每轮切出来的都是同样的几条；值班会话又是常驻窗口，模型看到上一轮
-       * 自己输出的 JSON、又遇到一模一样的材料，就会整段复读 —— 主人看到的
-       * 是「两次刷刷的是一样的」。
-       *
-       * 按 BV 记住最近给过的一整个热门池，优先取没给过的；池子转完一圈
-       * 再从头开始。顺序仍然跟着 B 站的热门榜，不改「热门优先」的语义。
+       * 池子转完一圈还没凑够：按「最久没看」借几条回来。
+       * aurabot 这种时候直接回「这次没搜到合适的视频」，但面板上
+       * 「现在刷一轮」是主人明确点的，空手回去会被当成按钮坏了。
        */
-      const seen = new Set(recently);
-      const fresh = filtered.filter((v) => !seen.has(String(v?.bvid ?? '')));
-      const old = filtered.filter((v) => seen.has(String(v?.bvid ?? '')));
-      const got = [...fresh, ...old].slice(0, perRun);
-      recently = [...recently, ...got.map((v) => String(v?.bvid ?? ''))]
-        .filter(Boolean)
-        .slice(-Math.max(perRun, filtered.length));
+      const reused = perRun - got.length;
+      if (reused > 0) got = [...got, ...roundRobin(stale, reused)];
+
+      /** 真给过她才记，落盘跨重启；预热 / 失败的那批不算 */
+      store.add(got, { now: now() });
       items = got;
       onFresh(got);
-      last = { at: now(), count: got.length, error: '', hostMood: hs.mood ?? null, reason };
+      last = { at: now(), count: got.length, error: '', hostMood: hs.mood ?? null, reason, reused };
       log(`定时刷完成：${got.length} 条（${reason}）`);
       return { ok: true, count: got.length };
     } catch (e) {
@@ -255,7 +303,7 @@ export function createFeed({
     seed(got, reason = '预热') {
       if (!Array.isArray(got) || !got.length) return false;
       items = got;
-      last = { at: now(), count: got.length, error: '', hostMood: null, reason };
+      last = { at: now(), count: got.length, error: '', hostMood: null, reason, reused: 0 };
       return true;
     },
     /** 给 `feed` 工具：最近一次成功刷到的那批 */

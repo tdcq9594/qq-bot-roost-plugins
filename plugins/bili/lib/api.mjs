@@ -342,9 +342,15 @@ export function createBiliApi({ getCookie = () => '', log = () => {}, fetchImpl 
   }
 
   /** 综合热门。 */
-  async function hot({ ps = 20 } = {}) {
+  /**
+   * 热门视频。`pn` 是页码：只翻第 1 页时，连着刷两轮拿到的永远是同一份
+   * 榜单，`feed.tick()` 就算记住了 seen 也没新东西可选（aurabot 那边的
+   * 解法是「search 为主、热门只补缺口」；我们两个都要，见 feed.mjs）。
+   */
+  async function hot({ ps = 20, pn = 1 } = {}) {
     await ensureBuvid();
-    const d = await req(`https://api.bilibili.com/x/web-interface/popular?ps=${ps}&pn=1`);
+    const page = Math.max(1, Math.min(5, Math.round(Number(pn) || 1)));
+    const d = await req(`https://api.bilibili.com/x/web-interface/popular?ps=${ps}&pn=${page}`);
     return (d?.list || []).map((v) => ({
       bvid: v.bvid,
       title: v.title,

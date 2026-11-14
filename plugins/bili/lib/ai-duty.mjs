@@ -21,6 +21,8 @@
  * 面板手动点「现在刷一轮」是用户明确要的，走 `force` 直接开会话，不看它。
  */
 
+import { parseKeywords } from './seen.mjs';
+
 const SESSION_ID = 'bili';
 
 /** 她在这个会话里的身份与输出格式 */
@@ -32,14 +34,16 @@ const SECTION = `你是「刷 B 站」的值班员。每次会收到一批刚刷
 2. 要不要去评论区说句话。想说的话，写出真正要发出去的那一句（口语、短、不超过 40 字）；不想说就留空字符串。
 3. 要不要发一条弹幕。想发就写出那一句（口语、更短，不超过 20 字）；不想就留空。
 4. 要不要分享给主人。想分享就写一句你会对主人说的话，并把这一条的「链接：https://…」原样写进那句话里（主人要能点开）；不想就留空。
+5. 下一轮想去 B 站搜点什么。挑 2–3 个关键词（你自己好奇的、或主人可能喜欢的），**别和这批材料的题材重复**。下一轮刷的时候会拿这些词去搜，所以写真的能搜出东西的词，不要写「好看的视频」这种空话。
 
-只输出**一个 JSON 对象**，两个字段：
+只输出**一个 JSON 对象**，三个字段：
 
-{"items":[{"bvid":"BV号","feeling":"…","comment":"…","danmaku":"…","share":"…","remember":"…"}],"replies":[]}
+{"items":[{"bvid":"BV号","feeling":"…","comment":"…","danmaku":"…","share":"…","remember":"…"}],"replies":[],"nextKeywords":["关键词1","关键词2"]}
 
 - items：每条视频一个对象，就是上面那五个字段。
 - replies：只在材料里出现「有人回了你」时才有内容，格式
   [{"id":"材料里给的那个 id","text":"你要回的那一句"}]。没有就写空数组。
+- nextKeywords：下一轮要搜的词，2–3 个、每个不超过 12 字、别带标点。想不出来写空数组。
 
 规则：
 - 不想评论 / 不想发弹幕 / 不想分享就写空字符串，**不要**省略字段，也**不要**编造填充。
@@ -156,7 +160,7 @@ export function createBrowseSession(env = process.env, {
             `${SECTION}\n\n【刷 B 站，不是聊天，这一轮不会发到聊天里】\n${text}`,
             { windowName: '刷B站' });
           const parsed = parsePayload(out);
-          return { ok: true, items: parsed.items, replies: parsed.replies };
+          return { ok: true, items: parsed.items, replies: parsed.replies, nextKeywords: parsed.nextKeywords };
         } catch (e) {
           return { ok: false, why: String(e?.message ?? e).slice(0, 200) };
         }
@@ -173,7 +177,7 @@ export function createBrowseSession(env = process.env, {
         /** 聊了太多轮就重建，别让历史把新材料挤出去 */
         if (turns >= 12) { ready = false; turns = 0; }
         const parsed = parsePayload(j?.text);
-        return { ok: true, items: parsed.items, replies: parsed.replies };
+        return { ok: true, items: parsed.items, replies: parsed.replies, nextKeywords: parsed.nextKeywords };
       } catch (e) {
         const status = Number(e?.status) || 0;
         /**
@@ -269,11 +273,15 @@ export function parseReplies(list) {
 
 export function parsePayload(text) {
   const j = extractJson(text);
-  if (Array.isArray(j)) return { items: parseItems(j), replies: [] };
+  if (Array.isArray(j)) return { items: parseItems(j), replies: [], nextKeywords: [] };
   if (j && typeof j === 'object') {
-    return { items: parseItems(j.items), replies: parseReplies(j.replies) };
+    return {
+      items: parseItems(j.items),
+      replies: parseReplies(j.replies),
+      nextKeywords: parseKeywords(j.nextKeywords),
+    };
   }
-  return { items: [], replies: [] };
+  return { items: [], replies: [], nextKeywords: [] };
 }
 
 /** 只要视频决策时用这个（兼容老调用与测试） */
