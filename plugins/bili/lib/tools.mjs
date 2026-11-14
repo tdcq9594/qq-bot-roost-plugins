@@ -207,7 +207,7 @@ function boolOf(v, def) {
   return def;
 }
 
-export function createToolbox({ api, log = () => {}, config = {}, feed = null, shots = null, push = null, write = null }) {
+export function createToolbox({ api, log = () => {}, config = {}, feed = null, shots = null, push = null, write = null, pending = null }) {
   /**
    * 设置取值：面板保存前已经校验过，但用户可能手改 `config.json`，
    * 所以这里再夹一次范围 —— 这是最后一道。
@@ -354,13 +354,36 @@ export function createToolbox({ api, log = () => {}, config = {}, feed = null, s
   }
 
   /** 0.3 · 定时刷缓存：只读内存，连 B 站都不打。 */
+  /**
+   * 刷到但模型还没看过的一批。
+   *
+   * 这是「自主评论 / 弹幕 / 分享」的入口：定时刷的时候没有模型在场，
+   * 只把结果记进待处理队列；模型下次调 feed 时看到清单，自己决定
+   * 要不要调 comment / like / push。**看即处理**，不会反复出现在这里。
+   */
+  function pendingBlock(items) {
+    if (!items.length) return '';
+    const lines = items.slice(0, 8).map((v, i) => (
+      `${i + 1}. 《${v.title || v.bvid}》 UP：${v.author || '?'} 播放 ${v.play || 0}  ${v.bvid}`
+    ));
+    return [
+      '',
+      `【这一轮新刷到 ${items.length} 条，你还没看过】`,
+      ...lines,
+      items.length > 8 ? `（还有 ${items.length - 8} 条没列）` : '',
+      '想评论 / 点赞就用 comment / like 工具（文案你自己写），想分享给主人就用 push；都不感兴趣就照常聊别的。',
+    ].filter(Boolean).join('\n');
+  }
+
   async function feedTool(args) {
     const a = argsOf(args, ['limit']);
     const limit = intOf(a.limit, defaultLimit);
+    /** 先取待处理的：哪怕定时刷没开，手动「现在刷一轮」存下的也要能接手 */
+    const fresh = typeof pending?.take === 'function' ? pending.take() : [];
     const st = feed?.state?.() ?? { enabled: false };
     if (!feed || !st.enabled) {
       return '定时刷没开：面板「表达 → 刷 B 站 → 设置」里的「定时刷间隔」填 15 分钟以上才会启动。'
-        + '现在想看新的直接用 hot。';
+        + '现在想看新的直接用 hot。' + pendingBlock(fresh);
     }
     const items = feed.items();
     if (!items.length) {
@@ -368,7 +391,8 @@ export function createToolbox({ api, log = () => {}, config = {}, feed = null, s
         + `但还没成功刷到过${st.error ? `：${st.error}` : '，等下一轮或先调 hot'}。`;
     }
     const when = st.at ? new Date(st.at).toLocaleString('zh-CN') : '刚才';
-    return fmtVideoList(items.slice(0, limit), { heading: `最近一次定时刷（${when}）拿到 ${items.length} 条：` });
+    return fmtVideoList(items.slice(0, limit), { heading: `最近一次定时刷（${when}）拿到 ${items.length} 条：` })
+      + pendingBlock(fresh);
   }
 
   /** 手动把最近刷到的一条投进宿主素材通道，验证链路用（不是 B 站写操作） */

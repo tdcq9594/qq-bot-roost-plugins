@@ -96,6 +96,15 @@ export function readConfig(env = process.env) {
     feedMinViews: intOf(raw.feedMinViews, 0, 0, 10_000_000),
     feedMaxAgeDays: intOf(raw.feedMaxAgeDays, 0, 0, 365),
     feedMaxRunsPerDay: intOf(raw.feedMaxRunsPerDay, 0, 0, 48),
+    /**
+     * 让她自己在独立会话里看这一轮刷到的（`aiDecide`）。
+     *
+     * **默认关**：开一轮就多一次模型调用。关着时结果进待处理队列，
+     * 等她下次调 `feed` 工具时接手——不会丢，只是晚一点。
+     */
+    aiDecide: boolOf(raw.aiDecide, false),
+    /** 额外想看的方向：一行一个，刷的时候按关键词也搜几条 */
+    feedKeywords: strOf(raw.feedKeywords, '', 400),
 
     ffmpegPath: strOf(raw.ffmpegPath, '', 300),
     shotWidth: intOf(raw.shotWidth, 512, 256, 1024),

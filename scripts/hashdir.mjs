@@ -34,6 +34,8 @@ const SKIP_FILES = new Set([
   'ui-data.json', 'qr.png', 'cookie.txt',
   /** 「谁回了 ta」的清单：运行时写入，内容随时在变 */
   'replies.json',
+  /** 刷到但模型还没看过的一批：运行时状态，随时在变 */
+  'pending.json',
 ]);
 
 /** 文本文件 CRLF 折成 LF；二进制原样（判定依据同 git：有没有 NUL 字节） */

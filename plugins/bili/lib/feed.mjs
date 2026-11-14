@@ -140,8 +140,29 @@ export function createFeed({
 
     running = true;
     try {
-      const raw = await api.hot({ ps: Number(cfg?.hotPoolSize) || 20 });
-      if (!Array.isArray(raw) || !raw.length) throw new Error('热门池是空的');
+      const hot = await api.hot({ ps: Number(cfg?.hotPoolSize) || 20 });
+      if (!Array.isArray(hot) || !hot.length) throw new Error('热门池是空的');
+
+      /**
+       * 面板里填的「额外想看的方向」：热门榜之外按关键词各搜两条。
+       *
+       * 放在热门**后面**：热门是"大家在看"，关键词是"她想看"，合并后
+       * 靠过滤和 `feedPerRun` 截断时热门优先——不然一开关键词，热门就全被挤掉了。
+       * 单个关键词失败只跳过，不让整轮失败。
+       */
+      const kws = String(cfg?.feedKeywords || '')
+        .split(/\r?\n/).map((x) => x.trim()).filter(Boolean).slice(0, 5);
+      const extra = [];
+      for (const kw of kws) {
+        try {
+          const got = await api.search({ keyword: kw, limit: 2 });
+          if (Array.isArray(got)) extra.push(...got);
+        } catch (e) {
+          log(`按「${kw}」搜失败（不影响这一轮）：${e?.message ?? e}`);
+        }
+      }
+      const seenBv = new Set(hot.map((v) => String(v?.bvid ?? '')));
+      const raw = [...hot, ...extra.filter((v) => v?.bvid && !seenBv.has(String(v.bvid)))];
 
       /** 先按「播放量 / 新鲜度」筛，再按「一轮看几个」截 */
       const filtered = filterItems(raw, {

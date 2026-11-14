@@ -33,11 +33,13 @@ import { resolveFfmpeg, ffmpegState, sharedDepsDir } from './lib/ffmpeg.mjs';
 import { createQrLogin } from './lib/qr-login.mjs';
 import { createLiveConfig } from './lib/live-config.mjs';
 import { createExtMemory } from './lib/memory.mjs';
+import { createPending } from './lib/pending.mjs';
+import { createBrowseSession, materialOfVideos } from './lib/ai-duty.mjs';
 import { createAutoShot } from './lib/auto-shot.mjs';
 import { bumpStats, readStats } from './lib/stats.mjs';
 import { countShots } from './lib/gallery.mjs';
 
-const SERVER = { name: 'bili', version: '0.10.1' };
+const SERVER = { name: 'bili', version: '0.11.0' };
 const log = (m) => process.stderr.write(`[bili] ${m}\n`);
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 
@@ -107,6 +109,9 @@ const refreshConfig = createLiveConfig({
   },
 });
 
+/** 刷到但模型还没看过的一批：模型下次调 feed 时接手（它才是决定者） */
+const pending = createPending({ dir: HERE, log });
+
 feed = createFeed({
   cfg,
   api,
@@ -119,6 +124,13 @@ feed = createFeed({
     ui.fromPool(items);
     /** 定时刷也算「今天刷了一轮」；面板上的数字靠它 */
     bumpStats(ui, { rounds: 1 });
+    /**
+     * 记进待处理队列：定时刷的时候没有模型在场，只能先存着。
+     * 模型下次调 `feed` 工具时会看到「有 N 条还没看过」，自己决定做什么。
+     */
+    pending.add(items);
+    /** 开了「让她自己看」就走独立会话；关着就留在待处理队列 */
+    setTimeout(() => { void aiDecideTask(items); }, 0);
     syncMeta();
     /** 抽帧慢（每个要一次 view + 一次 ffmpeg），不能阻塞这一轮的收尾 */
     setTimeout(() => { void autoShotTask(items); }, 0);
@@ -141,7 +153,7 @@ const shots = createShots({
 const memory = createExtMemory(process.env);
 push = createPush({ cfg, api, shots, submit, write, memory, log });
 /** `write` 直通给模型：它在对话里写的评论/点赞不该再套模板 */
-box = createToolbox({ api, log, config: cfg, feed, shots, push, write });
+box = createToolbox({ api, log, config: cfg, feed, shots, push, write, pending });
 
 /** 扫码登录：headless 浏览器出码，拿到 cookie 就写 cookie.txt */
 /** `depsDir` 里如果有 `qrcode` 就用它生成二维码，没有则退回内置编码器 */
@@ -221,6 +233,76 @@ function metaOf() {
 
 /** 自动抽帧（开关在 `cfg.autoShot`，默认关）：定时刷也走同一条路 */
 const autoShotTask = createAutoShot({ api, shots, ui, config: cfg, log });
+
+/**
+ * 让她自己看这轮刷到的（`cfg.aiDecide`，默认关）。
+ *
+ * 开一个独立会话，把材料投进去，拿回她的决定（感受 / 评论 / 分享 / 记忆），
+ * 这里照着执行。执行边界都在这一侧：试运行、每日额度、风控暂停全由
+ * `write` / `submit` 把关，她只能"表达意图"。
+ *
+ * 每轮一次模型调用，所以默认关；关着的时候结果会进 `pending` 队列，
+ * 等她下次调 `feed` 工具时接手。
+ */
+const aiDuty = createBrowseSession(process.env, { log });
+let aiBusy = false;
+
+async function aiDecideTask(items) {
+  if (!cfg.aiDecide) return;
+  if (aiBusy) return;
+  if (!Array.isArray(items) || !items.length) return;
+  aiBusy = true;
+  try {
+    const r = await aiDuty.decide(materialOfVideos(items));
+    if (!r.ok) {
+      log(`她这轮没看成：${r.why}`);
+      /** 没看成也把材料留在待处理队列里，别丢 */
+      pending.add(items);
+      return;
+    }
+    if (!r.items.length) {
+      log('她这轮看完，什么都没想做');
+      return;
+    }
+
+    const byBvid = new Map(items.map((v) => [String(v?.bvid ?? ''), v]));
+    const feelings = [];
+    for (const d of r.items) {
+      const v = byBvid.get(d.bvid);
+      if (!v) continue;
+      if (d.feeling) feelings.push({ bvid: d.bvid, title: String(v.title ?? ''), text: d.feeling, at: Date.now() });
+
+      /** 评论要 aid：热门池里没有，得查一次 */
+      if (d.comment) {
+        try {
+          const info = await api.view({ bvid: d.bvid });
+          const w = await write.comment(Number(info?.aid) || 0, d.comment);
+          if (w?.ok && !w.dryRun) bumpStats(ui, { comments: 1 });
+        } catch (e) {
+          log(`她想评论 ${d.bvid} 但没发出去：${e?.message ?? e}`);
+        }
+      }
+      /** 分享：她写的那句直接当素材投，宿主会让主人看到 */
+      if (d.share) {
+        try {
+          await submit.submit({ cause: '她刷 B 站看到的', key: `${d.bvid}|owner`, text: d.share, target: 'owner' });
+          bumpStats(ui, { shares: 1 });
+        } catch (e) {
+          log(`她想分享 ${d.bvid} 但没投出去：${e?.message ?? e}`);
+        }
+      }
+      if (d.remember && memory?.available) {
+        await memory.remember(d.remember);
+      }
+    }
+    if (feelings.length) ui.setMeta({ ai: { lastAt: Date.now(), count: feelings.length, top: feelings[0].text, title: feelings[0].title } });
+    log(`她看完了这一轮：说了 ${feelings.length} 句感受，${r.items.filter((x) => x.comment).length} 条评论，${r.items.filter((x) => x.share).length} 条分享`);
+  } catch (e) {
+    log(`她自己刷 B 站失败（不影响这一轮）：${e?.message ?? e}`);
+  } finally {
+    aiBusy = false;
+  }
+}
 
 /** 状态写盘失败不影响任何功能，面板少一块信息而已 */
 function syncMeta() {

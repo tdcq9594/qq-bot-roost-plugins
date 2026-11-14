@@ -33,6 +33,7 @@ import { createShots } from '../lib/shots.mjs';
 import { bumpStats, readStats } from '../lib/stats.mjs';
 import { countShots } from '../lib/gallery.mjs';
 import { createAutoShot } from '../lib/auto-shot.mjs';
+import { createPending } from '../lib/pending.mjs';
 import { ffmpegState, resolveFfmpeg, sharedDepsDir } from '../lib/ffmpeg.mjs';
 
 /** `ui/main.mjs` 的上一级就是扩展根目录（ui/ 的父目录） */
@@ -132,6 +133,9 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
     api, log,
   });
 
+  /** 刷到但模型还没看过的一批（进程内刷也记一份，模型下次调 feed 接手） */
+  const pending = createPending({ dir: HERE, log });
+
   /** 图库计数写进 meta，面板标题上的「n / 上限」用它 */
   function syncGalleryMeta() {
     setMeta({ gallery: { count: countShots({ dir: shots.dir }), limit: Number(config.shotKeep) || 60 } });
@@ -216,6 +220,7 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
       if (!r?.ok) return { ok: false, message: String(r?.why || '这一轮没刷成'), data: patch };
 
       bumpStats(ui, { rounds: 1 });
+      pending.add(feed.items());
       /** 自动抽帧开关默认关：它会让「刷一轮」多等几秒 */
       const shotN = config.autoShot ? await autoShot(feed.items()) : 0;
       if (!config.autoShot) syncGalleryMeta();
