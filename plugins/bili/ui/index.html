@@ -261,6 +261,8 @@
   let secrets = {};
   let busy = false;
   let meta = null;
+  /** 宿主里配置过的群；为空时「推送群号」退化成手填 */
+  let groups = [];
 
   const toast = (msg) => {
     const t = $('#toast');
@@ -392,6 +394,40 @@
       acts.append(show, note);
       wrap.append(acts);
       ctl.append(wrap);
+      return row;
+    }
+
+    /**
+     * 推送群号：宿主里配置过的群直接给下拉，不让人手抄。
+     * 一个群都没配时退回输入框，并写清为什么。
+     */
+    if (f.key === 'pushGroupTarget') {
+      const { row, ctl } = rowEl(f.label, groups.length ? f.hint : '还没有配置过群，先填群号；配过群之后这里会变成下拉');
+      if (!groups.length) {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = '群 openid（不是数字群号）';
+        input.value = draft[key] || '';
+        input.oninput = () => { draft[key] = input.value; };
+        ctl.append(input);
+        return row;
+      }
+      const sel = document.createElement('select');
+      const none = document.createElement('option');
+      none.value = '';
+      none.textContent = '不推（留空）';
+      sel.append(none);
+      groups.forEach((g) => {
+        const o = document.createElement('option');
+        o.value = g.chatId;
+        /** 显示群名，openid 放进 title：32 位 openid 铺在下拉里太占地方 */
+        o.textContent = g.name ? g.name : g.chatId;
+        o.title = g.chatId;
+        sel.append(o);
+      });
+      sel.value = draft[key] || '';
+      sel.onchange = () => { draft[key] = sel.value; };
+      ctl.append(sel);
       return row;
     }
 
@@ -588,7 +624,13 @@
     else if (d && d.ok) out.classList.add('ok');
   }
 
+  async function loadGroups() {
+    const r = await op('groups.list');
+    if (r && r.ok && Array.isArray(r.groups)) groups = r.groups;
+  }
+
   async function loadConfig() {
+    await loadGroups();
     const r = await op('extensions.config.get', { id: ID });
     if (!r || r.ok === false) {
       const d = document.createElement('div');
@@ -697,8 +739,20 @@
     const arg = { id: ID, action: name };
     if (payload) arg.payload = payload;
     const r = await op('extensions.ui.action', arg);
-    toast(r && r.message ? r.message : (r && r.ok ? '已交给扩展' : '没交上'));
-    if (r && r.ok) setTimeout(() => { loadData(); }, 2200);
+    const ok = Boolean(r && r.ok);
+    const msg = r && r.message ? r.message : (ok ? '已交给扩展' : '没交上');
+    toast(msg);
+    /** toast 只有两秒，失败原因同时钉在工具栏和顶部，方便回看 */
+    const tag = document.querySelector('#pending');
+    if (tag) {
+      tag.hidden = false;
+      tag.textContent = ok ? '已提交，等扩展处理' : '没提交上：' + msg;
+    }
+    if (!ok) {
+      const stamp = document.querySelector('#stamp');
+      if (stamp) stamp.textContent = '动作没提交上：' + msg;
+    }
+    if (ok) setTimeout(() => { loadData(); }, 2200);
     return r;
   }
 

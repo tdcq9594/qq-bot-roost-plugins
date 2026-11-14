@@ -116,14 +116,14 @@
       "type": "boolean",
       "label": "刷到好视频 → 推到群",
       "default": false,
-      "hint": "还要填群号，且群必须有 group_push 授权。建议同时打开「先问主人」"
+      "hint": "还要选一个群，且群必须有 group_push 授权。建议同时打开「先问主人」"
     },
     "pushGroupTarget": {
       "type": "string",
-      "label": "推送群号",
-      "maxLength": 30,
-      "placeholder": "纯数字群号",
-      "hint": "只认数字；host 会自己算 group_push 授权，没授权会丢这条"
+      "label": "推送群",
+      "maxLength": 64,
+      "placeholder": "群 openid",
+      "hint": "群 openid（不是数字群号）；host 会自己算 group_push 授权，没授权会丢这条"
     },
     "pushApproval": {
       "type": "boolean",

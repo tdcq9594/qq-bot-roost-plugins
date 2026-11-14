@@ -97,7 +97,7 @@ export function readConfig(env = process.env) {
     /** 主动推送：交给宿主的素材通道，由模型写措辞、宿主过门闸 */
     pushOwner: boolOf(raw.pushOwner, false),
     pushGroup: boolOf(raw.pushGroup, false),
-    pushGroupTarget: strOf(raw.pushGroupTarget, '', 30),
+    pushGroupTarget: strOf(raw.pushGroupTarget, '', 64),
     pushApproval: boolOf(raw.pushApproval, false),
     /** 素材里带 https 封面地址。不写 <<card:>>：主动轮次会抹平标记 */
     pushCover: boolOf(raw.pushCover, false),
