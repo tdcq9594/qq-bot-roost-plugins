@@ -211,7 +211,7 @@
     <h2>截图库 <span class="count" id="gal-count">0 / 60</span>
       <button type="button" class="ghost" id="gal-refresh" style="float:right">刷新</button>
     </h2>
-    <p class="card-sub">刷一轮时顺手截的帧会落在这里；也可以在上面「现在刷一轮」之前把「刷一轮时顺手截图」打开。</p>
+    <p class="card-sub">刷一轮时顺手截的帧会落在这里；想让它顺手截图，去设置里把「刷一轮时顺手截几张」改成大于 0。</p>
     <div id="gallery"><div class="empty">还没有截图</div></div>
   </div>
 
@@ -314,7 +314,8 @@
     { title: '登录', hint: '不填也能看，看不到 AI 字幕、不能评论', keys: ['cookie'] },
     { title: '怎么刷', hint: '只在她醒着的时间段里刷', keys: ['feedIntervalMin', 'feedActiveHours'] },
     { title: '主动推送', hint: '刷到好视频要不要告诉她 / 发到群，走宿主的素材通道', keys: ['pushOwner', 'pushGroup', 'pushGroupTarget', 'pushApproval', 'pushMinPlay', 'pushDailyLimit'] },
-    { title: '写动作', hint: '评论 / 点赞 / 弹幕默认只试运行，不真的发', keys: ['autoShot', 'autoComment', 'autoLike', 'autoDanmaku', 'writeDryRun', 'writeDailyLimit'] },
+    { title: '截图', hint: '刷一轮顺手抽帧，落扩展自己的 shots/，面板「截图库」直接能看', keys: ['autoShotCount', 'shotKeep'] },
+    { title: '写动作', hint: '评论 / 点赞 / 弹幕默认只试运行，不真的发', keys: ['autoComment', 'autoLike', 'autoDanmaku', 'writeDryRun', 'writeDailyLimit'] },
   ];
 
   function useSlider(f) {
@@ -730,7 +731,7 @@
       if (!items.length) {
         const d = document.createElement('div');
         d.className = 'empty';
-        d.textContent = '还没有截图。把设置里的「刷一轮时顺手截图」打开，再点「现在刷一轮」。';
+        d.textContent = '还没有截图。把设置里的「刷一轮时顺手截几张」改成大于 0，再点「现在刷一轮」。';
         box.append(d);
         return;
       }
@@ -758,7 +759,7 @@
       box.textContent = '';
       const d = document.createElement('div');
       d.className = 'empty';
-      d.textContent = '还没有截图（或「截图目录」指到了面板看不到的位置）。';
+      d.textContent = '还没有截图。';
       box.append(d);
     }
   }

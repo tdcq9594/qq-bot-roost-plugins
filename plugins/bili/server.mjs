@@ -39,7 +39,7 @@ import { createAutoShot } from './lib/auto-shot.mjs';
 import { bumpStats, readStats } from './lib/stats.mjs';
 import { countShots } from './lib/gallery.mjs';
 
-const SERVER = { name: 'bili', version: '0.11.0' };
+const SERVER = { name: 'bili', version: '0.11.1' };
 const log = (m) => process.stderr.write(`[bili] ${m}\n`);
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 

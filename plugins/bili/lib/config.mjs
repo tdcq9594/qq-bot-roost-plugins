@@ -73,6 +73,12 @@ export function readConfig(env = process.env) {
   } catch {
     /* 配置坏了不该让扩展起不来，按默认值继续 */
   }
+  /**
+   * 「顺手截几张」是**开关 + 数量合成的一项**：清单最多 32 个配置字段，
+   * 单独再放一个 boolean 会超（宿主 validateManifest 直接判清单无效，
+   * 整个扩展从已装列表里消失——0.11.0 就是这么丢的）。
+   */
+  const autoShotCount = intOf(raw.autoShotCount, 0, 0, 10);
   return {
     /** 总开关：关掉后不定时刷、不推送、不跑写动作；工具仍然可用 */
     enabled: raw.enabled !== false,
@@ -107,9 +113,16 @@ export function readConfig(env = process.env) {
     feedKeywords: strOf(raw.feedKeywords, '', 400),
 
     ffmpegPath: strOf(raw.ffmpegPath, '', 300),
-    shotWidth: intOf(raw.shotWidth, 512, 256, 1024),
-    shotKeep: intOf(raw.shotKeep, 12, 1, 50),
-    shotDir: strOf(raw.shotDir, '', 300),
+    /** 宽度固定 512：够看清又不慢；面板不再暴露（配置字段有上限） */
+    shotWidth: 512,
+    shotKeep: intOf(raw.shotKeep, 60, 1, 300),
+    /**
+     * 截图目录**固定用扩展自己的 `shots/`**。
+     *
+     * 面板只从扩展目录取图，指到别处等于「图库永远是空的」——这个坑
+     * 比「能自定义路径」的收益大得多，所以直接不给配。
+     */
+    shotDir: '',
 
     /* ---------------- 0.4：每个功能一个开关，默认全关 ---------------- */
     /** 主动推送：交给宿主的素材通道，由模型写措辞、宿主过门闸 */
@@ -123,8 +136,9 @@ export function readConfig(env = process.env) {
     pushDailyLimit: intOf(raw.pushDailyLimit, 20, 1, 200),
     pushPerFeed: intOf(raw.pushPerFeed, 1, 1, 5),
 
-    /** 定时刷命中后自动抽一帧存本地；不主动发图 */
-    autoShot: boolOf(raw.autoShot, false),
+    /** 顺手截几张（0 = 不截）。`autoShot` 是派生值，写动作/推送那边照旧只看它 */
+    autoShotCount,
+    autoShot: autoShotCount > 0,
 
     /** 写动作：不注册 MCP 工具，只在定时刷内部跑；试运行默认开 */
     autoComment: boolOf(raw.autoComment, false),

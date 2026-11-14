@@ -127,7 +127,7 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
    * `ffmpegPath` 传函数：装完 ffmpeg 不用重启扩展就能抽。
    */
   const shots = createShots({
-    dir: config.shotDir, keep: config.shotKeep, width: config.shotWidth,
+    dir: '', keep: Number(config.shotKeep) || 60, width: 512,
     here: HERE,
     ffmpegPath: () => resolveFfmpeg({ root: HERE, configured: config.ffmpegPath, depsDir: env.ROOST_DEPS_DIR }),
     api, log,
@@ -221,9 +221,10 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
 
       bumpStats(ui, { rounds: 1 });
       pending.add(feed.items());
-      /** 自动抽帧开关默认关：它会让「刷一轮」多等几秒 */
-      const shotN = config.autoShot ? await autoShot(feed.items()) : 0;
-      if (!config.autoShot) syncGalleryMeta();
+      /** 「顺手截几张」= 0 就是不截（它会让「刷一轮」多等几秒） */
+      const shotWant = Math.max(0, Math.min(10, Number(config.autoShotCount) || 0));
+      const shotN = shotWant ? await autoShot(feed.items()) : 0;
+      if (!shotWant) syncGalleryMeta();
       return {
         ok: true,
         message: `刷到 ${r.count} 条${shotN ? `，顺手截了 ${shotN} 张` : ''}`,

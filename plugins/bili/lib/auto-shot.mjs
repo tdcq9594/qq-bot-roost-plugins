@@ -21,12 +21,14 @@ import { countShots, writeIndex } from './gallery.mjs';
  */
 export function createAutoShot({ api, shots, ui, config, log = () => {} } = {}) {
   return async function autoShot(items) {
-    if (!config?.autoShot) return 0;
+    /**
+     * 「截几张」本身就是开关：0 = 不截。
+     * 不再单独看 `autoShot`——配置字段有 32 个上限，开关和数量合成一项。
+     */
+    const want = Math.max(0, Math.min(10, Number(config?.autoShotCount) || 0));
+    if (!want) return 0;
     const list = Array.isArray(items) ? items : [];
     if (!list.length) return 0;
-
-    const want = Math.max(0, Math.min(10, Number(config.autoShotCount) || 2));
-    if (!want) return 0;
     /** 没装 ffmpeg 就别白跑一遍接口 */
     if (!shots.ffmpegStatus().ready) return 0;
 

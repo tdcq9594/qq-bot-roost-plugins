@@ -127,3 +127,14 @@ console.log('✓ 0.4 开关默认值与覆盖');
 
 console.log(fail.length ? `\n✗ ${fail.length} 项未通过` : '\n✓ 全部通过');
 process.exit(fail.length ? 1 : 0);
+
+test('清单的配置字段不超过 32 个（宿主 validateManifest 的硬上限）', () => {
+  const j = JSON.parse(readFileSync(new URL('../plugin.json', import.meta.url), 'utf8'));
+  const n = Object.keys(j.config || {}).length;
+  /**
+   * 超过 32 宿主会直接判清单无效：扩展从已装列表和左侧导航**一起消失**，
+   * 面板只显示「还没有东西」。0.11.0 就是这么丢的（35 个字段）。
+   * 加配置项前先想清楚要不要合并。
+   */
+  assert.ok(n <= 32, `config 有 ${n} 个字段，超过宿主上限 32`);
+});
