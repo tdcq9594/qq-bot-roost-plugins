@@ -26,7 +26,7 @@ import { readConfig } from './lib/config.mjs';
 import { createFeed, createHostState } from './lib/feed.mjs';
 import { createShots } from './lib/shots.mjs';
 import { createProactiveClient } from './lib/proactive.mjs';
-import { createWriteApi, withMention } from './lib/write.mjs';
+import { createWriteApi } from './lib/write.mjs';
 import { createPush } from './lib/push.mjs';
 import { createUiActions } from './lib/ui-actions.mjs';
 import { resolveFfmpeg, ffmpegState, sharedDepsDir } from './lib/ffmpeg.mjs';
@@ -34,14 +34,14 @@ import { createQrLogin } from './lib/qr-login.mjs';
 import { createLiveConfig } from './lib/live-config.mjs';
 import { createExtMemory } from './lib/memory.mjs';
 import { createPending } from './lib/pending.mjs';
-import { createBrowseSession, materialOfVideos } from './lib/ai-duty.mjs';
+import { createSelfBrowse } from './lib/self-browse.mjs';
+import { createHistory } from './lib/history.mjs';
 import { createRepliedStore } from './lib/replied.mjs';
-import { lookAt } from './lib/vision.mjs';
 import { createAutoShot } from './lib/auto-shot.mjs';
 import { bumpStats, readStats } from './lib/stats.mjs';
 import { countShots } from './lib/gallery.mjs';
 
-const SERVER = { name: 'bili', version: '0.11.6' };
+const SERVER = { name: 'bili', version: '0.11.7' };
 const log = (m) => process.stderr.write(`[bili] ${m}\n`);
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 
@@ -114,6 +114,19 @@ const refreshConfig = createLiveConfig({
 /** 刷到但模型还没看过的一批：模型下次调 feed 时接手（它才是决定者） */
 const pending = createPending({ dir: HERE, log });
 
+/**
+ * 她自己看这一轮刷到的（`cfg.aiDecide`，默认关）。
+ *
+ * **抽在 `lib/self-browse.mjs`**：面板上的「现在刷一轮」跑在宿主进程里，
+ * 也要走同一套，否则手动刷只有数据、没有感想，面板「ta 刷过什么」永远空的。
+ *
+ * 声明必须早于 `createFeed`：`onFresh` 里要调它，而 `onFresh` 有可能在
+ * 模块还在求值的时候就被触发（定时器第一跳）。那时它还是 `null`，
+ * 可选链会安全跳过——但用 `const` 就会直接 TDZ 崩掉，而且只在
+ * 「刚启动就刷完一轮」这种时序下出现，极难查。
+ */
+let selfBrowse = null;
+
 feed = createFeed({
   cfg,
   api,
@@ -132,7 +145,7 @@ feed = createFeed({
      */
     pending.add(items);
     /** 开了「让她自己看」就走独立会话；关着就留在待处理队列 */
-    setTimeout(() => { void aiDecideTask(items); }, 0);
+    setTimeout(() => { void selfBrowse?.run(items); }, 0);
     syncMeta();
     /** 抽帧慢（每个要一次 view + 一次 ffmpeg），不能阻塞这一轮的收尾 */
     setTimeout(() => { void autoShotTask(items); }, 0);
@@ -156,6 +169,30 @@ const memory = createExtMemory(process.env);
 push = createPush({ cfg, api, shots, submit, write, memory, log });
 /** `write` 直通给模型：它在对话里写的评论/点赞不该再套模板 */
 box = createToolbox({ api, log, config: cfg, feed, shots, push, write, pending });
+
+/** 自动抽帧（开关在 `cfg.autoShot`，默认关）：定时刷也走同一条路 */
+const autoShotTask = createAutoShot({ api, shots, ui, config: cfg, log });
+
+/** 「ta 刷过什么」的账本：面板那一块直接读 `history.json`，不挤在 meta 里 */
+const history = createHistory({ dir: HERE, log });
+
+/** 「已经回过的评论」：每轮都会看到同一批「有人回了她」，不记下来会回十遍 */
+const replied = createRepliedStore({ dir: HERE, log });
+
+/**
+ * 她自己看这一轮。
+ *
+ * `env` 决定能不能建独立会话：MCP 子进程里由 launcher 注入了
+ * `ROOST_API_URL` / `ROOST_API_TOKEN`；手动 `--call` 跑的时候没有，
+ * 那时 `selfBrowse.available` 是 false，刷数据本身照常。
+ */
+selfBrowse = createSelfBrowse({
+  api, shots, cfg, write, submit, memory, replied, history, pending,
+  bump: (patch) => bumpStats(ui, patch),
+  setMeta: (patch) => ui.setMeta(patch),
+  env: process.env,
+  log,
+});
 
 /** 扫码登录：headless 浏览器出码，拿到 cookie 就写 cookie.txt */
 /** `depsDir` 里如果有 `qrcode` 就用它生成二维码，没有则退回内置编码器 */
@@ -231,174 +268,6 @@ function metaOf() {
     ffmpeg: ffmpegState({ root: HERE, configured: cfg.ffmpegPath }),
     danmaku: lastDanmaku,
   };
-}
-
-/** 自动抽帧（开关在 `cfg.autoShot`，默认关）：定时刷也走同一条路 */
-const autoShotTask = createAutoShot({ api, shots, ui, config: cfg, log });
-
-/**
- * 让她自己看这轮刷到的（`cfg.aiDecide`，默认关）。
- *
- * 开一个独立会话，把材料投进去，拿回她的决定（感受 / 评论 / 分享 / 记忆），
- * 这里照着执行。执行边界都在这一侧：试运行、每日额度、风控暂停全由
- * `write` / `submit` 把关，她只能"表达意图"。
- *
- * 每轮一次模型调用，所以默认关；关着的时候结果会进 `pending` 队列，
- * 等她下次调 `feed` 工具时接手。
- */
-/** 「已经回过的评论」：每轮都会看到同一批「有人回了你」，不记下来会回十遍 */
-const replied = createRepliedStore({ dir: HERE, log });
-
-const aiDuty = createBrowseSession(process.env, { log });
-let aiBusy = false;
-
-async function aiDecideTask(items) {
-  if (!cfg.aiDecide) return;
-  if (aiBusy) return;
-  if (!Array.isArray(items) || !items.length) return;
-  aiBusy = true;
-  try {
-    /**
-     * 有人回了她吗？
-     *
-     * 取最近的一批，**过滤掉她已经回过的**（`replied`）——B 站会把同一条回复
-     * 一直留在消息列表里，不去重就是每轮回一遍同一句话。
-     */
-    let replies = [];
-    try {
-      const list = await api.replyFeed({ limit: 15 });
-      replies = list.filter((x) => x.id && x.root && !replied.has(x.id));
-    } catch (e) {
-      log(`查「有人回了她」失败（不影响这一轮）：${e?.message ?? e}`);
-    }
-
-    /**
-     * 看画面（`vision`）：只对本轮前两条抽帧 + 让模型描述，描述并进材料。
-     *
-     * 只做两条是因为每条要抽 3~6 帧、再跑一次模型——一轮做十条会让「刷一轮」
-     * 从几秒变成几分钟。抽帧写进图库，面板「截图库」也能看到。
-     */
-    const descriptions = new Map();
-    if (cfg.vision) {
-      for (const v of items.slice(0, 2)) {
-        const bvid = String(v?.bvid ?? '');
-        if (!bvid) continue;
-        try {
-          const info = await api.view({ bvid });
-          const d = await lookAt({ v, info, shots, cfg, env: process.env, log });
-          if (d) descriptions.set(bvid, d);
-        } catch (e) {
-          log(`看画面失败 ${bvid}（不影响这一轮）：${e?.message ?? e}`);
-        }
-      }
-      if (descriptions.size) log(`看画面：${descriptions.size} 条有了画面描述`);
-    }
-
-    const r = await aiDuty.decide(materialOfVideos(items, { descriptions }), { replies });
-    if (!r.ok) {
-      log(`她这轮没看成：${r.why}`);
-      /** 没看成也把材料留在待处理队列里，别丢 */
-      pending.add(items);
-      return;
-    }
-    /** 视频可以一条都不评论，但「有人回了她」仍然要处理，所以不能在这里直接 return */
-    if (!r.items.length && !(r.replies || []).length) {
-      log('她这轮看完，什么都没想做');
-      return;
-    }
-
-    const byBvid = new Map(items.map((v) => [String(v?.bvid ?? ''), v]));
-    const feelings = [];
-    for (const d of r.items) {
-      const v = byBvid.get(d.bvid);
-      if (!v) continue;
-      if (d.feeling) feelings.push({ bvid: d.bvid, title: String(v.title ?? ''), text: d.feeling, at: Date.now() });
-
-      /**
-       * 评论和弹幕：**话是她自己写的**，这里只负责发。
-       *
-       * 两个开关各管一条出口：`autoComment` / `autoDanmaku` 关着就不发——
-       * 她可以想，但主人没允许这条出口。一次 `view` 同时拿 aid 和 cid，
-       * 别为了评论、弹幕各查一遍热门接口。
-       */
-      if (d.comment || d.danmaku) {
-        let info = null;
-        try {
-          info = await api.view({ bvid: d.bvid });
-        } catch (e) {
-          log(`她想对 ${d.bvid} 说话但拿不到视频信息：${e?.message ?? e}`);
-        }
-        const aid = Number(info?.aid) || 0;
-        const cid = Number(info?.cid) || 0;
-        const dur = Math.max(1, Math.floor(Number(info?.duration) || 0));
-
-        if (d.comment && cfg.autoComment && aid) {
-          try {
-            const w = await write.comment(aid, withMention(d.comment, cfg.ownerName));
-            if (w?.ok && !w.dryRun) bumpStats(ui, { comments: 1 });
-          } catch (e) {
-            log(`她想评论 ${d.bvid} 但没发出去：${e?.message ?? e}`);
-          }
-        }
-        if (d.danmaku && cfg.autoDanmaku && cid) {
-          try {
-            /** 1/3 处：开头常有片头，结尾可能没画面 */
-            const at = Math.max(1, Math.floor(dur / 3));
-            const w = await write.danmaku(cid, d.danmaku, at * 1000);
-            if (w?.ok && !w.dryRun) bumpStats(ui, { danmaku: 1 });
-          } catch (e) {
-            log(`她想发弹幕 ${d.bvid} 但没发出去：${e?.message ?? e}`);
-          }
-        }
-      }
-      /** 分享：她写的那句直接当素材投，宿主会让主人看到 */
-      if (d.share) {
-        try {
-          await submit.submit({ cause: '她刷 B 站看到的', key: `${d.bvid}|owner`, text: d.share, target: 'owner' });
-          bumpStats(ui, { shares: 1 });
-        } catch (e) {
-          log(`她想分享 ${d.bvid} 但没投出去：${e?.message ?? e}`);
-        }
-      }
-      if (d.remember && memory?.available) {
-        await memory.remember(d.remember);
-      }
-    }
-    /**
-     * 回别人回她的评论。
-     *
-     * 只认**材料里给过的那几条 id**：模型有时会编 id，拿它对不上就直接跳过——
-     * 否则可能回到别的视频、别的楼层去。楼层信息（oid/root/parent）也全用
-     * 扩展这边查到的，绝不采信模型。
-     */
-    let replyN = 0;
-    for (const rep of r.replies || []) {
-      if (!cfg.autoComment) break;
-      const src = replies.find((x) => String(x.id) === String(rep.id));
-      if (!src) continue;
-      try {
-        const w = await write.comment(Number(src.oid) || 0, withMention(rep.text, cfg.ownerName), {
-          root: Number(src.root) || 0,
-          parent: Number(src.parent) || 0,
-        });
-        if (w?.ok) {
-          replied.add(src.id);
-          replyN += 1;
-          if (!w.dryRun) bumpStats(ui, { replies: 1 });
-        }
-      } catch (e) {
-        log(`她想回 ${src.id} 但没发出去：${e?.message ?? e}`);
-      }
-    }
-
-    if (feelings.length) ui.setMeta({ ai: { lastAt: Date.now(), count: feelings.length, top: feelings[0].text, title: feelings[0].title } });
-    log(`她看完了这一轮：${feelings.length} 句感受，${r.items.filter((x) => x.comment).length} 条评论，`
-      + `${r.items.filter((x) => x.danmaku).length} 条弹幕，${replyN} 条回复，${r.items.filter((x) => x.share).length} 条分享`);
-  } catch (e) {
-    log(`她自己刷 B 站失败（不影响这一轮）：${e?.message ?? e}`);
-  } finally {
-    aiBusy = false;
-  }
 }
 
 /** 状态写盘失败不影响任何功能，面板少一块信息而已 */

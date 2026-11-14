@@ -123,11 +123,23 @@ export function createPush({
     }
     const targets = [];
     if (cfg?.pushOwner) targets.push({ target: 'owner', approve: false });
-    if (cfg?.pushGroup && String(cfg?.pushGroupTarget || '').trim()) {
-      targets.push({
-        target: `group:${String(cfg.pushGroupTarget).trim()}`,
-        approve: Boolean(cfg?.pushApproval),
-      });
+    /**
+     * 推群：**没选就不推**。
+     *
+     * 留空不是「随便挑一个」——那会让「我只想私聊」的人莫名其妙把东西
+     * 发到群里。要自动挑最近说话的群，得在下拉里显式选「自动」，
+     * 那时 `pushGroupTarget` 存的是 `recent`，交给宿主现挑（它才知道
+     * 哪些群在说话、哪个有 group_push 授权）。
+     */
+    if (cfg?.pushGroup) {
+      const to = String(cfg?.pushGroupTarget || '').trim();
+      if (to) {
+        const recent = to === 'recent' || to === 'group:recent';
+        targets.push({
+          target: recent ? 'recent' : `group:${to}`,
+          approve: Boolean(cfg?.pushApproval),
+        });
+      }
     }
     if (!targets.length) return { delivered: 0, why: '没开任何推送开关' };
     if (!submit?.available) return { delivered: 0, why: '宿主素材通道不可用（没令牌或没地址）' };

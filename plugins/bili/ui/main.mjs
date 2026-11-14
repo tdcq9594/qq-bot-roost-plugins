@@ -35,8 +35,13 @@ import { countShots } from '../lib/gallery.mjs';
 import { createAutoShot } from '../lib/auto-shot.mjs';
 import { createPending } from '../lib/pending.mjs';
 import { createProactiveClient } from '../lib/proactive.mjs';
-import { materialOf } from '../lib/push.mjs';
+import { createRoostLink } from '../lib/roost-link.mjs';
+import { cardOf } from '../lib/card.mjs';
 import { ffmpegState, resolveFfmpeg, sharedDepsDir } from '../lib/ffmpeg.mjs';
+import { createSelfBrowse } from '../lib/self-browse.mjs';
+import { createHistory } from '../lib/history.mjs';
+import { createRepliedStore } from '../lib/replied.mjs';
+import { createExtMemory } from '../lib/memory.mjs';
 
 /** `ui/main.mjs` 的上一级就是扩展根目录（ui/ 的父目录） */
 const HERE = fileURLToPath(new URL('..', import.meta.url));
@@ -138,8 +143,36 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
   /** 刷到但模型还没看过的一批（进程内刷也记一份，模型下次调 feed 接手） */
   const pending = createPending({ dir: HERE, log });
 
-  /** 主动素材通道：测试分享用它，写死发给主人 */
+  /** 主动素材通道：定时刷的自动推送还走它（由模型决定要不要说） */
   const proactive = createProactiveClient(env || process.env, {});
+
+  /** 直连协议转发：面板「测试分享」用它直接发卡片，不跑模型 */
+  const roostLink = createRoostLink(env || process.env, {});
+
+  /** 「ta 刷过什么」的账本：和 MCP 子进程共用同一个文件、同一套合并规则 */
+  const history = createHistory({ dir: HERE, log });
+
+  /** 「已经回过的评论」：面板手动查回复时也要用它，别把回过的又列出来 */
+  const replied = createRepliedStore({ dir: HERE, log });
+
+  /** 宿主记忆：她看到的「主人的口味」写这里，两个进程共用一套 */
+  const memory = createExtMemory(env || process.env, {});
+
+  /**
+   * 她自己看这一轮 —— **和定时刷同一个实现**。
+   *
+   * 宿主会在每次点击前把 `/v1` 的地址与令牌原地塞进 `env`
+   * （见 `host.js` 的 `inprocessApiEnv`），所以这里能建独立会话。
+   * 拿不到令牌时 `available` 是 false，`run()` 会明确回一句
+   * 「没有 API 令牌」，不会静默变成「没反应」。
+   */
+  const selfBrowse = createSelfBrowse({
+    api, shots, cfg: config, write, submit: proactive, memory, replied, history, pending,
+    bump: (patch) => bumpStats(ui, patch),
+    setMeta: (patch) => setMeta(patch),
+    env: env || process.env,
+    log,
+  });
 
   /** 图库计数写进 meta，面板标题上的「n / 上限」用它 */
   function syncGalleryMeta() {
@@ -159,15 +192,6 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
    * 标量——塞进去会被 `String()` 成 "[object Object]"。页面单独取这个文件。
    */
   const repliesFile = () => join(HERE, 'replies.json');
-
-  function readReplies() {
-    try {
-      const j = JSON.parse(readFileSync(repliesFile(), 'utf8'));
-      return { seen: Array.isArray(j?.seen) ? j.seen : [], items: Array.isArray(j?.items) ? j.items : [] };
-    } catch {
-      return { seen: [], items: [] };
-    }
-  }
 
   function writeReplies(next) {
     try {
@@ -230,10 +254,58 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
       const shotWant = Math.max(0, Math.min(10, Number(config.autoShotCount) || 0));
       const shotN = shotWant ? await autoShot(feed.items()) : 0;
       if (!shotWant) syncGalleryMeta();
+
+      /**
+       * **让她自己看这一轮**。
+       *
+       * 这是「ta 刷过什么」有没有内容的分界：只拉数据的话，面板上只有一行
+       * 「刷到 N 条」，看不见她看了什么、想了什么。定时刷那边一直是这么做的
+       * （`server.mjs` 的 onFresh），手动刷以前没做，所以两个入口行为不一致。
+       *
+       * **`force: true`**：用户明确点了这个按钮，就一定要开独立会话让她看，
+       * 不受「让她自己看这一轮」开关影响（那个开关只管后台定时刷）。
+       * 之前少了它，开关默认关 → 点一百次都只拉数据 → 面板上「没反应、
+       * 没开刷 B 站会话」。对齐 aurabot 的 `bili.run({ force: true })`。
+       *
+       * 会等模型（最长 90 秒），前端按钮期间显示「她正在看…」。
+       */
+      const ai = await selfBrowse.run(feed.items(), { force: true });
+
+      const bits = [`刷到 ${r.count} 条`];
+      if (shotN) bits.push(`顺手截了 ${shotN} 张`);
+      if (ai.ok) bits.push(ai.watched ? `她看了 ${ai.watched} 条` : '她看完没想说什么');
+      else bits.push(`她自己看那步没成：${String(ai.why || '未知原因').slice(0, 60)}`);
       return {
         ok: true,
-        message: `刷到 ${r.count} 条${shotN ? `，顺手截了 ${shotN} 张` : ''}`,
-        data: { ...patch, shots: shotN },
+        message: bits.join('，'),
+        data: { ...patch, shots: shotN, watched: Number(ai.watched) || 0 },
+      };
+    },
+
+    /**
+     * 「看看有没有人回 ta」。
+     *
+     * 之前在面板上声明了按钮却没声明动作，宿主直接回 400「没有声明动作」，
+     * 点了**一点反应都没有**——这就是那批「点了没反应」的按钮之一。
+     *
+     * 只读：拉 B 站「收到的回复」，落一份 `replies.json` 给面板渲染。
+     * 不写 `replied` 记录（那表示「已经回过」，查一遍不等于回过）。
+     */
+    async check_replies() {
+      if (!getCookie()) {
+        return { ok: false, message: '还没登录 B 站：先扫码或者粘 Cookie，否则查不到回复' };
+      }
+      const list = await api.replyFeed({ limit: 20 });
+      const items = Array.isArray(list) ? list : [];
+      const fresh = items.filter((x) => x.id && !replied.has(x.id));
+      writeReplies({ seen: items.map((x) => x.id), items, at: Date.now() });
+      setMeta({ replies: { at: Date.now(), unread: fresh.length, total: items.length } });
+      return {
+        ok: true,
+        message: items.length
+          ? `查到 ${items.length} 条回复${fresh.length ? `，其中 ${fresh.length} 条还没回` : '（都回过了）'}`
+          : '还没有人回 ta',
+        data: { total: items.length, unread: fresh.length },
       };
     },
 
@@ -303,20 +375,21 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
     },
 
     /**
-     * 测试分享：**写死发给主人**。
+     * 测试分享：**自动挑最新一条，生成卡片，直接发给主人，不经过模型**。
      *
-     * 用途是验证「刷到好视频 → 主动告诉主人」这条链路通不通。走的是和真推送
-     * 完全同一条通道（`/v1/proactive/submit`），只是目标固定 `owner`，
-     * 不受「推送群」「审批」开关影响。
+     * 以前走 `/v1/proactive/submit`（素材通道）：宿主入队后立刻开一次主动搭话
+     * 模型调用让「她」写措辞，而模型当时根本没看到视频素材，结果常是
+     * `<<skip>>` —— 钱花了、什么都没发出去，面板却因为「入队成功」报已发送。
      *
-     * `key` 带时间戳：宿主按 key 去重，用固定 key 点第二次会被判「已经排过了」，
-     * 而测试就是要每次都能发。
+     * 分享一张官方卡片不需要模型写字：标题/描述/链接/封面扩展早就拼好了。
+     * 现在走宿主代理的直连协议 `msg.send`（`/v1/roost.call`），`target:"owner"`
+     * 由宿主解析，点一下就到主人私聊。成功判据是框架真的回了消息 id。
      */
     async test_share(payload) {
-      if (!proactive.available) {
-        return { ok: false, message: '宿主没给令牌，发不了主动消息（手动跑扩展时正常）' };
+      if (!roostLink.available) {
+        return { ok: false, message: '宿主没给直连协议令牌，发不了卡片（手动跑扩展时正常）' };
       }
-      /** 优先用指定的 BV，其次最近一条，再没有就现拉一条热门 */
+      /** 优先用指定的 BV，其次最近一条（最新），再没有就现拉一条热门 */
       let v = null;
       const want = String(payload?.bvid || '').trim();
       const pool = feed.items() || [];
@@ -332,21 +405,22 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
       }
       if (!v) return { ok: false, message: '还没有视频可分享，先点「现在刷一轮」' };
 
-      /** 分享就是发图文卡片：带上拼好的卡片标记 */
-      const text = materialOf(v, { withCover: config.pushCover !== false, withCard: true });
-      const r = await proactive.submit({
-        cause: '测试分享（写死发给主人）',
-        key: `test-${Date.now()}`,
-        text,
-        target: 'owner',
-      });
-      if (!r.ok) return { ok: false, message: String(r.why || '没投出去') };
+      /** 卡片四个字段都用现成数据拼；没封面的视频发不了官方图文卡片 */
+      let card;
+      try {
+        ({ card } = cardOf(v));
+      } catch (e) {
+        return { ok: false, message: '这张卡片拼不出来：' + (e?.message ?? e) };
+      }
+      const r = await roostLink.sendCard(card);
+      if (!r.ok) return { ok: false, message: '没发出去：' + String(r.why || '未知原因') };
+
       bumpStats(ui, { shares: 1 });
-      setMeta({ share: { lastAt: Date.now(), title: String(v.title || ''), bvid: String(v.bvid || ''), id: String(r.id || '') } });
+      setMeta({ share: { lastAt: Date.now(), title: String(v.title || ''), bvid: String(v.bvid || ''), id: r.id } });
       return {
         ok: true,
-        message: `已把《${String(v.title || v.bvid).slice(0, 24)}》投给主人${r.retry ? '（宿主说稍后重试）' : ''}`,
-        data: { id: r.id, bvid: v.bvid },
+        message: `已把《${String(v.title || v.bvid).slice(0, 24)}》直接发给主人${r.pending ? '（平台审核中）' : ''}`,
+        data: { id: r.id, bvid: v.bvid, direct: true },
       };
     },
 

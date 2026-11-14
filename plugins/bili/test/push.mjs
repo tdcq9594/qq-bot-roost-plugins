@@ -71,7 +71,7 @@ test('打开私聊推送：按播放门槛挑、每天同一个 BV 不重复推'
   assert.equal(third.delivered, 0, '达标的都推过了、冷门的不够门槛，这轮就安静');
 });
 
-test('推群：带群号、按开关要求审批；缺群号就不发', async () => {
+test('推群：带群号、按开关要求审批；没选群就交给宿主挑最近的', async () => {
   const sub = fakeSubmit();
   const push = createPush({
     cfg: cfg0({ pushOwner: true, pushGroup: true, pushGroupTarget: '987654321', pushApproval: true }),
@@ -85,10 +85,25 @@ test('推群：带群号、按开关要求审批；缺群号就不发', async ()
   assert.equal(sub.calls[1].approve, true, '群分享按开关走审批');
   assert.notEqual(sub.calls[0].key, sub.calls[1].key, '宿主按 key 去重，两个目标不能撞同一个 key');
 
+  /**
+   * **没选群就不推群**。
+   *
+   * 留空不能当成「随便挑一个群」：那样只想私聊的人会莫名其妙把视频
+   * 发到群里。要自动挑，得在下拉里显式选「自动」（存 `recent`）。
+   */
   const noGroup = fakeSubmit();
-  const p2 = createPush({ cfg: cfg0({ pushOwner: true, pushGroup: true }), api: fakeApi(), submit: noGroup, now: () => T });
+  const p2 = createPush({ cfg: cfg0({ pushOwner: false, pushGroup: true }), api: fakeApi(), submit: noGroup, now: () => T });
   await p2.onFresh(POOL);
-  assert.equal(noGroup.calls.length, 1, '没填群号时只发私聊，别把 group: 空串投出去');
+  assert.equal(noGroup.calls.length, 0, '没选群 + 没开私聊 = 一条都不发');
+
+  /** 显式写 recent / group:recent → 交给宿主按活跃度挑，别拼成 group:recent 这种怪值 */
+  for (const v of ['recent', 'group:recent']) {
+    const sub2 = fakeSubmit();
+    const p3 = createPush({ cfg: cfg0({ pushOwner: false, pushGroup: true, pushGroupTarget: v }), api: fakeApi(), submit: sub2, now: () => T });
+    await p3.onFresh(POOL);
+    assert.equal(sub2.calls.length, 1);
+    assert.equal(sub2.calls[0].target, 'recent', `${v} 应该规整成 recent`);
+  }
 });
 
 test('每日推送额度用完就停，写动作额度独立', async () => {

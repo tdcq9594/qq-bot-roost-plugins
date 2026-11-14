@@ -174,6 +174,20 @@
   .err { color: var(--danger); font-size: 11.5px; margin-top: 8px; }
   .tag { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 10.5px; background: var(--accent-soft); color: var(--accent); }
 
+  /**
+   * 「ta 刷过什么」：一列一条，左边时间 + 她做了什么，右边标题 + 感想。
+   * 左边固定 84px，长列表扫下来时间是对齐的（跟 aurabot 那页同一个版式）。
+   */
+  .hist { display: grid; grid-template-columns: 84px 1fr; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); }
+  .hist:first-child { border-top: 0; }
+  .hist .when { color: var(--muted); font-size: 11px; line-height: 1.6; }
+  .hist .what { min-width: 0; }
+  .hist .what a { color: var(--accent); text-decoration: none; font-size: 12.5px; font-weight: 600; }
+  .hist .what a:hover { text-decoration: underline; }
+  .hist .what b { font-size: 12.5px; }
+  .hist .say { color: var(--fg-2); font-size: 12px; line-height: 1.7; margin-top: 3px; word-break: break-word; }
+  .hist .acts { color: var(--muted); font-size: 11px; margin-top: 3px; }
+
   .toast {
     position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
     background: rgba(17,24,39,.92); color: #fff; padding: 9px 18px; border-radius: 9px;
@@ -226,11 +240,11 @@
     <h2>ta 刷过什么
       <span class="h2-right">
         <button type="button" id="act-replies">看看有没有人回 ta</button>
-        <button type="button" id="act-share" title="用最近刷到的一条构造分享素材，固定发给主人（不受群推送开关影响）">测试分享</button>
+        <button type="button" id="act-share" title="自动挑最新刷到的一条，生成官方卡片直接发给主人，不经过模型（不受群推送开关影响）">现在分享</button>
         <button type="button" class="primary" id="act-feed">现在刷一轮</button>
       </span>
     </h2>
-    <p class="card-sub" id="act-line">今天自动刷了 0 轮 · 截图 0 张 · 评论 0 条</p>
+    <p class="card-sub" id="act-line">今天自动刷了 0 轮 · 评论 0 条</p>
     <div id="recent"><div class="empty">还没有记录。点右上角「现在刷一轮」试试。</div></div>
     <div class="sub-h" style="margin-top:14px">谁回了 ta <span class="note" id="replies-note"></span></div>
     <div id="replies"><div class="empty">还没查过。点右上角「看看有没有人回 ta」。</div></div>
@@ -320,7 +334,7 @@
   const GROUPS = [
     {
       title: '怎么刷',
-      hint: '只在「主动搭话」里设的醒着时间内刷。播完这一轮，她自己在独立会话里看内容，再决定评不评论、发不发弹幕、要不要分享。',
+      hint: '手动点「现在刷一轮」一定会开独立会话让她看内容、再决定评不评论、发不发弹幕、要不要分享；后台定时刷由下面「定时刷时让她自己看」控制，并且只在「主动搭话」里设的醒着时间内跑。',
       keys: ['feedIntervalMin', 'feedMaxRunsPerDay', 'feedPerRun', 'feedKeywords', 'feedMinViews', 'feedMaxAgeDays', 'feedActiveHours', 'aiDecide'],
     },
     {
@@ -461,48 +475,57 @@
     }
 
     /**
-     * 推送群号：宿主里配置过的群直接给下拉，不让人手抄。
-     * 一个群都没配时退回输入框，并写清为什么。
+     * 推送群：一律从下拉选，**永远不让用户碰 openid**。
+     *
+     * 三档：
+     *   · 不推（留空）——**默认**，没选就一条都不往群里发；
+     *   · 自动 · 最近说话的群——推送时现挑，按活跃时间排序、跳过没有
+     *     group_push 授权的（这样换群、换机器人都不会失效）；
+     *   · 具体某个群——想固定推就选它。名字没学到时用尾号，至少能区分。
      */
     if (f.key === 'pushGroupTarget') {
-      /**
-       * 群一律从下拉选，**不让用户碰 openid**。
-       *
-       * 候选来自宿主的 `groups.list`：已配置的唤醒群 + 框架里**收到过消息的群**
-       * （后者带群名）。一个都没有时才退回输入框——那种情况下确实没东西可选，
-       * 提示要写清楚怎么让它出现。
-       */
-      const { row, ctl } = rowEl(f.label, groups.length
-        ? '从收到过消息的群里选，不用记 openid'
-        : '还没有收到过群消息。让群里有人说一句话，回到这里点右上角「刷新」就会出现');
-      if (!groups.length) {
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.placeholder = '群 openid（一般不用手填）';
-        input.value = draft[key] || '';
-        input.oninput = () => { draft[key] = input.value; };
-        ctl.append(input);
-        return row;
-      }
+      const { row, ctl } = rowEl(
+        '推送到哪个群',
+        groups.length
+          ? '不选就不推群。选「自动」= 每次推给最近说话的那个群'
+          : '还没有群说过话。等群里有消息，宿主会自己认出来，这里就会出现',
+      );
       const sel = document.createElement('select');
       const none = document.createElement('option');
       none.value = '';
       none.textContent = '不推（留空）';
       sel.append(none);
+      const auto = document.createElement('option');
+      auto.value = 'recent';
+      auto.textContent = '自动 · 最近说话的群';
+      auto.title = '推送时现挑：按最近活跃排序，跳过没有 group_push 授权的群';
+      sel.append(auto);
+
+      const ago = (t) => {
+        const v = Number(t) || 0;
+        if (!v) return '';
+        const min = Math.round((Date.now() - v) / 60000);
+        if (min < 1) return ' · 刚刚说过话';
+        if (min < 60) return ` · ${min} 分钟前说过话`;
+        const hr = Math.round(min / 60);
+        if (hr < 24) return ` · ${hr} 小时前说过话`;
+        return ` · ${Math.round(hr / 24)} 天前说过话`;
+      };
       groups.forEach((g) => {
         const o = document.createElement('option');
         o.value = g.chatId;
         /**
-         * 只显示群名。名字还没学到时给一句「未命名群 · 尾号」——
-         * 32 位 openid 铺在下拉里既看不完也记不住，本来就是要摆脱它的东西。
+         * 只显示群名（+ 最近活跃）。32 位 openid 铺在下拉里既看不完也记不住，
+         * 本来就是要摆脱的东西。
          */
-        o.textContent = g.name ? g.name : `未命名群 · ${String(g.chatId).slice(-6)}`;
+        const name = g.name || `未命名群 · ${String(g.chatId).slice(-6)}`;
+        o.textContent = `${name}${ago(g.lastSeenAt)}`;
         o.title = g.name ? g.name : '群名还没学到（群里有人说话之后会补上）';
         sel.append(o);
       });
       /** 已保存的值不在候选里（换过机器人 / 群名字没学到）：补一项，别让下拉变空白 */
       const cur = String(draft[key] || '');
-      if (cur && !groups.some((g) => g.chatId === cur)) {
+      if (cur && cur !== 'recent' && cur !== 'group:recent' && !groups.some((g) => g.chatId === cur)) {
         const o = document.createElement('option');
         o.value = cur;
         o.textContent = `当前设置 · ${cur.slice(-6)}`;
@@ -601,39 +624,78 @@
   }
 
   /**
-   * 「看画面」卡底部：ffmpeg 有没有 + 一键装到框架共享目录。
+   * ffmpeg 状态与安装进度。
    *
-   * 装在 `<数据目录>/deps` 而不是扩展自己这里：一份装了所有扩展都能用，
-   * 扩展升级/卸载也不会把它删掉。状态来自 `meta.ffmpeg`，装完立刻回填。
+   * ## 为什么不能只看 `meta.ffmpeg`
+   *
+   * `meta` 是扩展写进 `ui-data.json` 的快照，只有扩展自己算过才有值；
+   * 面板刚打开时它可能是**上一次进程**留下的旧值（写着「没找到」，
+   * 而 ffmpeg 早就装好了）。用户于是反复点「装 ffmpeg」，而宿主那边
+   * 每次都立刻回「已经装好了」——表现就是**闪一下、没有进度**。
+   *
+   * 现在以宿主的 `sharedDeps.status` 为准：它现读磁盘，是唯一真相。
+   *
+   * ## 进度从哪来
+   *
+   * `install()` 是一次几十秒的 npm 调用，宿主在模块里维护 `installing`；
+   * 面板每 1.5 秒问一次，显示「已 N 秒」。刷新页面也不会丢——状态在宿主，
+   * 不在这个变量里。
    */
-  /**
-   * 「看画面」卡底部的 ffmpeg 状态。
-   *
-   * 安装要跑十几秒到几分钟，**必须有进度可见**：只弹一个 toast 再消失，
-   * 用户只看到屏幕闪一下，会以为没点上。所以这里维护一份 `ffmpegJob`：
-   *   · running —— 按钮禁用，旁边一直显示「已等待 N 秒」；
-   *   · error —— 失败原因常驻在行里，带「重试」；
-   *   · 结束后用宿主返回的真实路径刷新，不等扩展写盘。
-   *
-   * 状态行要能**单独刷新**（`syncVisionNote`）：`meta` 是 `loadData()` 才有的，
-   * 只在 `renderSettings()` 画一次的话，页面一开永远是「没找到」。
-   */
+  let deps = null;
+  let depsTimer = null;
+
+  /** 本地乐观态：刚点下去、宿主还没把 installing 置起来的这一两秒 */
   let ffmpegJob = null;
 
+  async function refreshDeps() {
+    const r = await op('sharedDeps.status');
+    if (r && r.ok !== false && typeof r === 'object') deps = r;
+    syncVisionNote();
+    /** 装完了就停止轮询；还在装就继续问 */
+    const running = Boolean(deps && deps.installing);
+    if (running && !depsTimer) {
+      depsTimer = setInterval(() => { void refreshDeps(); }, 1500);
+    } else if (!running && depsTimer) {
+      clearInterval(depsTimer);
+      depsTimer = null;
+    }
+  }
+
+  /** 宿主那边的安装状态（只认 ffmpeg 这个包） */
+  function installingNow() {
+    const it = deps && deps.installing;
+    if (!it || !/ffmpeg/i.test(String(it.name || ''))) return null;
+    return it;
+  }
+
   function ffmpegLine() {
-    const f = meta && meta.ffmpeg ? meta.ffmpeg : null;
+    const inst = installingNow();
+    if (inst) {
+      const sec = Math.max(0, Math.round((Number(inst.elapsedMs) || 0) / 1000));
+      const step = String(inst.step || '').slice(0, 80);
+      return {
+        color: 'var(--fg-2)',
+        text: `正在安装 ffmpeg（约 62 MB）… 已 ${sec} 秒${step ? ` · ${step}` : '，第一次要几分钟'}`,
+        btn: 'none',
+      };
+    }
     if (ffmpegJob && ffmpegJob.state === 'running') {
       const sec = Math.max(0, Math.round((Date.now() - ffmpegJob.startedAt) / 1000));
-      return { color: 'var(--muted)', text: `正在安装 ffmpeg（约 62 MB）… 已等待 ${sec} 秒，第一次要几分钟`, btn: 'none' };
+      return { color: 'var(--fg-2)', text: `正在安装 ffmpeg（约 62 MB）… 已 ${sec} 秒，第一次要几分钟`, btn: 'none' };
     }
     if (ffmpegJob && ffmpegJob.state === 'error') {
-      return { color: 'var(--bad)', text: `装失败：${ffmpegJob.message || '未知原因'}`, btn: '重试' };
+      return { color: 'var(--danger)', text: `装失败：${ffmpegJob.message || '未知原因'}`, btn: '重试' };
     }
-    if (!f) return { color: 'var(--muted)', text: 'ffmpeg 状态还没读出来…', btn: 'none' };
-    if (f.ready) return { color: 'var(--ok)', text: `✓ 已找到 ffmpeg：${f.path || ''}`, btn: 'none' };
+
+    /** 以宿主为准；拿不到宿主状态时退回扩展的快照 */
+    const path = deps ? String(deps.ffmpeg || '') : String((meta && meta.ffmpeg && meta.ffmpeg.path) || '');
+    if (path) return { color: 'var(--ok)', text: `✓ 已找到 ffmpeg：${path}`, btn: 'none' };
+
+    const dir = deps ? String(deps.dir || '') : String((meta && meta.ffmpeg && meta.ffmpeg.dir) || '');
+    if (!deps) return { color: 'var(--muted)', text: 'ffmpeg 状态还没读出来…', btn: 'none' };
     return {
       color: 'var(--warn)',
-      text: `✗ 没找到 ffmpeg：抽帧会被跳过${f.dir ? `（共享目录：${f.dir}）` : ''}`,
+      text: `✗ 没找到 ffmpeg：抽帧会被跳过${dir ? `（共享目录：${dir}）` : ''}`,
       btn: '装到框架共享目录（约 62 MB）',
     };
   }
@@ -672,11 +734,13 @@
   function syncVisionNote() {
     const box = document.querySelector('#vision-note');
     if (!box) return;
-    if (ffmpegJob && ffmpegJob.state === 'running') {
+    const inst = installingNow();
+    if (inst || (ffmpegJob && ffmpegJob.state === 'running')) {
       const text = document.querySelector('#vision-text');
       if (text) {
-        const sec = Math.max(0, Math.round((Date.now() - ffmpegJob.startedAt) / 1000));
-        text.textContent = `正在安装 ffmpeg（约 62 MB）… 已等待 ${sec} 秒，第一次要几分钟`;
+        const line = ffmpegLine();
+        box.style.color = line.color;
+        text.textContent = line.text;
       }
       return;
     }
@@ -688,35 +752,41 @@
    *
    * 装在 `<数据目录>/deps`（框架共享目录）而不是扩展自己这里：一份装了所有
    * 扩展都能用，扩展升级/卸载也不会把它删掉。
+   *
+   * **先问一次宿主**：已经装好了就直接说「已经装好了」，不再跑一遍 npm。
+   * 以前这里无条件调 install，宿主秒回 `skipped`，界面上就是「闪一下」——
+   * 用户以为没装上，反复点。
    */
   async function installFfmpeg() {
-    if (ffmpegJob && ffmpegJob.state === 'running') return;
+    if (installingNow() || (ffmpegJob && ffmpegJob.state === 'running')) return;
+
     ffmpegJob = { state: 'running', startedAt: Date.now(), message: '' };
     syncVisionNote();
-    /** 每秒刷一次「已等待 N 秒」：这十几秒里界面必须有动静 */
-    const tick = setInterval(() => { syncVisionNote(); }, 1000);
+
+    /** 先看一眼：已经就绪就别折腾，直接告诉用户 */
+    await refreshDeps();
+    if (deps && deps.ffmpeg) {
+      ffmpegJob = { state: 'done', startedAt: 0, message: '' };
+      syncVisionNote();
+      toast(`ffmpeg 已经装好了：${deps.ffmpeg}`);
+      return;
+    }
+
     let r = null;
     try {
       r = await op('sharedDeps.install', { name: '@ffmpeg-installer/ffmpeg' });
     } catch (e) {
       r = { ok: false, message: String((e && e.message) || e) };
-    } finally {
-      clearInterval(tick);
     }
-    if (r && r.ok) {
-      /** 拿宿主的最新状态：ui-data.json 里还是安装前的快照 */
-      const st = await op('sharedDeps.status');
-      if (st && st.ok) {
-        meta = Object.assign({}, meta, {
-          ffmpeg: { ready: Boolean(st.ffmpeg), path: String(st.ffmpeg || ''), dir: String(st.dir || '') },
-        });
-      }
-      ffmpegJob = { state: 'done', startedAt: 0, message: '' };
-      toast(r.skipped ? '已经装好了' : `装好了：${String((st && st.ffmpeg) || '已就绪')}`);
-    } else {
-      ffmpegJob = { state: 'error', startedAt: 0, message: String((r && r.message) || '未知原因') };
-      toast('装失败：' + ffmpegJob.message);
-    }
+    ffmpegJob = r && r.ok
+      ? { state: 'done', startedAt: 0, message: '' }
+      : { state: 'error', startedAt: 0, message: String((r && r.message) || '未知原因') };
+
+    /** 拿宿主的最新状态：装完之后的那份才是真的 */
+    await refreshDeps();
+    const path = deps ? String(deps.ffmpeg || '') : '';
+    if (ffmpegJob.state === 'done') toast(path ? `装好了：${path}` : '装好了');
+    else toast('装失败：' + ffmpegJob.message);
     syncVisionNote();
     await loadData();
   }
@@ -989,31 +1059,129 @@
   }
 
   /** 「ta 刷过什么」：今日计数 + 上次刷的结果 */
+  /** 相对时间：这条记录是「几分钟前」的，比绝对时间好扫 */
+  function timeAgo(at) {
+    const t = Number(at) || 0;
+    if (!t) return '';
+    const sec = Math.max(0, Math.round((Date.now() - t) / 1000));
+    if (sec < 60) return '刚刚';
+    const min = Math.round(sec / 60);
+    if (min < 60) return `${min} 分钟前`;
+    const hr = Math.round(min / 60);
+    if (hr < 24) return `${hr} 小时前`;
+    const day = Math.round(hr / 24);
+    if (day < 30) return `${day} 天前`;
+    return new Date(t).toLocaleDateString();
+  }
+
+  /** kind → 面板上的中文；和 `lib/history.mjs` 的 KIND_TEXT 保持一致 */
+  const KIND_TEXT = {
+    watch: '看了', comment: '评论', danmaku: '弹幕',
+    share: '分享给你', like: '点赞', reply: '回复了别人',
+  };
+
+  /**
+   * 「ta 刷过什么」的列表。
+   *
+   * 版式照 aurabot：左边一栏固定宽度写「3 分钟前 / 看了」，右边是
+   * 《标题》链接 + 她自己那句感想 + 顺手做过什么。列表长的时候时间列
+   * 对齐，比一行一句摘要好扫得多——原来这里只有「上次刷：某时某分 ·
+   * 5 条」，看不见她到底看了什么、想了什么。
+   */
+  function renderHistory(items) {
+    const box = $('#recent');
+    if (!box) return;
+    box.textContent = '';
+    const list = Array.isArray(items) ? items : [];
+
+    if (!list.length) {
+      const d = document.createElement('div');
+      d.className = 'empty';
+      /**
+       * 手动「现在刷一轮」一定会开独立会话让她看，不受「让她自己看这一轮」
+       * 开关影响（那个开关只管后台定时刷）。所以空着就是「还没点过」，
+       * 不要再按 aiDecide 分叉出「开关关着」的文案——那会让用户以为按钮
+       * 坏了、还得去翻设置。
+       */
+      d.textContent = '还没有记录。点右上角「现在刷一轮」，她会看几条再说说感想。';
+      box.append(d);
+      return;
+    }
+
+    for (const it of list.slice(0, 20)) {
+      const row = document.createElement('div');
+      row.className = 'hist';
+
+      const when = document.createElement('div');
+      when.className = 'when';
+      when.textContent = timeAgo(it.at);
+      const kind = document.createElement('div');
+      kind.textContent = KIND_TEXT[it.kind] || String(it.kind || '看了');
+      when.append(kind);
+
+      const what = document.createElement('div');
+      what.className = 'what';
+      const title = String(it.title || '');
+      const bvid = String(it.bvid || '');
+      if (bvid && /^BV[0-9A-Za-z]{10}$/.test(bvid)) {
+        const a = document.createElement('a');
+        a.href = `https://www.bilibili.com/video/${bvid}`;
+        a.target = '_blank';
+        a.rel = 'noreferrer noopener';
+        a.textContent = `《${title || bvid}》`;
+        what.append(a);
+      } else if (title) {
+        const b = document.createElement('b');
+        b.textContent = `《${title}》`;
+        what.append(b);
+      }
+      const say = String(it.text || '');
+      if (say) {
+        const d = document.createElement('div');
+        d.className = 'say';
+        d.textContent = say;
+        what.append(d);
+      }
+      const acts = Array.isArray(it.acts) ? it.acts.filter(Boolean) : [];
+      if (acts.length) {
+        const d = document.createElement('div');
+        d.className = 'acts';
+        d.textContent = acts.map((a) => KIND_TEXT[a] || a).join(' · ');
+        what.append(d);
+      }
+      row.append(when, what);
+      box.append(row);
+    }
+  }
+
+  /**
+   * 读 `history.json`（记录是数组，塞不进宿主透传的 `meta`）。
+   *
+   * 和 `replies.json` 一样走 `/ext-pages`：一次 fetch 一整个文件，
+   * 不占扩展动作通道，也不写盘。
+   */
+  async function loadHistory() {
+    try {
+      const r = await fetch(`${API}/ext-pages?id=bili&file=history.json&t=${Date.now()}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      renderHistory(Array.isArray(j && j.items) ? j.items : []);
+    } catch {
+      renderHistory([]);
+    }
+  }
+
   function renderActivity() {
     const line = $('#act-line');
-    const box = $('#recent');
-    if (!line || !box) return;
+    if (!line) return;
     const st = (meta && meta.stats) || null;
     const feed = (meta && meta.feed) || null;
     const n = (v) => Number(v) || 0;
     line.textContent = st
-      ? `今天刷了 ${n(st.rounds)} 轮 · 截图 ${n(st.shots)} 张 · 评论 ${n(st.comments)} 条 · 弹幕 ${n(st.danmaku)} 条`
+      ? `今天自动刷了 ${n(st.rounds)} 轮 · 评论 ${n(st.comments)} 条 · 弹幕 ${n(st.danmaku)} 条`
+        + ` · 回复 ${n(st.replies)} 条${feed && feed.lastAt ? ` · 上次 ${timeAgo(feed.lastAt)}` : ''}`
+        + '（手动刷不占次数）'
       : '今天还没有记录';
-
-    box.textContent = '';
-    if (!feed || !feed.lastAt) {
-      const d = document.createElement('div');
-      d.className = 'empty';
-      d.textContent = '还没有刷过。点上面的「现在刷一轮」试试。';
-      box.append(d);
-      return;
-    }
-    const when = new Date(Number(feed.lastAt));
-    const d = document.createElement('div');
-    d.className = 'hint';
-    d.textContent = `上次刷：${when.toLocaleString()} · ${n(feed.count)} 条 · ${feed.reason || '手动'}${
-      feed.error ? ` · 没刷成：${feed.error}` : ''}`;
-    box.append(d);
   }
 
   /**
@@ -1068,6 +1236,8 @@
     renderCookie();
     renderSettings();
     syncMaster();
+    /** 读设置完成后重刷一遍历史：空态文案不再依赖任何开关状态 */
+    void loadHistory();
   }
 
   /** 顶部总开关：直接落到 enabled，保存整份 values 以免把别的项冲掉 */
@@ -1134,6 +1304,8 @@
       renderDanmaku();
       renderQr();
       renderActivity();
+      /** 「ta 刷过什么」的内容在单独文件里（数组进不了 meta），每次刷新顺手读一遍 */
+      void loadHistory();
       /** 扫码等待期间每 2 秒回来看一次；扩展那边也在同时查 cookie */
       if (meta && meta.qr && meta.qr.state === 'waiting') {
         clearTimeout(window.__qrPoll);
@@ -1186,11 +1358,46 @@
     }
   }
 
+  /**
+   * 动作名 → 按钮。动作用的是进程内执行，慢的那个（「现在刷一轮」要等她
+   * 看完，可能一分多钟）期间按钮必须有反馈：不然点了没动静，用户会以为
+   * 没点上，再点一次就是连刷两轮。
+   */
+  const ACT_BTN = {
+    refresh_hot: '#act-refresh',
+    feed_now: '#act-feed',
+    check_login: '#act-login',
+    check_replies: '#act-replies',
+    test_share: '#act-share',
+    danmaku_inspect: '#dm-inspect',
+    danmaku_send: '#dm-send',
+  };
+  /** 慢动作的进行中文案；没写就用原名 */
+  const ACT_BUSY = {
+    feed_now: '她正在看…',
+    check_replies: '正在查…',
+    test_share: '正在发…',
+  };
+
   async function act(name, payload, opts = {}) {
     const silent = Boolean(opts && opts.silent);
     const arg = { id: ID, action: name };
     if (payload) arg.payload = payload;
-    const r = await op('extensions.ui.action', arg);
+
+    const btn = ACT_BTN[name] ? document.querySelector(ACT_BTN[name]) : null;
+    const btnText = btn ? btn.textContent : '';
+    if (btn) {
+      btn.disabled = true;
+      if (ACT_BUSY[name]) btn.textContent = ACT_BUSY[name];
+    }
+
+    let r = null;
+    try {
+      r = await op('extensions.ui.action', arg);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = btnText; }
+    }
+
     const ok = Boolean(r && r.ok);
     const msg = r && r.message ? r.message : (ok ? '已交给扩展' : '没交上');
     if (!silent) toast(msg);
@@ -1217,7 +1424,7 @@
   $('#act-login').onclick = () => act('check_login');
   const rpBtn = document.querySelector('#act-replies');
   if (rpBtn) rpBtn.onclick = async () => { await act('check_replies'); await loadReplies(); };
-  /** 测试分享：写死发给主人，用来验证「刷到 → 主动告诉她」这条链路 */
+  /** 现在分享：自动挑最新一条，走直连协议发卡片给主人，不经模型 */
   const shareBtn = document.querySelector('#act-share');
   if (shareBtn) shareBtn.onclick = () => act('test_share');
   const galBtn = document.querySelector('#gal-refresh');
@@ -1276,6 +1483,15 @@
   loadData();
   void loadGallery();
   void loadReplies();
+  void loadHistory();
+  /**
+   * ffmpeg 状态**问宿主**，不看 `ui-data.json` 里的旧快照。
+   *
+   * 那个快照可能来自上一次进程（写着「没找到」），而 ffmpeg 早就装好了；
+   * 用户照着它去点安装，宿主秒回「已经装好了」，界面上就是闪一下。
+   * 顺手也把「正在装」的状态接上：刷新页面不会丢掉进度。
+   */
+  void refreshDeps();
 
   /**
    * 打开页面就自己查一次登录态。
