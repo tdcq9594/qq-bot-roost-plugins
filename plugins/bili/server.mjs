@@ -31,8 +31,9 @@ import { createPush } from './lib/push.mjs';
 import { createUiActions } from './lib/ui-actions.mjs';
 import { resolveFfmpeg, ffmpegState } from './lib/ffmpeg.mjs';
 import { createQrLogin } from './lib/qr-login.mjs';
+import { createLiveConfig } from './lib/live-config.mjs';
 
-const SERVER = { name: 'bili', version: '0.6.0' };
+const SERVER = { name: 'bili', version: '0.7.0' };
 const log = (m) => process.stderr.write(`[bili] ${m}\n`);
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 
@@ -74,10 +75,39 @@ const write = createWriteApi({
   log,
 });
 
-const feed = createFeed({
+/**
+ * 配置热读：面板保存设置后，宿主写的是它自己那两个文件，**不会**重启我们
+ * （受管块里的静态条目不受 `mcpManager.restart()` 治理）。所以每次动作 /
+ * 每一轮定时刷之前，直接从磁盘把最新值读回来覆盖 `cfg`。
+ *
+ * `cfg` 是 const 对象，靠 `Object.assign` 原地改——所有 `() => cfg.xxx`
+ * 的闭包（getCookie、dryRunOf 等）因此立刻看到新值，不用重建 api。
+ */
+let feed = null;
+const refreshConfig = createLiveConfig({
+  dataDir: process.env.ROOST_LAUNCHER_DIR,
+  id: process.env.ROOST_EXT_ID,
+  apply(values, secrets) {
+    const env = { ...process.env };
+    if (values) env.ROOST_EXT_CONFIG = JSON.stringify(values);
+    Object.assign(cfg, readConfig(env));
+    /**
+     * 磁盘上的 secret 是用户最后保存的那份：面板里清空 Cookie 也要能生效，
+     * 所以「有这个键」就覆盖（包括空串），不能写成 `if (secrets.cookie)`。
+     */
+    if (secrets && Object.prototype.hasOwnProperty.call(secrets, 'cookie')) {
+      cfg.cookie = String(secrets.cookie || '');
+    }
+    /** 刷的频率 / 总开关改了，定时器要跟着改，否则等于没生效 */
+    try { feed?.syncTimer(); } catch { /* 定时器重排失败不影响当前动作 */ }
+  },
+});
+
+feed = createFeed({
   cfg,
   api,
   hostState: createHostState(process.env),
+  beforeTick: async () => { refreshConfig(); },
   onFresh: (items) => {
     box?.setPool(items);
     ui.fromPool(items);
@@ -290,6 +320,8 @@ async function handle(msg) {
   if (method === 'tools/list') return ok(id, { tools: box.tools });
 
   if (method === 'tools/call') {
+    /** 模型这一下用的必须是面板上刚存的配置（Cookie、开关、额度都算） */
+    refreshConfig();
     const name = String(params?.name ?? '');
     try {
       const text = await box.call(name, params?.arguments ?? {});
@@ -380,6 +412,7 @@ function serve() {
   process.stdin.on('end', () => process.exit(0));
   // 宿主关掉管道时别抛 EPIPE 栈。
   process.stdout.on('error', () => process.exit(0));
+  refreshConfig();
   if (feed.enabled) feed.start();
   /** 面板按钮的轮询：没有宿主地址/令牌时（手动 --call）自动不启动 */
   if (uiActions.start()) log('面板动作通道已接上（每 2 秒取一次）');

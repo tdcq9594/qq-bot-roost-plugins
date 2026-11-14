@@ -101,15 +101,37 @@ export function createUiData({ dir, log = () => {} } = {}) {
    *
    * 面板上的「今日刷了几轮 / 上次为什么没刷」跟热门列表是两件事，
    * 为了刷新状态而重写一遍热门没有必要，也会让「更新于」跳来跳去。
+   *
+   * **是合并不是覆盖**：0.6 起状态有两个写入方——宿主进程里的按钮动作
+   * （登录态 / ffmpeg / 弹幕）和 MCP 子进程（定时刷 / 推送额度）。
+   * 直接覆盖会让两边互相把对方的字段抹掉，表现为「点了检查登录，
+   * 定时刷那格又变回未知」。所以每次都从磁盘读一份再合并，
+   * 跨进程也不会丢字段。
    */
-  function setMeta(meta) {
-    lastMeta = meta;
+  function setMeta(patch) {
     let rows = [];
+    let meta = {};
     try {
       const cur = JSON.parse(readFileSync(file(), 'utf8'));
       if (Array.isArray(cur?.rows)) rows = cur.rows;
-    } catch { /* 还没有数据文件：先只写 meta */ }
-    return write(rows, meta);
+      if (cur?.meta && typeof cur.meta === 'object' && !Array.isArray(cur.meta)) meta = cur.meta;
+    } catch { /* 还没有数据文件：从空开始 */ }
+
+    /**
+     * **两层合并**：顶层的 `feed` / `account` 这些整块替换，块内按键合并。
+     *
+     * 进程内动作只知道 `feed.lastAt`（它刚刷了一轮），不知道
+     * `feed.enabled`（那是定时器决定的，归 MCP 子进程）。整块替换会让
+     * 「定时刷」那格闪一下变成未知——只看自己动的那个键，别的一律留着。
+     */
+    const next = { ...meta };
+    for (const [k, v] of Object.entries(patch || {})) {
+      const prev = meta[k];
+      const deep = v && typeof v === 'object' && !Array.isArray(v)
+        && prev && typeof prev === 'object' && !Array.isArray(prev);
+      next[k] = deep ? { ...prev, ...v } : v;
+    }
+    return write(rows, next);
   }
 
   return {

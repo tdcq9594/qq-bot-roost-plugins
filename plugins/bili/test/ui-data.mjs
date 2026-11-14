@@ -73,3 +73,28 @@ test('清单里的字段名与 rowsOf 的输出一一对应（改一边就要改
   const produced = Object.keys(rowsOf([{ bvid: 'x' }])[0]).sort();
   assert.deepEqual(declared, produced, '声明了但没产出（或反过来）都会让面板空白');
 });
+
+test('setMeta 是两层合并：不抹掉另一个写入方的字段', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bili-ui-'));
+  try {
+    const ui = createUiData({ dir, log: () => {} });
+    /** 模拟 MCP 子进程先写：定时刷的开/关与间隔 */
+    ui.write(rowsOf([{ bvid: 'BV1xx411c7mD' }]), {
+      feed: { enabled: true, minutes: 30, lastAt: 1, count: 3 },
+      account: { isLogin: true, uname: 'x' },
+    });
+
+    /** 进程内动作后写：它只知道「刚刷了一次」 */
+    ui.setMeta({ feed: { lastAt: 999, count: 7, reason: '手动' } });
+
+    const j = JSON.parse(readFileSync(join(dir, UI_FILE), 'utf8'));
+    assert.equal(j.meta.feed.enabled, true, '定时刷开关归子进程，不能被这次写入抹掉');
+    assert.equal(j.meta.feed.minutes, 30);
+    assert.equal(j.meta.feed.lastAt, 999, '自己写的字段要生效');
+    assert.equal(j.meta.feed.count, 7);
+    assert.deepEqual(j.meta.account, { isLogin: true, uname: 'x' }, '别的块整个保留');
+    assert.equal(j.rows.length, 1, 'setMeta 不能把热门列表清空');
+  } finally {
+    try { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 80 }); } catch { /* 系统回收 */ }
+  }
+});

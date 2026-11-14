@@ -51,15 +51,30 @@ export function createFeed({
   hostState = async () => ({ ok: true }),
   log = () => {}, now = () => Date.now(),
   intervalImpl = setInterval, clearImpl = clearInterval,
+  /** 每次 tick 前调一次：用来热读宿主刚保存的配置（见 lib/live-config.mjs） */
+  beforeTick = null,
 } = {}) {
-  const minutes = Math.round(Number(cfg?.feedIntervalMin) || 0);
-  const enabled = cfg?.enabled !== false && minutes >= MIN_FEED_MINUTES;
+  /**
+   * **现算，不再在创建时算死**。
+   *
+   * 0.6 起配置可以在运行期改（面板保存 → 扩展热读，不用重启子进程）。
+   * 创建时把 `minutes` 抠出来存成常量，改完设置定时器还是老间隔，
+   * 表现就是「改了刷的频率没反应，得重启」。
+   */
+  const minutesNow = () => Math.round(Number(cfg?.feedIntervalMin) || 0);
+  const enabledNow = () => cfg?.enabled !== false && minutesNow() >= MIN_FEED_MINUTES;
+  /** 当前定时器是按多少分钟起的：用来判断「间隔变了要重起」 */
+  let timerMinutes = 0;
   let timer = null;
   let running = false;
   let items = [];
   let last = { at: 0, count: 0, error: '', hostMood: null, reason: '' };
 
   async function tick(reason = '定时') {
+    /** 先热读配置：这一轮用的必须是面板上刚存下的值 */
+    try {
+      await beforeTick?.();
+    } catch { /* 热读失败不该让这一轮不刷 */ }
     if (running) return { ok: false, why: '上一轮还没结束' };
     /** 用注入的 `now()`；测试才验得了「半夜不刷」这道闸 */
     if (!inActiveHours(cfg?.feedActiveHours, new Date(now()))) {
@@ -99,11 +114,33 @@ export function createFeed({
   }
 
   function start() {
-    if (!enabled || timer) return false;
-    timer = intervalImpl(() => { tick().catch(() => {}); }, minutes * 60_000);
+    if (timer) return false;
+    const m = minutesNow();
+    if (cfg?.enabled === false || m < MIN_FEED_MINUTES) return false;
+    timerMinutes = m;
+    timer = intervalImpl(() => { tick().catch(() => {}); }, m * 60_000);
     /** 别让一个定时器把 stdio 子进程吊住：宿主关管道时进程要能自己退 */
     timer?.unref?.();
     return true;
+  }
+
+  /**
+   * 按当前配置对齐定时器：该开的开、该停的停、间隔变了就重起。
+   * 配置热读之后调它一次，改设置就不用等重启。
+   */
+  function syncTimer() {
+    const m = minutesNow();
+    const on = cfg?.enabled !== false && m >= MIN_FEED_MINUTES;
+    if (!on) {
+      const had = Boolean(timer);
+      stop();
+      return had;
+    }
+    if (!timer || m !== timerMinutes) {
+      stop();
+      return start();
+    }
+    return false;
   }
 
   function stop() {
@@ -112,8 +149,9 @@ export function createFeed({
   }
 
   return {
-    enabled,
-    minutes,
+    /** getter：读的人随时拿到当前配置，而不是创建那一刻的值 */
+    get enabled() { return enabledNow(); },
+    get minutes() { return minutesNow(); },
     /**
      * 启动预热 / `hot` 工具顺手喂进来的那批：只填内存，不额外发请求，
      * 也不算「定时刷成功过一轮」。这样第一个周期没到时 `feed` 也有东西可看。
@@ -126,9 +164,14 @@ export function createFeed({
     },
     /** 给 `feed` 工具：最近一次成功刷到的那批 */
     items: () => items.slice(),
-    state: () => ({ ...last, enabled, minutes, activeHours: String(cfg?.feedActiveHours || ''), items: items.length }),
+    state: () => ({
+      ...last,
+      enabled: enabledNow(), minutes: minutesNow(),
+      activeHours: String(cfg?.feedActiveHours || ''), items: items.length,
+    }),
     tick,
     start,
     stop,
+    syncTimer,
   };
 }

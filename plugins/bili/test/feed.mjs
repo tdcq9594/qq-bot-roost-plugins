@@ -133,3 +133,49 @@ test('createHostState：没 env 时给原因，401 / 非 200 都不算在线', a
   });
   assert.equal(denied.ok, false);
 });
+
+// ---------------------------------------------------------------------------
+// 配置热读之后：间隔 / 总开关改了要能立刻重排定时器
+// ---------------------------------------------------------------------------
+
+test('syncTimer：改间隔会重起定时器，关掉会停', () => {
+  const timers = [];
+  const cleared = [];
+  const cfg = { enabled: true, feedIntervalMin: 30, hotPoolSize: 5, feedActiveHours: '' };
+  const feed = createFeed({
+    cfg,
+    api: { hot: async () => [], state: () => ({ pausedUntil: 0 }) },
+    intervalImpl: (fn, ms) => { const t = { fn, ms, unref() {} }; timers.push(t); return t; },
+    clearImpl: (t) => { cleared.push(t); },
+  });
+
+  assert.equal(feed.start(), true);
+  assert.equal(timers.at(-1).ms, 30 * 60_000, '先按 30 分钟起');
+
+  /** 同一个 timer 不变：syncTimer 不该无脑重建 */
+  assert.equal(feed.syncTimer(), false);
+
+  cfg.feedIntervalMin = 60;
+  assert.equal(feed.syncTimer(), true, '间隔变了要重起');
+  assert.equal(timers.at(-1).ms, 60 * 60_000);
+  assert.equal(cleared.length, 1, '旧定时器要被清掉，否则两份同时在跑');
+
+  /** 低于下限等于关：定时器必须停掉 */
+  cfg.feedIntervalMin = 5;
+  assert.equal(feed.syncTimer(), true);
+  assert.equal(cleared.length, 2);
+  assert.equal(feed.enabled, false);
+  assert.equal(feed.minutes, 5);
+});
+
+test('tick 之前会先跑 beforeTick（用来热读配置）', async () => {
+  let refreshed = 0;
+  const feed = createFeed({
+    cfg: { enabled: true, feedIntervalMin: 30, hotPoolSize: 5, feedActiveHours: '' },
+    api: { hot: async () => [{ bvid: 'BV1xx411c7mD' }], state: () => ({}) },
+    hostState: async () => ({ ok: true }),
+    beforeTick: async () => { refreshed += 1; },
+  });
+  await feed.tick('手动');
+  assert.equal(refreshed, 1);
+});

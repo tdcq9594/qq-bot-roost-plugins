@@ -3,3 +3,7 @@
 keys/
 # CI 会把框架 checkout 到这里（本地手工复现 CI 时也会）
 .framework/
+
+# 运行时产物：面板数据 / 扫码二维码（构建脚本也会跳过，这里再挡一次误提交）
+plugins/*/ui-data.json
+plugins/*/ui/qr.png

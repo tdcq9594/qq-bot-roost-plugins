@@ -50,11 +50,15 @@ function findIn(depsDir) {
 /**
  * 宿主的共享依赖目录。
  *
- * `ROOST_DEPS_DIR` 是受管块新注入的；老受管块里没有这个键时，退回
- * `ROOST_LAUNCHER_DIR`（它指向宿主数据目录）拼一个 —— 这样「没重新安装
- * 受管块」的存量用户也能立刻用上共享目录，不必先去点一次重装。
+ * 三种来源，优先级从高到低：
+ *   1. 调用方显式传入（**进程内动作走这条**：`ui/main.mjs` 跑在宿主进程里，
+ *      `ROOST_DEPS_DIR` 是注入给 MCP 子进程的，宿主自己的 `process.env` 里没有）；
+ *   2. `ROOST_DEPS_DIR`——MCP 子进程的标准来源；
+ *   3. `ROOST_LAUNCHER_DIR`（指向宿主数据目录）拼一个——老受管块没有新键时的回退。
  */
-export function sharedDepsDir() {
+export function sharedDepsDir(explicit = '') {
+  const given = String(explicit || '').trim();
+  if (given) return given;
   const direct = String(process.env.ROOST_DEPS_DIR || '').trim();
   if (direct) return direct;
   const data = String(process.env.ROOST_LAUNCHER_DIR || '').trim();
@@ -64,10 +68,11 @@ export function sharedDepsDir() {
 /**
  * 解析出可用的 ffmpeg 路径；都没有返回空串。
  *
- * @param {{root?: string, configured?: string}} [o]
- *   `root` 扩展目录（用于找旧位置），`configured` 用户手填的路径
+ * @param {{root?: string, configured?: string, depsDir?: string}} [o]
+ *   `root` 扩展目录（用于找旧位置），`configured` 用户手填的路径，
+ *   `depsDir` 显式指定共享目录
  */
-export function resolveFfmpeg({ root = '', configured = '' } = {}) {
+export function resolveFfmpeg({ root = '', configured = '', depsDir = '' } = {}) {
   const manual = String(configured || '').trim();
   if (manual) {
     /** 手填的可能是「deps 目录」也可能是「ffmpeg 可执行文件」，两种都认 */
@@ -75,7 +80,7 @@ export function resolveFfmpeg({ root = '', configured = '' } = {}) {
     if (asDir) return asDir;
     if (existsSync(manual)) return manual;
   }
-  const shared = findIn(sharedDepsDir());
+  const shared = findIn(sharedDepsDir(depsDir));
   if (shared) return shared;
   return root ? findIn(join(root, LEGACY_DEPS_DIR)) : '';
 }
@@ -86,12 +91,12 @@ export function resolveFfmpeg({ root = '', configured = '' } = {}) {
  * `dir` 用来在界面上告诉用户「装到哪了」——共享依赖最怕的就是
  * 「以为装在扩展里、其实装到宿主」这种认知错位。
  */
-export function ffmpegState({ root = '', configured = '' } = {}) {
-  const path = resolveFfmpeg({ root, configured });
+export function ffmpegState({ root = '', configured = '', depsDir = '' } = {}) {
+  const path = resolveFfmpeg({ root, configured, depsDir });
   return {
     ready: Boolean(path),
     path,
-    dir: sharedDepsDir(),
+    dir: sharedDepsDir(depsDir),
     legacy: Boolean(!path && root && findIn(join(root, LEGACY_DEPS_DIR))),
     configured: Boolean(String(configured || '').trim()),
   };

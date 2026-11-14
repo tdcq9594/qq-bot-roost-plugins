@@ -453,7 +453,12 @@
 
     if (f.type === 'boolean') {
       const { row, ctl } = rowEl(f.label, f.hint);
-      ctl.append(makeSwitch(draft[key] === true, (v) => { draft[key] = v; }));
+      /**
+       * 开关一拨就存：开关是最常改的东西，为它专门去点一次「保存」很别扭，
+       * 而且面板上「改了不生效」的错觉大多来自这里。防抖 350ms，
+       * 连着拨几个只写一次盘。
+       */
+      ctl.append(makeSwitch(draft[key] === true, (v) => { draft[key] = v; queueSave(); }));
       return row;
     }
 
@@ -729,6 +734,28 @@
     toast(r.message || '已保存');
     await loadConfig();
     await loadData();
+  }
+
+  /**
+   * 开关的自动保存。
+   *
+   * 和手动 `save()` 的区别：
+   *   · **不 reload 表单**——重画会把用户正在拨的下一个开关的状态冲掉；
+   *   · 只传 values，`secrets: {}` 表示「不碰密钥」（宿主只 patch 传入的键）；
+   *   · 失败只写错误行，不挡后续操作。
+   */
+  let autoTimer = null;
+  function queueSave() {
+    clearTimeout(autoTimer);
+    autoTimer = setTimeout(async () => {
+      const r = await op('extensions.config.save', { id: ID, values: draft, secrets: {} });
+      if (!r || r.ok === false) {
+        $('#save-err').textContent = String((r && r.message) || '保存失败');
+        return;
+      }
+      $('#save-err').textContent = '';
+      toast('已保存');
+    }, 350);
   }
 
   function bvOf(s) {
