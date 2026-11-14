@@ -148,6 +148,11 @@
   .dm-result.warn { color: var(--warn); }
 
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(228px, 1fr)); gap: 12px; }
+  .count { font-size: 12px; color: var(--muted); font-weight: 400; margin-left: 6px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 10px; }
+  .shot { position: relative; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); background: #000; }
+  .shot img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block; }
+  .shot span { position: absolute; left: 6px; bottom: 5px; font-size: 11px; color: #fff; background: rgba(0,0,0,.55); padding: 1px 6px; border-radius: 6px; }
   .video {
     border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
     display: flex; flex-direction: column; background: var(--card); transition: .15s;
@@ -200,6 +205,20 @@
     <button type="button" id="act-ffmpeg" hidden>装 ffmpeg</button>
     <span class="spacer"></span>
     <span class="tag" id="pending" hidden>动作排队中</span>
+  </div>
+
+  <div class="card">
+    <h2>截图库 <span class="count" id="gal-count">0 / 60</span>
+      <button type="button" class="ghost" id="gal-refresh" style="float:right">刷新</button>
+    </h2>
+    <p class="card-sub">刷一轮时顺手截的帧会落在这里；也可以在上面「现在刷一轮」之前把「刷一轮时顺手截图」打开。</p>
+    <div id="gallery"><div class="empty">还没有截图</div></div>
+  </div>
+
+  <div class="card">
+    <h2>ta 刷过什么</h2>
+    <p class="card-sub" id="act-line">今天自动刷了 0 轮 · 截图 0 张 · 评论 0 条</p>
+    <div id="recent"><div class="empty">还没有记录。点上面的「现在刷一轮」试试。</div></div>
   </div>
 
   <div class="card">
@@ -686,6 +705,88 @@
   }
 
   /**
+   * 截图库。
+   *
+   * 列表来自 `shots/index.json`（扩展抽帧后顺手写的），图片走 `/ext-pages`。
+   * 两处都用同一个相对路径，因为服务器把路径卡在扩展目录内。
+   */
+  async function loadGallery() {
+    const box = $('#gallery');
+    const tag = $('#gal-count');
+    if (!box) return;
+    const limit = Number(meta && meta.gallery && meta.gallery.limit) || 60;
+    try {
+      const r = await fetch(`${API}/ext-pages?id=bili&file=shots/index.json&t=${Date.now()}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      const items = Array.isArray(j && j.items) ? j.items : [];
+      if (tag) tag.textContent = `${Number(j && j.total) || items.length} / ${limit}`;
+      box.textContent = '';
+      if (!items.length) {
+        const d = document.createElement('div');
+        d.className = 'empty';
+        d.textContent = '还没有截图。把设置里的「刷一轮时顺手截图」打开，再点「现在刷一轮」。';
+        box.append(d);
+        return;
+      }
+      const grid = document.createElement('div');
+      grid.className = 'grid';
+      for (const it of items) {
+        const href = `${API}/ext-pages?id=bili&file=${encodeURIComponent(it.file)}`;
+        const a = document.createElement('a');
+        a.className = 'shot';
+        a.href = href;
+        a.target = '_blank';
+        a.rel = 'noreferrer';
+        const img = document.createElement('img');
+        img.loading = 'lazy';
+        img.alt = it.bvid || '';
+        img.src = href;
+        const sp = document.createElement('span');
+        sp.textContent = `${String(it.bvid || '').slice(2, 8)} · ${it.at}s`;
+        a.append(img, sp);
+        grid.append(a);
+      }
+      box.append(grid);
+    } catch {
+      if (tag) tag.textContent = `0 / ${limit}`;
+      box.textContent = '';
+      const d = document.createElement('div');
+      d.className = 'empty';
+      d.textContent = '还没有截图（或「截图目录」指到了面板看不到的位置）。';
+      box.append(d);
+    }
+  }
+
+  /** 「ta 刷过什么」：今日计数 + 上次刷的结果 */
+  function renderActivity() {
+    const line = $('#act-line');
+    const box = $('#recent');
+    if (!line || !box) return;
+    const st = (meta && meta.stats) || null;
+    const feed = (meta && meta.feed) || null;
+    const n = (v) => Number(v) || 0;
+    line.textContent = st
+      ? `今天刷了 ${n(st.rounds)} 轮 · 截图 ${n(st.shots)} 张 · 评论 ${n(st.comments)} 条 · 弹幕 ${n(st.danmaku)} 条`
+      : '今天还没有记录';
+
+    box.textContent = '';
+    if (!feed || !feed.lastAt) {
+      const d = document.createElement('div');
+      d.className = 'empty';
+      d.textContent = '还没有刷过。点上面的「现在刷一轮」试试。';
+      box.append(d);
+      return;
+    }
+    const when = new Date(Number(feed.lastAt));
+    const d = document.createElement('div');
+    d.className = 'hint';
+    d.textContent = `上次刷：${when.toLocaleString()} · ${n(feed.count)} 条 · ${feed.reason || '手动'}${
+      feed.error ? ` · 没刷成：${feed.error}` : ''}`;
+    box.append(d);
+  }
+
+  /**
    * 二维码在等扫码时每 2 秒拉一次状态。
    *
    * 轮询发生在**宿主进程**里的那个定时器（`qr_start` 之后每 2 秒查一次
@@ -801,6 +902,7 @@
       renderStats();
       renderDanmaku();
       renderQr();
+      renderActivity();
       /** 扫码等待期间每 2 秒回来看一次；扩展那边也在同时查 cookie */
       if (meta && meta.qr && meta.qr.state === 'waiting') {
         clearTimeout(window.__qrPoll);
@@ -854,16 +956,17 @@
     }
   }
 
-  async function act(name, payload) {
+  async function act(name, payload, opts = {}) {
+    const silent = Boolean(opts && opts.silent);
     const arg = { id: ID, action: name };
     if (payload) arg.payload = payload;
     const r = await op('extensions.ui.action', arg);
     const ok = Boolean(r && r.ok);
     const msg = r && r.message ? r.message : (ok ? '已交给扩展' : '没交上');
-    toast(msg);
+    if (!silent) toast(msg);
     /** toast 只有两秒，失败原因同时钉在工具栏和顶部，方便回看 */
     const tag = document.querySelector('#pending');
-    if (tag) {
+    if (!silent && tag) {
       tag.hidden = false;
       /** 进程内是同步执行完才返回的，说「等扩展处理」会让人以为还没跑 */
       tag.textContent = ok
@@ -882,6 +985,8 @@
   $('#act-refresh').onclick = () => act('refresh_hot');
   $('#act-feed').onclick = () => act('feed_now');
   $('#act-login').onclick = () => act('check_login');
+  const galBtn = document.querySelector('#gal-refresh');
+  if (galBtn) galBtn.onclick = () => { void loadGallery(); };
   /**
    * ffmpeg 装到**框架的共享目录**（`<数据目录>/deps`），不装扩展自己这里：
    * 一份装了所有扩展都能用，扩展升级/卸载也不会把它删掉。
@@ -942,6 +1047,16 @@
 
   loadConfig();
   loadData();
+  void loadGallery();
+
+  /**
+   * 打开页面就自己查一次登录态。
+   *
+   * 之前要用户先点「检查登录」才知道登没登，而面板上那格一直显示上次的
+   * 缓存值（可能几天前）。这里静默跑一次：不弹 toast、不改「已执行」标签，
+   * 成功只是把状态格刷新成真的。
+   */
+  setTimeout(() => { void act('check_login', null, { silent: true }); }, 700);
 })();
 </script>
 </body>

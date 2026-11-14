@@ -29,7 +29,11 @@ import { createUiData } from '../lib/ui-data.mjs';
 import { createFeed } from '../lib/feed.mjs';
 import { createWriteApi } from '../lib/write.mjs';
 import { createQrLogin } from '../lib/qr-login.mjs';
-import { ffmpegState, sharedDepsDir } from '../lib/ffmpeg.mjs';
+import { createShots } from '../lib/shots.mjs';
+import { bumpStats } from '../lib/stats.mjs';
+import { countShots } from '../lib/gallery.mjs';
+import { createAutoShot } from '../lib/auto-shot.mjs';
+import { ffmpegState, resolveFfmpeg, sharedDepsDir } from '../lib/ffmpeg.mjs';
 
 /** `ui/main.mjs` 的上一级就是扩展根目录（ui/ 的父目录） */
 const HERE = fileURLToPath(new URL('..', import.meta.url));
@@ -116,6 +120,28 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
   });
 
   /**
+   * 抽帧。默认落 `<扩展>/shots/`，面板才能通过 `/ext-pages` 取到缩略图。
+   * `ffmpegPath` 传函数：装完 ffmpeg 不用重启扩展就能抽。
+   */
+  const shots = createShots({
+    dir: config.shotDir, keep: config.shotKeep, width: config.shotWidth,
+    here: HERE,
+    ffmpegPath: () => resolveFfmpeg({ root: HERE, configured: config.ffmpegPath, depsDir: env.ROOST_DEPS_DIR }),
+    api, log,
+  });
+
+  /** 图库计数写进 meta，面板标题上的「n / 上限」用它 */
+  function syncGalleryMeta() {
+    setMeta({ gallery: { count: countShots({ dir: shots.dir }), limit: Number(config.shotKeep) || 60 } });
+  }
+
+  /**
+   * 刷完一轮顺手抽几帧（面板「截图库」的数据来源）。
+   * 逻辑在 `lib/auto-shot.mjs`：MCP 子进程的定时刷也要用它，两边必须同一套。
+   */
+  const autoShot = createAutoShot({ api, shots, ui, config, log });
+
+  /**
    * 扫码登录。
    *
    * 懒建：`createActions()` 只在文件变动时执行一次，但用户可能从没点过扫码，
@@ -135,6 +161,8 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
       const list = Array.isArray(items) ? items : [];
       if (!list.length) return { ok: false, message: '热门池是空的，稍后再试' };
       ui.fromPool(list);
+      /** 首屏就要显示「截图库 n / 上限」，不等到一次刷一轮 */
+      syncGalleryMeta();
       return { ok: true, message: `已刷新 ${list.length} 条`, data: { count: list.length } };
     },
 
@@ -156,7 +184,16 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
       const patch = feedPatch('手动');
       setMeta({ feed: patch });
       if (!r?.ok) return { ok: false, message: String(r?.why || '这一轮没刷成'), data: patch };
-      return { ok: true, message: `刷到 ${r.count} 条`, data: patch };
+
+      bumpStats(ui, { rounds: 1 });
+      /** 自动抽帧开关默认关：它会让「刷一轮」多等几秒 */
+      const shotN = config.autoShot ? await autoShot(feed.items()) : 0;
+      if (!config.autoShot) syncGalleryMeta();
+      return {
+        ok: true,
+        message: `刷到 ${r.count} 条${shotN ? `，顺手截了 ${shotN} 张` : ''}`,
+        data: { ...patch, shots: shotN },
+      };
     },
 
     /**

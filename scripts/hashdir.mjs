@@ -22,11 +22,16 @@ const SKIP_DIRS = new Set([
    * 「装过旧版本、还没清理」的机器不会因此 `--check` 报红。
    */
   'deps',
+  /**
+   * `shots/` 是图库目录：刷一轮自动抽的帧会落在这里，面板从 `/ext-pages`
+   * 取缩略图。内容每次运行都不同，算进哈希会让 `--check` 永远红。
+   */
+  'shots',
 ]);
 const SKIP_FILES = new Set([
   '.deps.json', '.DS_Store', 'Thumbs.db',
   /** 面板数据与扫码二维码：运行时生成，内容每次不同，算进哈希会让 --check 永远失败 */
-  'ui-data.json', 'qr.png',
+  'ui-data.json', 'qr.png', 'cookie.txt',
 ]);
 
 /** 文本文件 CRLF 折成 LF；二进制原样（判定依据同 git：有没有 NUL 字节） */

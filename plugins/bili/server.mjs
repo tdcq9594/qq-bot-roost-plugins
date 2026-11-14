@@ -32,8 +32,11 @@ import { createUiActions } from './lib/ui-actions.mjs';
 import { resolveFfmpeg, ffmpegState, sharedDepsDir } from './lib/ffmpeg.mjs';
 import { createQrLogin } from './lib/qr-login.mjs';
 import { createLiveConfig } from './lib/live-config.mjs';
+import { createAutoShot } from './lib/auto-shot.mjs';
+import { bumpStats, readStats } from './lib/stats.mjs';
+import { countShots } from './lib/gallery.mjs';
 
-const SERVER = { name: 'bili', version: '0.8.0' };
+const SERVER = { name: 'bili', version: '0.9.0' };
 const log = (m) => process.stderr.write(`[bili] ${m}\n`);
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 
@@ -111,7 +114,11 @@ feed = createFeed({
   onFresh: (items) => {
     box?.setPool(items);
     ui.fromPool(items);
+    /** 定时刷也算「今天刷了一轮」；面板上的数字靠它 */
+    bumpStats(ui, { rounds: 1 });
     syncMeta();
+    /** 抽帧慢（每个要一次 view + 一次 ffmpeg），不能阻塞这一轮的收尾 */
+    setTimeout(() => { void autoShotTask(items); }, 0);
     /** 推送失败不该让「这一轮刷成功了」变红，单独吞掉并记进 push.state() */
     if (push) void push.onFresh(items, '定时').catch((e) => log(`推送这一轮失败：${e?.message ?? e}`));
   },
@@ -119,8 +126,7 @@ feed = createFeed({
 });
 
 const shots = createShots({
-  dir: cfg.shotDir, keep: cfg.shotKeep, width: cfg.shotWidth,
-  /** 手动填的优先；没填就用扩展自己 deps/ 里那份（一键安装装在这里） */
+  dir: cfg.shotDir, keep: cfg.shotKeep, width: cfg.shotWidth, here: HERE,
   /**
    * 传函数而不是值：ffmpeg 装在宿主共享目录，用户在面板点「装 ffmpeg」之后
    * 扩展进程不会重启；算死的值会让「装好了还报没装」，只能靠重启才好。
@@ -194,6 +200,9 @@ function metaOf() {
         : null,
     },
     write: { paused: String(write.state()?.paused || '') },
+    /** 今日计数（刷了几轮 / 截了几张 / 评论几条），跨天由 readStats 自动清零 */
+    stats: readStats(ui.file()),
+    gallery: { count: countShots({ dir: shots.dir }), limit: Number(cfg.shotKeep) || 60 },
     qr: lastQr,
     /**
      * ffmpeg 装在**宿主**的共享目录（`<数据目录>/deps`），不是扩展目录：
@@ -203,6 +212,9 @@ function metaOf() {
     danmaku: lastDanmaku,
   };
 }
+
+/** 自动抽帧（开关在 `cfg.autoShot`，默认关）：定时刷也走同一条路 */
+const autoShotTask = createAutoShot({ api, shots, ui, config: cfg, log });
 
 /** 状态写盘失败不影响任何功能，面板少一块信息而已 */
 function syncMeta() {

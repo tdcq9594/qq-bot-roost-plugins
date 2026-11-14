@@ -109,11 +109,23 @@ export function grabFrame(ffmpeg, url, at, {
 }
 
 export function createShots({
-  dir = '', keep = 12, width = 512, ffmpegPath = '',
+  dir = '', keep = 60, width = 512, ffmpegPath = '',
+  /** 扩展根目录：`dir` 没填时截图落 `<here>/shots`，面板才取得到缩略图 */
+  here = '',
   api, log = () => {}, spawnImpl = spawn, probeImpl = null,
 } = {}) {
-  const root = String(dir || '').trim() || join(os.tmpdir(), 'dsh-bili-shots');
-  const max = Math.max(1, Math.min(50, Math.round(Number(keep) || 12)));
+  /**
+   * 默认落在**扩展自己的 `shots/`**，不是系统临时目录。
+   *
+   * 改这一处的原因是图库：面板要显示缩略图，只能通过 `/ext-pages` 从扩展
+   * 目录里取；临时目录在面板看来是「扩展目录外」，取不到。
+   * `shots/` 已经加进构建脚本的跳过名单，运行时多几张 jpg 不会弄脏索引哈希。
+   *
+   * 用户显式填了 `shotDir` 就尊重——那种情况下他们自己知道路径在哪，
+   * 只是面板里看不到缩略图而已。
+   */
+  const root = String(dir || '').trim() || join(here || os.tmpdir(), 'shots');
+  const max = Math.max(1, Math.min(300, Math.round(Number(keep) || 60)));
 
   /**
    * `ffmpegPath` 可以是字符串，也可以是**函数**。
