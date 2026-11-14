@@ -16,7 +16,11 @@ import crypto from 'node:crypto';
 /** 不参与哈希的东西：依赖目录、缓存、VCS/IDE 元数据（每台机器都不一样） */
 const SKIP_DIRS = new Set([
   'node_modules', '.venv', 'venv', '__pycache__', '.git', '.idea', '.vscode',
-  /** 扩展的运行时依赖（ffmpeg 一键安装装在这里，62 MB，且每台机器不一样） */
+  /**
+   * `deps/` 是 0.5.x 的旧位置（当时 ffmpeg 装在扩展自己目录里）。
+   * 现在改由宿主统一装在数据目录，扩展里不会再生成；这条留着只为
+   * 「装过旧版本、还没清理」的机器不会因此 `--check` 报红。
+   */
   'deps',
 ]);
 const SKIP_FILES = new Set([

@@ -9,11 +9,14 @@
  * 放这里的只该是「一次调用就能完成、不依赖扩展运行态」的动作：
  *   · 刷新热门（拉一次接口 + 写面板数据）
  *   · 检查登录（问一次 nav 接口）
- *   · 装 ffmpeg（跑一次 npm）
+ *   · 查 ffmpeg 在不在（读宿主共享目录，纯本地）
  *
  * 依赖扩展进程状态的动作（刷一轮 feed、发弹幕、推送）**留在 MCP 侧**——
  * 它们要读 feed 的缓存、推送的额度、风控的暂停标记，这些只存在于扩展进程里。
  * 模块里没实现的动作，宿主会自动回落到队列，所以这里可以只放一部分。
+ *
+ * **ffmpeg 不在这里装**：它现在装到宿主的共享目录（`<数据目录>/deps`），
+ * 由面板的 `sharedDeps.install` 负责。扩展只负责「找得到就说可用」。
  */
 
 import { readFileSync } from 'node:fs';
@@ -22,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 
 import { createBiliApi } from '../lib/api.mjs';
 import { createUiData } from '../lib/ui-data.mjs';
-import { installFfmpeg, bundledFfmpeg } from '../lib/ffmpeg.mjs';
+import { ffmpegState } from '../lib/ffmpeg.mjs';
 
 /** `ui/main.mjs` 的上一级就是扩展根目录（ui/ 的父目录） */
 const HERE = fileURLToPath(new URL('..', import.meta.url));
@@ -65,15 +68,10 @@ export function createActions({ config = {}, log = () => {} } = {}) {
       };
     },
 
-    async install_ffmpeg() {
-      const r = await installFfmpeg(HERE, { log });
-      return { ok: r.ok, message: r.message || (r.ok ? '装好了' : '装失败'), data: { path: r.path || '' } };
-    },
-
     /** 页面想知道 ffmpeg 现在有没有，不用等一次动作 */
     async ffmpeg_state() {
-      const p = bundledFfmpeg(HERE);
-      return { ok: true, message: p ? '可用' : '没装', data: { ready: Boolean(p), path: p } };
+      const s = ffmpegState({ root: HERE, configured: config?.ffmpegPath });
+      return { ok: true, message: s.ready ? '可用（宿主共享目录）' : '没装', data: s };
     },
   };
 }

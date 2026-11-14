@@ -29,10 +29,10 @@ import { createProactiveClient } from './lib/proactive.mjs';
 import { createWriteApi } from './lib/write.mjs';
 import { createPush } from './lib/push.mjs';
 import { createUiActions } from './lib/ui-actions.mjs';
-import { bundledFfmpeg, installFfmpeg } from './lib/ffmpeg.mjs';
+import { resolveFfmpeg, ffmpegState } from './lib/ffmpeg.mjs';
 import { createQrLogin } from './lib/qr-login.mjs';
 
-const SERVER = { name: 'bili', version: '0.5.1' };
+const SERVER = { name: 'bili', version: '0.6.0' };
 const log = (m) => process.stderr.write(`[bili] ${m}\n`);
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 
@@ -91,7 +91,11 @@ const feed = createFeed({
 const shots = createShots({
   dir: cfg.shotDir, keep: cfg.shotKeep, width: cfg.shotWidth,
   /** 手动填的优先；没填就用扩展自己 deps/ 里那份（一键安装装在这里） */
-  ffmpegPath: cfg.ffmpegPath || bundledFfmpeg(HERE), api, log,
+  /**
+   * 传函数而不是值：ffmpeg 装在宿主共享目录，用户在面板点「装 ffmpeg」之后
+   * 扩展进程不会重启；算死的值会让「装好了还报没装」，只能靠重启才好。
+   */
+  ffmpegPath: () => resolveFfmpeg({ root: HERE, configured: cfg.ffmpegPath }), api, log,
 });
 
 push = createPush({ cfg, api, shots, submit, write, log });
@@ -122,7 +126,6 @@ async function qrTick() {
 
 /** 最近一次「检查登录」/「发弹幕」的结果，面板下次刷新就能看到 */
 let lastAccount = null;
-let lastFfmpeg = null;
 let lastQr = null;
 let qrTimer = null;
 let lastDanmaku = null;
@@ -161,11 +164,11 @@ function metaOf() {
     },
     write: { paused: String(write.state()?.paused || '') },
     qr: lastQr,
-    ffmpeg: {
-      ready: Boolean(cfg.ffmpegPath || bundledFfmpeg(HERE)),
-      path: String(cfg.ffmpegPath || bundledFfmpeg(HERE) || ''),
-      message: String(lastFfmpeg?.message || ''),
-    },
+    /**
+     * ffmpeg 装在**宿主**的共享目录（`<数据目录>/deps`），不是扩展目录：
+     * 扩展只负责找到它、报状态，安装由面板的「装 ffmpeg」走宿主 op。
+     */
+    ffmpeg: ffmpegState({ root: HERE, configured: cfg.ffmpegPath }),
     danmaku: lastDanmaku,
   };
 }
@@ -232,12 +235,10 @@ const uiActions = createUiActions({
       lastQr = { state: 'cancelled', message: '', at: Date.now() };
       syncMeta();
     },
-    /** 一键安装 ffmpeg 到扩展自己的 deps/（约 62 MB） */
-    async install_ffmpeg() {
-      const r = await installFfmpeg(HERE, { log });
-      lastFfmpeg = r;
+    /** 查一次 ffmpeg 在哪（装由宿主的共享依赖面板负责，扩展不自己装） */
+    async ffmpeg_state() {
       syncMeta();
-      if (!r.ok) throw new Error(r.message);
+      return ffmpegState({ root: HERE, configured: cfg.ffmpegPath });
     },
     /** 真发弹幕：走 write 层（默认试运行、每日上限、风控当天暂停都在那里） */
     async danmaku_send(payload) {

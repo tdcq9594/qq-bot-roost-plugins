@@ -115,6 +115,16 @@ export function createShots({
   const root = String(dir || '').trim() || join(os.tmpdir(), 'dsh-bili-shots');
   const max = Math.max(1, Math.min(50, Math.round(Number(keep) || 12)));
 
+  /**
+   * `ffmpegPath` 可以是字符串，也可以是**函数**。
+   *
+   * 必须是函数的原因：ffmpeg 现在装在宿主的共享目录，用户在面板点「装 ffmpeg」
+   * 之后，扩展进程并不会重启。创建时算死的话，装好了也永远读空值，
+   * 表现就是「明明装了，抽帧还报没 ffmpeg」——只能靠重启扩展才好，
+   * 而用户根本不知道要重启。
+   */
+  const ffmpegOf = typeof ffmpegPath === 'function' ? ffmpegPath : () => ffmpegPath;
+
   /** 只删自己命名规则的 jpg，别把用户放在同目录的其它文件清掉。 */
   function prune() {
     try {
@@ -133,7 +143,7 @@ export function createShots({
   return {
     dir: root,
     ffmpegStatus() {
-      const ffmpeg = findFfmpeg(ffmpegPath, { probeImpl });
+      const ffmpeg = findFfmpeg(ffmpegOf(), { probeImpl });
       return { ready: Boolean(ffmpeg), ffmpeg, dir: root };
     },
 
@@ -145,10 +155,10 @@ export function createShots({
       if (!cid) throw new BiliError('这个视频没有 cid，没法抽帧', { hint: '番剧要用具体某一集。' });
 
       const sec = Math.max(0, Math.min(Math.round(Number(at) || 0), Math.max(0, Math.floor(Number(info?.duration) || 0) - 1)));
-      const ffmpeg = findFfmpeg(ffmpegPath, { probeImpl });
+      const ffmpeg = findFfmpeg(ffmpegOf(), { probeImpl });
       if (!ffmpeg) {
         throw new BiliError('没找到 ffmpeg，抽不了帧', {
-          hint: '面板「表达 → 刷 B 站 → 设置」里填 ffmpeg 的完整路径，或把它加进 PATH。',
+          hint: '面板「表达 → 刷 B 站」顶部有「装 ffmpeg」按钮，点一下装到框架共享目录，所有扩展一起用。',
         });
       }
 

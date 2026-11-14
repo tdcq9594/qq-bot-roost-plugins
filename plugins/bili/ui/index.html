@@ -601,10 +601,11 @@
       },
     ];
     if (meta && meta.ffmpeg) {
+      const f = meta.ffmpeg;
       items.push({
         k: 'ffmpeg（抽帧）',
-        v: meta.ffmpeg.ready ? '可用' : (meta.ffmpeg.message ? '没装：' + meta.ffmpeg.message : '没装'),
-        dot: meta.ffmpeg.ready ? 'ok' : 'off',
+        v: f.ready ? '可用' : '没装（可选）',
+        dot: f.ready ? 'ok' : 'off',
         small: true,
       });
     }
@@ -824,7 +825,37 @@
   $('#act-refresh').onclick = () => act('refresh_hot');
   $('#act-feed').onclick = () => act('feed_now');
   $('#act-login').onclick = () => act('check_login');
-  $('#act-ffmpeg').onclick = () => act('install_ffmpeg');
+  /**
+   * ffmpeg 装到**框架的共享目录**（`<数据目录>/deps`），不装扩展自己这里：
+   * 一份装了所有扩展都能用，扩展升级/卸载也不会把它删掉。
+   * 所以这个按钮不走扩展动作，直接调宿主的共享依赖接口。
+   */
+  $('#act-ffmpeg').onclick = async () => {
+    const btn = $('#act-ffmpeg');
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = '安装中…（约 62 MB）';
+    toast('正在装到框架共享目录，第一次要几分钟');
+    const r = await op('sharedDeps.install', { name: '@ffmpeg-installer/ffmpeg' });
+    btn.disabled = false;
+    btn.textContent = '装 ffmpeg';
+    toast(r && r.ok ? (r.skipped ? '已经装好了' : '装好了，所有扩展都能用') : ('装失败：' + ((r && r.message) || '未知原因')));
+    if (r && r.ok) {
+      /**
+       * ui-data.json 里的 ffmpeg 状态是扩展上次写盘时的快照，刚装完还是旧的。
+       * 这里直接用宿主返回的最新状态盖掉，不必等扩展下次刷新——
+       * 否则会出现「明明装好了，状态格还说没装」。
+       */
+      const s = await op('sharedDeps.status');
+      if (s && s.ok) {
+        meta = Object.assign({}, meta, {
+          ffmpeg: { ready: Boolean(s.ffmpeg), path: String(s.ffmpeg || ''), dir: String(s.dir || '') },
+        });
+        renderStats();
+      }
+    }
+    await loadData();
+  };
   $('#master').onclick = async () => {
     const next = !$('#master').classList.contains('on');
     $('#master').classList.toggle('on', next);

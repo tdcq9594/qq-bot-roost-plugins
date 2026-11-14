@@ -1,27 +1,32 @@
 /**
- * 扩展自带的 ffmpeg（一键安装）
+ * ffmpeg 的定位（共享依赖）
  * ============================================================
  *
- * `shot` 抽帧要 ffmpeg。让用户自己去装、再回来填路径，是这条链路上最烦的
- * 一步；框架那边已经有「一键装 `@ffmpeg-installer/ffmpeg`」的先例，
- * 这里做同一件事，只是把包装进**扩展自己的 `deps/`**，不碰系统环境。
+ * `shot` 抽帧要 ffmpeg。它**不再装在扩展自己的目录里**——扩展目录会被市场
+ * 更新整体覆盖，卸载时还会被删，而且同一个 `ffmpeg` 别的功能（语音转码、
+ * 图片处理）也要用，每个扩展各备一份 62 MB 没有意义。
  *
- * 两个注意点：
+ * 现在装一份在宿主：`<dataDir>/deps/`，由面板的「装 ffmpeg」按钮触发。
+ * 扩展这边只做两件事：**找到它**、**报状态**。
  *
- *   1. 主包只有 24 KB 胶水代码，62 MB 的 `ffmpeg.exe` 在同版本的平台子包里
- *      （`@ffmpeg-installer/win32-x64`）。所以「装没装」以**可执行文件在不在**
- *      为准，不能只看 `require.resolve`。
- *   2. `deps/` 在扩展目录里，会和 `ui-data.json` 一起被算进市场索引的 sha256。
- *      `build-index.mjs` 已经排除运行时产物，这里把目录名固定成 `deps`，
- *      由构建脚本按名字跳过（见脚本里的 `IGNORE_DIRS`）。
+ * 查找顺序：
+ *
+ *   1. 用户在设置里手填的路径（`ffmpegPath`）——最优先，尊重手动选择；
+ *   2. 宿主共享目录 `ROOST_DEPS_DIR`；
+ *   3. 旧位置：扩展自己的 `deps/`（0.5.x 装过的人不用重下）。
+ *
+ * 为什么不能只看 `require.resolve`：`@ffmpeg-installer/ffmpeg` 主包只有
+ * 24 KB 胶水代码，62 MB 的 `ffmpeg.exe` 在同版本的平台子包
+ * （`@ffmpeg-installer/win32-x64`）里。`--omit=optional`、杀毒隔离、装到
+ * 一半断电，都会留下「主包在、二进制没了」的半坏状态——只 resolve 主包
+ * 会报「已安装」，然后用户点抽帧时才炸。所以一律以**可执行文件在不在**为准。
  */
 
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { execFile } from 'node:child_process';
 
-export const DEPS_DIR = 'deps';
-const PKG = '@ffmpeg-installer/ffmpeg';
+/** 旧位置（0.5.x 装在扩展目录里）；现在只读不写 */
+export const LEGACY_DEPS_DIR = 'deps';
 
 /** 平台子包目录名；平台不认识就返回空串 */
 function platformDir() {
@@ -32,60 +37,62 @@ function platformDir() {
   return '';
 }
 
-/** 装好之后 ffmpeg 可执行文件的绝对路径；没装 / 平台不支持返回空串 */
-export function bundledFfmpeg(root) {
+/** 在某个 deps 目录里找 ffmpeg 可执行文件；没有返回空串 */
+function findIn(depsDir) {
   const plat = platformDir();
-  if (!root || !plat) return '';
-  const base = join(root, DEPS_DIR, 'node_modules', '@ffmpeg-installer', plat);
-  for (const exe of process.platform === 'win32' ? ['ffmpeg.exe'] : ['ffmpeg']) {
-    const p = join(base, exe);
-    if (existsSync(p)) return p;
-  }
-  return '';
+  if (!depsDir || !plat) return '';
+  const base = join(depsDir, 'node_modules', '@ffmpeg-installer', plat);
+  const exe = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
+  const p = join(base, exe);
+  return existsSync(p) ? p : '';
 }
 
 /**
- * 一键安装。串行由调用方保证（按钮连点会被动作队列的去重挡掉）。
+ * 宿主的共享依赖目录。
  *
- * 返回 `{ ok, path?, message }`，不抛：装失败要把原因原样带给面板。
+ * `ROOST_DEPS_DIR` 是受管块新注入的；老受管块里没有这个键时，退回
+ * `ROOST_LAUNCHER_DIR`（它指向宿主数据目录）拼一个 —— 这样「没重新安装
+ * 受管块」的存量用户也能立刻用上共享目录，不必先去点一次重装。
  */
-export function installFfmpeg(root, { log = () => {}, timeoutMs = 300_000 } = {}) {
-  if (!root) return Promise.resolve({ ok: false, message: '没有扩展目录' });
-  const already = bundledFfmpeg(root);
-  if (already) return Promise.resolve({ ok: true, path: already, message: '已经装好了' });
+export function sharedDepsDir() {
+  const direct = String(process.env.ROOST_DEPS_DIR || '').trim();
+  if (direct) return direct;
+  const data = String(process.env.ROOST_LAUNCHER_DIR || '').trim();
+  return data ? join(data, 'deps') : '';
+}
 
-  const dir = join(root, DEPS_DIR);
-  try {
-    mkdirSync(dir, { recursive: true });
-    /** npm 需要一个 package.json 才能当项目目录用；没有就补一个最小的 */
-    const pkgFile = join(dir, 'package.json');
-    if (!existsSync(pkgFile)) {
-      writeFileSync(pkgFile, `${JSON.stringify({ name: 'bili-deps', private: true, version: '1.0.0' }, null, 2)}\n`, 'utf8');
-    }
-  } catch (e) {
-    return Promise.resolve({ ok: false, message: `建目录失败：${e?.message ?? e}` });
+/**
+ * 解析出可用的 ffmpeg 路径；都没有返回空串。
+ *
+ * @param {{root?: string, configured?: string}} [o]
+ *   `root` 扩展目录（用于找旧位置），`configured` 用户手填的路径
+ */
+export function resolveFfmpeg({ root = '', configured = '' } = {}) {
+  const manual = String(configured || '').trim();
+  if (manual) {
+    /** 手填的可能是「deps 目录」也可能是「ffmpeg 可执行文件」，两种都认 */
+    const asDir = findIn(manual);
+    if (asDir) return asDir;
+    if (existsSync(manual)) return manual;
   }
+  const shared = findIn(sharedDepsDir());
+  if (shared) return shared;
+  return root ? findIn(join(root, LEGACY_DEPS_DIR)) : '';
+}
 
-  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  log(`开始安装 ${PKG}（约 62 MB，首次会慢一点）`);
-  return new Promise((resolve) => {
-    execFile(
-      npm,
-      ['install', PKG, '--no-audit', '--no-fund', '--loglevel=error'],
-      { cwd: dir, timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
-      (err, _stdout, stderr) => {
-        if (err) {
-          const why = String(stderr || err.message || '').trim().slice(0, 400);
-          log(`安装失败：${why}`);
-          return resolve({ ok: false, message: `安装失败：${why || '未知原因'}` });
-        }
-        const bin = bundledFfmpeg(root);
-        if (!bin) {
-          return resolve({ ok: false, message: '装完了但没找到 ffmpeg 可执行文件（平台子包可能没装上）' });
-        }
-        log(`ffmpeg 已就绪：${bin}`);
-        resolve({ ok: true, path: bin, message: '装好了' });
-      },
-    );
-  });
+/**
+ * 给面板看的状态。
+ *
+ * `dir` 用来在界面上告诉用户「装到哪了」——共享依赖最怕的就是
+ * 「以为装在扩展里、其实装到宿主」这种认知错位。
+ */
+export function ffmpegState({ root = '', configured = '' } = {}) {
+  const path = resolveFfmpeg({ root, configured });
+  return {
+    ready: Boolean(path),
+    path,
+    dir: sharedDepsDir(),
+    legacy: Boolean(!path && root && findIn(join(root, LEGACY_DEPS_DIR))),
+    configured: Boolean(String(configured || '').trim()),
+  };
 }
