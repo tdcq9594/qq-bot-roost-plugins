@@ -8,6 +8,8 @@
  * 会真的发网络请求（不带登录也跑得通）；CI 不跑这个文件，只在手动联调时用。
  */
 import { createBiliApi } from '../lib/api.mjs';
+import { cardOf } from '../lib/card.mjs';
+import { pickStream } from '../lib/shots.mjs';
 
 const log = (m) => console.log(`  · ${m}`);
 const api = createBiliApi({ log });
@@ -35,6 +37,22 @@ try {
   step(`视频详情 ${target}`);
   const info = await api.view({ bvid: target });
   console.log(`${info.title} / UP ${info.author} / 播放 ${info.play} / ${info.duration}s / ${info.tname}`);
+  console.log(`封面：${info.cover || '（没有，card 会当场拒）'}`);
+
+  step('卡片串（0.3，只拼字符串不发）');
+  try {
+    console.log(cardOf(info).text);
+  } catch (e) {
+    console.log(`拼不出：${e.message}${e.hint ? `（${e.hint}）` : ''}`);
+  }
+
+  step('播放流（0.3，shot 会用它抽帧）');
+  try {
+    const pu = await api.playurl({ bvid: info.bvid, cid: info.cid });
+    console.log(`DASH 视频流 ${pu.video.length} 路 / durl ${pu.durl.length} 段；选中的：${pickStream(pu) ? '有' : '没有'}`);
+  } catch (e) {
+    console.log(`拿不到播放流：${e.message}${e.hint ? `（${e.hint}）` : ''}`);
+  }
 
   step('字幕');
   const sub = await api.subtitle(info);

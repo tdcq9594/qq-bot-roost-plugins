@@ -1,5 +1,5 @@
 /**
- * 工具面：五个只读工具 + 参数校验。
+ * 工具面：八个只读工具 + 参数校验（0.2 的五个 + 0.3 的 feed / card / shot）。
  *
  * 为什么没有写接口（评论 / 弹幕 / 点赞 / 关注）：
  *  1. 这个扩展会被模型在**群聊里**调用，群里任何人的一句话都可能让它去发东西；
@@ -8,10 +8,15 @@
  *  3. 最可靠的防线不是「请在提示词里要求模型不要发」，而是**注册表里没有**——
  *     模型连工具名都看不见，注入得再漂亮也无从调用。
  * 要发评论请走框架插件侧（那里有「主人开口」的判定），不要加到这儿来。
+ *
+ * 0.3 的三个新工具同样**不往任何会话发消息**：`card` 返回一段
+ * `<<card:>>` 标记、`shot` 返回一张本地图的绝对路径，发不发由模型在
+ * 回复里决定（扩展拿不到「当前是哪个会话」）。
  */
 
 import { BiliError, findVideoId } from './api.mjs';
-import { fmtBangumi, fmtUp, fmtVideo, fmtVideoList } from './format.mjs';
+import { clamp, fmtBangumi, fmtUp, fmtVideo, fmtVideoList } from './format.mjs';
+import { cardText } from './card.mjs';
 
 /** 每周必看里一期的条目数约 50 条，按 limit 取前几条。 */
 
@@ -71,6 +76,42 @@ export const TOOLS = [
     },
   },
   {
+    name: 'feed',
+    description: '看定时刷最近刷到的一批视频（不开定时刷就没有）。说「刚刷到什么」「最近有啥新东西」时用。这个工具只读本地缓存，不打 B 站接口。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'integer', minimum: 1, maximum: 8, description: '要几条，默认 6' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'card',
+    description: '把一条 B 站视频折成官方图文卡片。返回一行 <<card: 标题|描述|链接|封面>>，**原样写进你的回复**宿主就会发出一张带封面和跳转的卡片；你还可以在同一条回复里照常说话。别人让你「分享这个视频」「发成卡片」时用。卡片四项必填、封面必须是 https，一轮最多写一张。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        link: { type: 'string', description: 'B 站链接 / BV 号 / av 号 / b23 短链' },
+      },
+      required: ['link'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'shot',
+    description: '从 B 站视频里抽一帧画面，存成本地图片。返回绝对路径和一行 <<image-alone: 路径>>，想发给对方就原样写进回复（不发就不写）。说「看看画面」「截一张图」时用。需要本机装 ffmpeg 或面板里填好路径；没登录 / 会员限定 / CDN 不支持 seek 时可能拿不到流。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        link: { type: 'string', description: 'B 站链接 / BV 号 / av 号 / b23 短链' },
+        at: { type: 'number', minimum: 0, description: '抽第几秒，不填就是全片 10% 处（跳过片头）' },
+      },
+      required: ['link'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'up',
     description: '看一个 UP 主：名字、签名、粉丝数、最近投稿。给 UID 或昵称都行。别人提到某个 UP 主时用。',
     inputSchema: {
@@ -119,7 +160,7 @@ function boolOf(v, def) {
   return def;
 }
 
-export function createToolbox({ api, log = () => {}, config = {} }) {
+export function createToolbox({ api, log = () => {}, config = {}, feed = null, shots = null }) {
   /**
    * 设置取值：面板保存前已经校验过，但用户可能手改 `config.json`，
    * 所以这里再夹一次范围 —— 这是最后一道。
@@ -178,16 +219,21 @@ export function createToolbox({ api, log = () => {}, config = {} }) {
     return fmtVideoList(items.slice(0, limit), { heading: `搜「${keyword}」（按${{ play: '播放', pubdate: '最新', dm: '弹幕' }[order]}）：` });
   }
 
-  async function video(args) {
-    const a = argsOf(args, ['link', 'comments', 'subtitle', 'danmaku']);
-    let id = findVideoId(a.link);
+  /** 链接 → 视频号（b23 短链跳一次）。video / card / shot 共用，别抄三遍。 */
+  async function resolveId(link) {
+    let id = findVideoId(link);
     if (!id) throw new BiliError('没认出视频号', { hint: '可以给完整链接、BV 号、av 号或 b23 短链。' });
-
     if (id.short) {
       const real = await api.resolveShort(id.short);
       id = findVideoId(real);
       if (!id || id.short) throw new BiliError('短链打不开（可能过期了）');
     }
+    return id;
+  }
+
+  async function video(args) {
+    const a = argsOf(args, ['link', 'comments', 'subtitle', 'danmaku']);
+    const id = await resolveId(a.link);
 
     if (id.ep || id.ss) {
       const b = await api.bangumi({ ep: id.ep, ss: id.ss });
@@ -232,7 +278,53 @@ export function createToolbox({ api, log = () => {}, config = {} }) {
     return matched ? `${text}\n（${matched}）` : text;
   }
 
-  const handlers = { hot, weekly, search, video, up };
+  /**
+   * 0.3 · 卡片：只拼字符串，不发送。
+   * `view()` 返回的 `cover` 已补成 https；没有封面就当场说清，别让模型
+   * 抄一段注定发不出去的标记。
+   */
+  async function card(args) {
+    const a = argsOf(args, ['link']);
+    const id = await resolveId(a.link);
+    if (id.ep || id.ss) throw new BiliError('番剧没有普通视频号，拼不出卡片', { hint: '换成具体某一集的 BV 号，或者直接用 video 工具聊。' });
+    const info = await api.view(id);
+    return clamp(cardText(info));
+  }
+
+  /** 0.3 · 抽帧：拿不到 ffmpeg / 流时把可操作的提示原样带给模型。 */
+  async function shot(args) {
+    const a = argsOf(args, ['link', 'at']);
+    if (!shots) throw new BiliError('这个扩展没启用截图', { hint: '检查 server 启动日志。' });
+    const id = await resolveId(a.link);
+    if (id.ep || id.ss) throw new BiliError('番剧没法抽帧', { hint: '换成具体某一集的 BV 号。' });
+    const info = await api.view(id);
+    const at = (a.at === undefined || a.at === null || a.at === '')
+      ? Math.round((Number(info?.duration) || 0) * 0.1)
+      : Number(a.at);
+    if (!Number.isFinite(at) || at < 0) throw new BiliError('at 要是秒数（≥0）');
+    const r = await shots.take({ info, at });
+    return clamp(r.text);
+  }
+
+  /** 0.3 · 定时刷缓存：只读内存，连 B 站都不打。 */
+  async function feedTool(args) {
+    const a = argsOf(args, ['limit']);
+    const limit = intOf(a.limit, defaultLimit);
+    const st = feed?.state?.() ?? { enabled: false };
+    if (!feed || !st.enabled) {
+      return '定时刷没开：面板「表达 → 刷 B 站 → 设置」里的「定时刷间隔」填 15 分钟以上才会启动。'
+        + '现在想看新的直接用 hot。';
+    }
+    const items = feed.items();
+    if (!items.length) {
+      return `定时刷开着（每 ${st.minutes} 分钟、活跃时段 ${st.activeHours || '全天'}），`
+        + `但还没成功刷到过${st.error ? `：${st.error}` : '，等下一轮或先调 hot'}。`;
+    }
+    const when = st.at ? new Date(st.at).toLocaleString('zh-CN') : '刚才';
+    return fmtVideoList(items.slice(0, limit), { heading: `最近一次定时刷（${when}）拿到 ${items.length} 条：` });
+  }
+
+  const handlers = { hot, weekly, search, video, up, feed: feedTool, card, shot };
 
   return {
     tools: TOOLS,
@@ -252,5 +344,15 @@ export function createToolbox({ api, log = () => {}, config = {} }) {
      * 这个扩展的请求要节流，多一次就可能撞 412。
      */
     hotPool() { return Array.isArray(hotCache?.items) ? hotCache.items : []; },
+    /**
+     * 定时刷喂进来的新池子（0.3）。复用 `hot` 的 5 分钟缓存，
+     * 这样 `feed` 刚刷完再有人问「有什么好看的」不会又打一次 B 站。
+     */
+    setPool(items) {
+      if (!Array.isArray(items) || !items.length) return false;
+      hotCache = { at: Date.now(), items };
+      hotCursor = 0;
+      return true;
+    },
   };
 }

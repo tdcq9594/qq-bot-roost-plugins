@@ -10,6 +10,9 @@
  * 手动联调（不经宿主）：
  *   node server.mjs --call hot '{"limit":3}'
  *   node server.mjs --call video '{"link":"BV1xx"}'
+ *   node server.mjs --call feed '{}'
+ *   node server.mjs --call card '{"link":"BV1xx"}'
+ *   node server.mjs --call shot '{"link":"BV1xx","at":30}'
  *   node server.mjs --list
  */
 
@@ -19,8 +22,11 @@ import { fileURLToPath } from 'node:url';
 import { BiliError, createBiliApi } from './lib/api.mjs';
 import { createToolbox } from './lib/tools.mjs';
 import { createUiData } from './lib/ui-data.mjs';
+import { readConfig } from './lib/config.mjs';
+import { createFeed, createHostState } from './lib/feed.mjs';
+import { createShots } from './lib/shots.mjs';
 
-const SERVER = { name: 'bili', version: '0.1.1' };
+const SERVER = { name: 'bili', version: '0.3.0' };
 const log = (m) => process.stderr.write(`[bili] ${m}\n`);
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 
@@ -28,29 +34,46 @@ const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
  * 可调设置：宿主把面板里保存的**非敏感**值拼成 JSON 放在 `ROOST_EXT_CONFIG`。
  * 解析失败按空配置继续 —— 配置坏了不该让扩展起不来。
  */
-const config = (() => {
-  try {
-    const raw = JSON.parse(String(process.env.ROOST_EXT_CONFIG || '{}'));
-    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-  } catch (e) {
-    log(`ROOST_EXT_CONFIG 不是合法 JSON，按空配置启动：${e.message}`);
-    return {};
-  }
-})();
-
-const api = createBiliApi({ log });
-const box = createToolbox({ api, log, config });
-
 /**
- * 面板数据（6.1 声明式界面）：宿主只读这个 JSON，不执行这里的任何代码。
- * 写盘时机只有两个，都不额外发请求 —— 见 `lib/ui-data.mjs` 顶部。
+ * 0.3：配置收在 `lib/config.mjs`（纯函数，测试直接喂假 env）。
+ * 标了 `secret` 的 Cookie 走 `ROOST_EXT_SECRET_COOKIE`，不在这个 JSON 里。
  */
+const cfg = readConfig(process.env);
+
 /**
  * 扩展自己的目录。用 `fileURLToPath` 而不是 `URL.pathname`：
  * 后者在 Windows 上给 `/C:/...`，而且中文路径会被百分号编码。
  */
 const HERE = fileURLToPath(new URL('.', import.meta.url));
+
+/** 面板数据（6.1 声明式界面）：宿主只读这个 JSON，不执行这里的任何代码。 */
 const ui = createUiData({ dir: HERE, log });
+
+/** 登录态：面板 secret 优先，兼容 0.2 的 cookie.txt（见 api.mjs 的 cookieText）。 */
+const api = createBiliApi({ log, getCookie: () => cfg.cookie });
+
+/**
+ * 0.3 定时刷：只预热缓存和面板，**不往任何会话发消息**。
+ * `onFresh` 引用 `box`，而 `box` 又要拿 `feed` —— 用 `let` 解掉这个环。
+ */
+let box = null;
+const feed = createFeed({
+  cfg,
+  api,
+  hostState: createHostState(process.env),
+  onFresh: (items) => {
+    box?.setPool(items);
+    ui.fromPool(items);
+  },
+  log,
+});
+
+const shots = createShots({
+  dir: cfg.shotDir, keep: cfg.shotKeep, width: cfg.shotWidth,
+  ffmpegPath: cfg.ffmpegPath, api, log,
+});
+
+box = createToolbox({ api, log, config: cfg, feed, shots });
 
 function ok(id, result) {
   send({ jsonrpc: '2.0', id, result });
@@ -86,8 +109,12 @@ async function handle(msg) {
     const name = String(params?.name ?? '');
     try {
       const text = await box.call(name, params?.arguments ?? {});
-      /** 刚拉过热门就顺手把面板数据刷新一下：零额外请求 */
-      if (name === 'hot') ui.fromPool(box.hotPool());
+      /** 刚拉过热门就顺手把面板数据 / feed 缓存刷新一下：零额外请求 */
+      if (name === 'hot') {
+        const pool = box.hotPool();
+        ui.fromPool(pool);
+        feed.seed(pool, 'hot');
+      }
       return ok(id, { content: [{ type: 'text', text: String(text) }] });
     } catch (e) {
       // 业务错误用 isError 而不是 JSON-RPC error：协议层没坏，是这次调用没成，
@@ -168,17 +195,25 @@ function serve() {
   process.stdin.on('end', () => process.exit(0));
   // 宿主关掉管道时别抛 EPIPE 栈。
   process.stdout.on('error', () => process.exit(0));
-  log(`就绪（${box.tools.length} 个工具）`);
+  if (feed.enabled) feed.start();
+  log(`就绪（${box.tools.length} 个工具，定时刷${feed.enabled ? `每 ${feed.minutes} 分钟` : '关闭'}）`);
 
   /**
    * 启动后预热一次面板数据。
    *
    * 放在 `setTimeout` 里、并且吞掉所有错误：这一步失败了不该影响协议握手，
    * 面板那边只会显示「还没有数据文件」，点一下工具就补上了。
+   *
+   * 0.3：预热那一批顺手喂给 `feed`，这样定时刷的第一个周期还没到时，
+   * `feed` 工具也不会空着；**不额外发请求**（这是 0.2 就定下的规矩）。
    */
   setTimeout(() => {
     box.call('hot', { limit: 8 })
-      .then(() => ui.fromPool(box.hotPool()))
+      .then(() => {
+        const pool = box.hotPool();
+        ui.fromPool(pool);
+        feed.seed(pool);
+      })
       .catch((e) => log(`预热面板数据失败（不影响使用）：${e?.message ?? e}`));
   }, 1200).unref?.();
 }

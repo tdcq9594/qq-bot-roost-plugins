@@ -61,10 +61,14 @@ try {
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
 
   const list = await rpc('tools/list', {});
-  const names = (list.result?.tools || []).map((t) => t.name);
-  check(names.length === 5, `tools/list 有 5 个工具（实际 ${names.length}）`);
-  for (const n of ['hot', 'weekly', 'search', 'video', 'up']) check(names.includes(n), `工具有 ${n}`);
-  check((list.result?.tools || []).every((t) => t.inputSchema?.type === 'object'), '每个工具都有 object 入参 schema');
+  const tools = list.result?.tools || [];
+  const names = tools.map((t) => t.name);
+  check(names.length === 8, `tools/list 有 8 个工具（实际 ${names.length}）`);
+  for (const n of ['hot', 'weekly', 'search', 'video', 'up', 'feed', 'card', 'shot']) {
+    check(names.includes(n), `工具有 ${n}`);
+  }
+  check(tools.every((t) => t.inputSchema?.type === 'object'), '每个工具都有 object 入参 schema');
+  check(tools.every((t) => t.annotations?.readOnlyHint === true), '八个工具都标 readOnlyHint（不往 B 站写东西）');
 
   const ping = await rpc('ping', {});
   check(ping.result && Object.keys(ping.result).length === 0, 'ping 回空结果');
@@ -75,6 +79,16 @@ try {
 
   const noArg = await rpc('tools/call', { name: 'up', arguments: {} });
   check(noArg.result?.isError === true && /UID|昵称/.test(noArg.result.content[0].text), '缺参数时给中文提示');
+
+  // 0.3 的三个新工具：只验离线能跑到的那一层（参数校验 / 未开定时刷的提示）
+  const noLink = await rpc('tools/call', { name: 'card', arguments: {} });
+  check(noLink.result?.isError === true && /没认出视频号|link/.test(noLink.result.content[0].text), 'card 缺 link 时给中文原因');
+
+  const shotArg = await rpc('tools/call', { name: 'shot', arguments: { link: 'BV1ZAWM61Evb', att: 30 } });
+  check(shotArg.result?.isError === true && /不认识的参数/.test(shotArg.result.content[0].text), 'shot 的未知参数被拒');
+
+  const feedOff = await rpc('tools/call', { name: 'feed', arguments: {} });
+  check(feedOff.result?.isError !== true && /定时刷没开/.test(feedOff.result.content[0].text), 'feed 没开时是可读提示，不是错误');
 
   const unknown = await rpc('tools/call', { name: 'nope', arguments: {} });
   check(unknown.result?.isError === true, '不存在的工具返回 isError 而不是崩');

@@ -51,6 +51,13 @@ export class BiliError extends Error {
   }
 }
 
+/** B 站很多图地址写成 `//i0.hdslb.com/…`；官方卡片和 ffmpeg 都要完整 https。 */
+export function httpsOf(u) {
+  const s = String(u ?? '').trim();
+  if (s.startsWith('//')) return `https:${s}`;
+  return s;
+}
+
 const stripHtml = (s) => String(s || '')
   .replace(/<[^>]+>/g, '')
   .replace(/&quot;/g, '"')
@@ -162,7 +169,8 @@ export function createBiliApi({ getCookie = () => '', log = () => {}, fetchImpl 
         log(`读 cookie.txt 失败：${e?.message ?? e}`);
       }
     }
-    return cookieCache.text || getCookie() || '';
+    /** 面板里的 secret Cookie 优先；`cookie.txt` 是 0.2 老写法的兼容通道。 */
+    return getCookie() || cookieCache.text || '';
   }
 
   const cookieHeader = () => {
@@ -339,7 +347,7 @@ export function createBiliApi({ getCookie = () => '', log = () => {}, fetchImpl 
       desc: String(v.desc || '').slice(0, 160),
       tname: v.tname || '',
       /** 封面：面板那张卡要用。只给 http(s)，别的协议下游会清掉 */
-      cover: String(v.pic || ''),
+      cover: httpsOf(v.pic || ''),
     }));
   }
 
@@ -391,7 +399,32 @@ export function createBiliApi({ getCookie = () => '', log = () => {}, fetchImpl 
       pubdate: (Number(d.pubdate) || 0) * 1000,
       duration: Number(d.duration) || 0,
       tname: d.tname || '',
+      /** 0.3：`card` 工具要封面，官方卡片只收 https 图片地址 */
+      cover: httpsOf(d.pic || ''),
       pages: Array.isArray(d.pages) ? d.pages.length : 1,
+    };
+  }
+
+  /**
+   * 0.3 抽帧用的视频流地址（只读）。
+   *
+   * fnval=4048 要 DASH；不少视频 / 匿名态只回 `durl` 渐进式 MP4，两种都带出去。
+   * 流地址是 B 站接口给的，ffmpeg 拿去读之前还要在 `shots.mjs` 里过一遍域名白名单
+   * ——接口要是被污染成内网地址，不能让子进程去连。
+   */
+  async function playurl({ bvid, aid, cid, qn = 64 }) {
+    await ensureBuvid();
+    const d = await req(await signed('https://api.bilibili.com/x/player/wbi/playurl', {
+      ...(bvid ? { bvid } : { aid }), cid, qn, fnval: 4048, fnver: 0, fourk: 1,
+    }));
+    const one = (x) => (x ? {
+      id: x.id, width: Number(x.width) || 0, height: Number(x.height) || 0,
+      codecs: String(x.codecs || ''), bandwidth: Number(x.bandwidth) || 0,
+      baseUrl: httpsOf(x.baseUrl || x.base_url || ''),
+    } : null);
+    return {
+      video: (d?.dash?.video || []).map(one).filter((v) => v && v.baseUrl),
+      durl: (d?.durl || []).map((x) => ({ url: httpsOf(x.url || '') })).filter((x) => x.url),
     };
   }
 
@@ -527,7 +560,7 @@ export function createBiliApi({ getCookie = () => '', log = () => {}, fetchImpl 
   }
 
   return {
-    nav, search, searchUser, hot, weekly, view, subtitle, comments, danmaku, up, bangumi, resolveShort,
+    nav, search, searchUser, hot, weekly, view, playurl, subtitle, comments, danmaku, up, bangumi, resolveShort,
     /** 给工具层用的登录态（带 10 分钟缓存）。 */
     account: () => nav().catch(() => ({ isLogin: false, uname: '', mid: 0, vip: false })),
     /** 只读状态：给 --status 自检用。 */

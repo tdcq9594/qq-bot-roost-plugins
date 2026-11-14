@@ -2,7 +2,7 @@
   "schema": 1,
   "repo": "tdcq9594/qq-bot-roost-plugins",
   "branch": "main",
-  "updated": "2026-11-13",
+  "updated": "2026-11-14",
   "plugins": [
     {
       "id": "ai-chat",
@@ -71,17 +71,19 @@
     {
       "id": "bili",
       "name": "刷 B 站",
-      "version": "0.2.0",
-      "description": "给模型一双能看 B 站的眼睛：搜视频、看榜单、读字幕与热评、看 UP 主。只读，不发评论、不点赞。",
+      "version": "0.3.0",
+      "description": "给模型一双能看 B 站的眼睛：搜视频、看榜单、读字幕与热评、看 UP 主；可填 Cookie 登录、定时刷热门、把视频分享成官方卡片、抽一帧画面。只读，不发评论、不点赞。",
       "tags": [
         "B站",
         "视频",
-        "只读"
+        "只读",
+        "卡片",
+        "截图"
       ],
       "kind": "dsh-extension",
       "runtime": "mcp",
       "path": "plugins/bili",
-      "sha256": "a7b5c0cc6cb79d6cedf5535dd0a65c140913cb8231941d937cee7afef1b57350"
+      "sha256": "85038fbf5e232651b70c495a60ee09fa7d5161f3d3b39377338f4422b4e43d50"
     },
     {
       "id": "comfy-draw",
