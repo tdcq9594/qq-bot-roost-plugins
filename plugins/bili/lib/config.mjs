@@ -90,5 +90,29 @@ export function readConfig(env = process.env) {
     shotWidth: intOf(raw.shotWidth, 512, 256, 1024),
     shotKeep: intOf(raw.shotKeep, 12, 1, 50),
     shotDir: strOf(raw.shotDir, '', 300),
+
+    /* ---------------- 0.4：每个功能一个开关，默认全关 ---------------- */
+    /** 主动推送：交给宿主的素材通道，由模型写措辞、宿主过门闸 */
+    pushOwner: boolOf(raw.pushOwner, false),
+    pushGroup: boolOf(raw.pushGroup, false),
+    pushGroupTarget: strOf(raw.pushGroupTarget, '', 30),
+    pushApproval: boolOf(raw.pushApproval, false),
+    /** 素材里带 https 封面地址。不写 <<card:>>：主动轮次会抹平标记 */
+    pushCover: boolOf(raw.pushCover, false),
+    pushMinPlay: intOf(raw.pushMinPlay, 100000, 0, 10_000_000),
+    pushDailyLimit: intOf(raw.pushDailyLimit, 20, 1, 200),
+    pushPerFeed: intOf(raw.pushPerFeed, 1, 1, 5),
+
+    /** 定时刷命中后自动抽一帧存本地；不主动发图 */
+    autoShot: boolOf(raw.autoShot, false),
+
+    /** 写动作：不注册 MCP 工具，只在定时刷内部跑；试运行默认开 */
+    autoComment: boolOf(raw.autoComment, false),
+    commentTemplate: strOf(raw.commentTemplate, '看着挺有意思，收藏了', 200),
+    autoLike: boolOf(raw.autoLike, false),
+    autoDanmaku: boolOf(raw.autoDanmaku, false),
+    danmakuTemplate: strOf(raw.danmakuTemplate, '好看', 100),
+    writeDryRun: boolOf(raw.writeDryRun, true),
+    writeDailyLimit: intOf(raw.writeDailyLimit, 10, 1, 100),
   };
 }

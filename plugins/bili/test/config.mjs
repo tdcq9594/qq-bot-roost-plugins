@@ -11,6 +11,7 @@
 import assert from 'node:assert/strict';
 
 import { createToolbox } from '../lib/tools.mjs';
+import { readConfig } from '../lib/config.mjs';
 
 const calls = [];
 
@@ -99,6 +100,30 @@ const check = (cond, label) => {
   const hot = box.tools.find((t) => t.name === 'hot');
   assert.equal(hot.inputSchema.properties.limit.maximum, 8, '上限仍是 8');
 }
+
+
+/* ---------------- 0.4：开关默认值 ---------------- */
+
+const c0 = readConfig({});
+assert.equal(c0.pushOwner, false, '私聊推送默认关');
+assert.equal(c0.pushGroup, false, '群推送默认关');
+assert.equal(c0.pushApproval, false);
+assert.equal(c0.autoComment, false, '写动作默认关');
+assert.equal(c0.autoLike, false);
+assert.equal(c0.autoDanmaku, false);
+assert.equal(c0.writeDryRun, true, '写动作默认试运行 —— 这条别改');
+assert.equal(c0.pushDailyLimit, 20);
+assert.equal(c0.writeDailyLimit, 10);
+assert.equal(c0.pushMinPlay, 100000);
+
+const c1 = readConfig({ ROOST_EXT_CONFIG: JSON.stringify({
+  pushOwner: 'true', pushGroupTarget: '123456789', writeDryRun: 'false', pushPerFeed: 3,
+}) });
+assert.equal(c1.pushOwner, true);
+assert.equal(c1.pushGroupTarget, '123456789');
+assert.equal(c1.writeDryRun, false, '用户显式关掉试运行才生效');
+assert.equal(c1.pushPerFeed, 3);
+console.log('✓ 0.4 开关默认值与覆盖');
 
 console.log(fail.length ? `\n✗ ${fail.length} 项未通过` : '\n✓ 全部通过');
 process.exit(fail.length ? 1 : 0);

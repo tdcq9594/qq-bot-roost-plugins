@@ -63,12 +63,15 @@ try {
   const list = await rpc('tools/list', {});
   const tools = list.result?.tools || [];
   const names = tools.map((t) => t.name);
-  check(names.length === 8, `tools/list 有 8 个工具（实际 ${names.length}）`);
-  for (const n of ['hot', 'weekly', 'search', 'video', 'up', 'feed', 'card', 'shot']) {
+  check(names.length === 10, `tools/list 有 10 个工具（实际 ${names.length}）`);
+  for (const n of ['hot', 'weekly', 'search', 'video', 'up', 'feed', 'card', 'shot', 'push', 'push_state']) {
     check(names.includes(n), `工具有 ${n}`);
   }
   check(tools.every((t) => t.inputSchema?.type === 'object'), '每个工具都有 object 入参 schema');
-  check(tools.every((t) => t.annotations?.readOnlyHint === true), '八个工具都标 readOnlyHint（不往 B 站写东西）');
+  check(tools.filter((t) => t.name !== 'push').every((t) => t.annotations?.readOnlyHint === true),
+    '除 push 外都标 readOnlyHint（不往 B 站写东西）');
+  check(tools.find((t) => t.name === 'push')?.annotations?.readOnlyHint === false,
+    'push 明确不标只读（它会触发宿主主动发消息）');
 
   const ping = await rpc('ping', {});
   check(ping.result && Object.keys(ping.result).length === 0, 'ping 回空结果');
@@ -89,6 +92,15 @@ try {
 
   const feedOff = await rpc('tools/call', { name: 'feed', arguments: {} });
   check(feedOff.result?.isError !== true && /定时刷没开/.test(feedOff.result.content[0].text), 'feed 没开时是可读提示，不是错误');
+
+  // 0.4：开关全关时也能自检，不该因为没有令牌就报错
+  const pushState = await rpc('tools/call', { name: 'push_state', arguments: {} });
+  check(pushState.result?.isError !== true && /开着的开关|通道/.test(pushState.result.content[0].text),
+    'push_state 离线可读（开关、额度、上一轮结果）');
+
+  const pushOff = await rpc('tools/call', { name: 'push', arguments: {} });
+  check(pushOff.result?.isError !== true && /最近没刷到|没投出去|投进/.test(pushOff.result.content[0].text),
+    'push 在默认配置下给可读提示，不是崩');
 
   const unknown = await rpc('tools/call', { name: 'nope', arguments: {} });
   check(unknown.result?.isError === true, '不存在的工具返回 isError 而不是崩');

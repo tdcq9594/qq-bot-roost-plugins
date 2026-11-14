@@ -112,6 +112,22 @@ export const TOOLS = [
     },
   },
   {
+    name: 'push',
+    description: '把最近刷到的一个视频投进宿主的主动消息素材队列，由她自己决定要不要说、怎么说。用来验证「刷到好视频主动告诉我」这条链路，或手动补推一次。不是往 B 站发东西。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        index: { type: 'number', description: '最近一批里第几条，默认 1' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'push_state',
+    description: '看主动推送的开关、今日额度和上一轮结果。用户问「你怎么不推了」「推送开了吗」时先调这个。',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
     name: 'up',
     description: '看一个 UP 主：名字、签名、粉丝数、最近投稿。给 UID 或昵称都行。别人提到某个 UP 主时用。',
     inputSchema: {
@@ -134,6 +150,12 @@ export const TOOLS = [
 export const TOOL_ANNOTATIONS = Object.freeze({ readOnlyHint: true, openWorldHint: true });
 
 for (const t of TOOLS) t.annotations = TOOL_ANNOTATIONS;
+/**
+ * `push` 会让宿主主动发一条消息，不能跟着标「只读」——
+ * 调用方（宿主 / 审核）靠这个标记判断要不要额外确认，撒谎比不标更糟。
+ * 用新对象覆盖，别改到那个被其它工具共享的 TOOL_ANNOTATIONS。
+ */
+TOOLS.find((t) => t.name === 'push').annotations = { ...TOOL_ANNOTATIONS, readOnlyHint: false };
 
 /** 参数校验：MCP 客户端不会替我们拒未知字段，模型写错一个 key 就会静默失效。 */
 function argsOf(raw, allowed) {
@@ -160,7 +182,7 @@ function boolOf(v, def) {
   return def;
 }
 
-export function createToolbox({ api, log = () => {}, config = {}, feed = null, shots = null }) {
+export function createToolbox({ api, log = () => {}, config = {}, feed = null, shots = null, push = null }) {
   /**
    * 设置取值：面板保存前已经校验过，但用户可能手改 `config.json`，
    * 所以这里再夹一次范围 —— 这是最后一道。
@@ -324,7 +346,42 @@ export function createToolbox({ api, log = () => {}, config = {}, feed = null, s
     return fmtVideoList(items.slice(0, limit), { heading: `最近一次定时刷（${when}）拿到 ${items.length} 条：` });
   }
 
-  const handlers = { hot, weekly, search, video, up, feed: feedTool, card, shot };
+  /** 手动把最近刷到的一条投进宿主素材通道，验证链路用（不是 B 站写操作） */
+  async function pushTool(args) {
+    const a = argsOf(args, ['index']);
+    if (!push) return '素材通道没接上：宿主要有 /v1/proactive/submit，且扩展装的时候给了 proactive:write 权限。';
+    const pool = feed?.items?.() ?? [];
+    const idx = Math.max(1, Math.min(pool.length || 1, Math.round(Number(a.index) || 1)));
+    const v = pool[idx - 1];
+    if (!v) return '最近没刷到视频。先让机器人「刷点B站」，或把定时刷间隔填 15 分钟以上等一轮。';
+    const r = await push.pushOne(v, '手动');
+    const st = push.state?.();
+    return [
+      r.ok
+        ? `已经把《${v.title}》投进宿主素材队列（第 ${idx} 条）。措辞由她自己写，免打扰 / 额度 / 审批过了才会真发出去。`
+        : `没投出去：${r.why || '开关没开'}。面板「表达 → 刷 B 站 → 设置」里把「刷到好视频 → 私聊推给主人」打开再试。`,
+      st ? `今天已投 ${st.today.pushed} / ${st.today.pushLimit} 条；通道${st.channel ? '可用' : '不可用'}。` : '',
+    ].filter(Boolean).join('\n');
+  }
+
+  /** 开关与额度自检：用户问「你怎么不推了」时先调这个，别猜 */
+  async function pushStateTool() {
+    if (!push) return '素材通道没接上。';
+    const st = push.state();
+    const on = Object.entries(st.switches).filter(([, v]) => v).map(([k]) => k);
+    const last = st.last;
+    return [
+      `通道：${st.channel ? '可用' : '不可用（没令牌 / 没地址）'}`,
+      `开着的开关：${on.length ? on.join('、') : '一个都没有（默认全关）'}`,
+      `今天：推 ${st.today.pushed} / ${st.today.pushLimit} 条，写动作 ${st.today.writes} / ${st.today.writeLimit} 次`,
+      last?.at
+        ? `上一轮：${new Date(last.at).toLocaleString('zh-CN')}（${last.reason}）挑中 ${last.picked} 条、投出 ${last.delivered} 条、写 ${last.writes} 次`
+        : '还没跑过一轮',
+      last?.errors?.length ? `上一轮的问题：${last.errors.slice(0, 3).join('；')}` : '',
+    ].filter(Boolean).join('\n');
+  }
+
+  const handlers = { hot, weekly, search, video, up, feed: feedTool, card, shot, push: pushTool, push_state: pushStateTool };
 
   return {
     tools: TOOLS,

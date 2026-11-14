@@ -25,8 +25,11 @@ import { createUiData } from './lib/ui-data.mjs';
 import { readConfig } from './lib/config.mjs';
 import { createFeed, createHostState } from './lib/feed.mjs';
 import { createShots } from './lib/shots.mjs';
+import { createProactiveClient } from './lib/proactive.mjs';
+import { createWriteApi } from './lib/write.mjs';
+import { createPush } from './lib/push.mjs';
 
-const SERVER = { name: 'bili', version: '0.3.0' };
+const SERVER = { name: 'bili', version: '0.4.0' };
 const log = (m) => process.stderr.write(`[bili] ${m}\n`);
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 
@@ -53,10 +56,21 @@ const ui = createUiData({ dir: HERE, log });
 const api = createBiliApi({ log, getCookie: () => cfg.cookie });
 
 /**
- * 0.3 定时刷：只预热缓存和面板，**不往任何会话发消息**。
- * `onFresh` 引用 `box`，而 `box` 又要拿 `feed` —— 用 `let` 解掉这个环。
+ * 0.4 定时刷：除了预热缓存和面板，还按开关投素材 / 抽帧 / 跑写动作。
+ * `onFresh` 引用 `box` 和 `push`，两者又都要拿 `feed`/`shots` ——
+ * 用 `let` 解掉这个环，回调在定时器起来之后才会被调用。
  */
 let box = null;
+let push = null;
+
+/** 素材通道与写动作都由宿主/配置注入，手动 `--call` 时缺令牌是正常状态 */
+const submit = createProactiveClient(process.env);
+const write = createWriteApi({
+  getCookie: () => cfg.cookie,
+  dryRunOf: () => cfg.writeDryRun !== false,
+  log,
+});
+
 const feed = createFeed({
   cfg,
   api,
@@ -64,6 +78,8 @@ const feed = createFeed({
   onFresh: (items) => {
     box?.setPool(items);
     ui.fromPool(items);
+    /** 推送失败不该让「这一轮刷成功了」变红，单独吞掉并记进 push.state() */
+    if (push) void push.onFresh(items, '定时').catch((e) => log(`推送这一轮失败：${e?.message ?? e}`));
   },
   log,
 });
@@ -73,7 +89,8 @@ const shots = createShots({
   ffmpegPath: cfg.ffmpegPath, api, log,
 });
 
-box = createToolbox({ api, log, config: cfg, feed, shots });
+push = createPush({ cfg, api, shots, submit, write, log });
+box = createToolbox({ api, log, config: cfg, feed, shots, push });
 
 function ok(id, result) {
   send({ jsonrpc: '2.0', id, result });
