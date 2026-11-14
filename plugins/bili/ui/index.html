@@ -646,7 +646,11 @@
     if (!box) return;
     const q = meta && meta.qr;
     box.textContent = '';
-    const waiting = Boolean(q && q.state === 'waiting');
+    /**
+     * `scanned` 也要继续显示二维码：用户扫完还没在手机上点确认，
+     * 这时候把图收掉反而让人以为流程断了。
+     */
+    const waiting = Boolean(q && (q.state === 'waiting' || q.state === 'scanned'));
     if (cancel) cancel.hidden = !waiting;
     if (!waiting) {
       if (q && q.state === 'done') {
@@ -667,11 +671,37 @@
     const img = document.createElement('img');
     img.src = API + '/ext-pages?id=bili&file=ui/qr.png&t=' + Date.now();
     img.alt = 'B 站登录二维码';
-    img.style.cssText = 'width:180px;height:180px;border-radius:10px;border:1px solid var(--line);margin-top:10px;display:block';
+    /**
+     * 220px 且 `pixelated`：二维码是按整数倍放大的黑白方块，
+     * 交给浏览器平滑插值会让边缘发灰、模块糊在一起，手机更容易扫不出。
+     */
+    img.style.cssText = 'width:220px;height:220px;border-radius:10px;border:1px solid var(--line);margin-top:10px;display:block;image-rendering:pixelated;background:#fff';
     const tip = document.createElement('div');
     tip.className = 'hint';
-    tip.textContent = '用手机 B 站 App 扫码，扫完在手机上点确认';
+    tip.textContent = q.state === 'scanned'
+      ? (q.message || '已扫码，在手机上点确认')
+      : '用手机 B 站 App 扫码，扫完在手机上点确认';
     box.append(img, tip);
+    syncQrPoll();
+  }
+
+  /**
+   * 二维码在等扫码时每 2 秒拉一次状态。
+   *
+   * 轮询发生在**宿主进程**里的那个定时器（`qr_start` 之后每 2 秒查一次
+   * B 站接口），结果写进 `ui-data.json`；页面不主动问就永远停在
+   * 「等手机扫码」——之前就是这样，非得手动点刷新才看到「已登录」。
+   */
+  let qrPoll = null;
+  function syncQrPoll() {
+    const q = meta && meta.qr;
+    const need = Boolean(q && (q.state === 'waiting' || q.state === 'scanned'));
+    if (need && !qrPoll) {
+      qrPoll = setInterval(() => { void loadData(); }, 2000);
+    } else if (!need && qrPoll) {
+      clearInterval(qrPoll);
+      qrPoll = null;
+    }
   }
 
   function renderDanmaku() {

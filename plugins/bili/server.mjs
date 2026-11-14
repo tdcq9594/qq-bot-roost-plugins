@@ -29,11 +29,11 @@ import { createProactiveClient } from './lib/proactive.mjs';
 import { createWriteApi } from './lib/write.mjs';
 import { createPush } from './lib/push.mjs';
 import { createUiActions } from './lib/ui-actions.mjs';
-import { resolveFfmpeg, ffmpegState } from './lib/ffmpeg.mjs';
+import { resolveFfmpeg, ffmpegState, sharedDepsDir } from './lib/ffmpeg.mjs';
 import { createQrLogin } from './lib/qr-login.mjs';
 import { createLiveConfig } from './lib/live-config.mjs';
 
-const SERVER = { name: 'bili', version: '0.7.0' };
+const SERVER = { name: 'bili', version: '0.8.0' };
 const log = (m) => process.stderr.write(`[bili] ${m}\n`);
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 
@@ -132,7 +132,8 @@ push = createPush({ cfg, api, shots, submit, write, log });
 box = createToolbox({ api, log, config: cfg, feed, shots, push });
 
 /** 扫码登录：headless 浏览器出码，拿到 cookie 就写 cookie.txt */
-const qr = createQrLogin({ root: HERE, log });
+/** `depsDir` 里如果有 `qrcode` 就用它生成二维码，没有则退回内置编码器 */
+const qr = createQrLogin({ root: HERE, log, depsDir: sharedDepsDir() });
 
 function stopQrTimer() {
   if (qrTimer) clearInterval(qrTimer);

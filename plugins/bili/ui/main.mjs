@@ -29,7 +29,7 @@ import { createUiData } from '../lib/ui-data.mjs';
 import { createFeed } from '../lib/feed.mjs';
 import { createWriteApi } from '../lib/write.mjs';
 import { createQrLogin } from '../lib/qr-login.mjs';
-import { ffmpegState } from '../lib/ffmpeg.mjs';
+import { ffmpegState, sharedDepsDir } from '../lib/ffmpeg.mjs';
 
 /** `ui/main.mjs` 的上一级就是扩展根目录（ui/ 的父目录） */
 const HERE = fileURLToPath(new URL('..', import.meta.url));
@@ -195,7 +195,7 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
 
     /** 扫码登录：起 headless 浏览器出码，之后每 2 秒查一次 cookie */
     async qr_start() {
-      qr = qr || createQrLogin({ root: HERE, log });
+      qr = qr || createQrLogin({ root: HERE, log, depsDir: sharedDepsDir(env.ROOST_DEPS_DIR) });
       const r = await qr.start();
       setMeta({ qr: qrState(r.state, r.message) });
       if (!r.ok) return { ok: false, message: String(r.message || '出码失败') };

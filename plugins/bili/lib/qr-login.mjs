@@ -1,246 +1,188 @@
 /**
- * B 站扫码登录（headless 浏览器 + CDP）
+ * B 站扫码登录（官方接口 + 本地生成二维码）
  * ============================================================
  *
- * 做法照 aurabot 的 `src/bili/qr-login.js`：起一个独立的 headless 浏览器，
- * 打开 passport 登录页，把二维码截下来交给面板；主人扫完确认后，从同一个
- * 调试会话里取 cookie（SESSDATA / bili_jct），写进扩展自己的 `cookie.txt`。
+ * 走 B 站 passport 官方的二维码接口，**不起浏览器**：
  *
- * 为什么不用 B 站官方的 `qrcode/generate` 接口：那个接口只给一个 URL，
- * 要在面板上显示得自己画二维码（零依赖下要内置一个编码器）；而 headless
- * 浏览器方案不需要任何额外依赖，且拿到的是**真实登录态**（含设备指纹）。
+ *   GET  /x/passport-login/web/qrcode/generate   拿 `{ url, qrcode_key }`
+ *   GET  /x/passport-login/web/qrcode/poll?qrcode_key=…   查扫码进度
  *
- * 三条硬约束：
- *   1. 只写 `cookie.txt`（0.3 就兼容的文件，`api.mjs` 按 mtime 热读），
- *      不碰宿主 config，也不打印任何 cookie 值。
- *   2. 每个会话一个临时 profile，结束就删；浏览器进程整组杀掉，避免残留。
- *   3. 二维码图存 `ui/qr.png`，构建脚本已把它排除在索引哈希之外。
+ * 早先的做法是起一个 headless Chrome 打开登录页、用 CDP 截整页图——
+ * 那张图里二维码只占一小块，缩到面板宽度后每个模块不到 1 像素，
+ * 手机扫不动。改用官方接口后，本地按 URL 直接画出干净的二维码，
+ * 尺寸和纠错级别都由我们说了算。
+ *
+ * 二维码用 `lib/qr-encode.mjs` 的 `createQr()`：**装了共享依赖里的
+ * `qrcode` 就用它**（成熟库，版本 1–40 都覆盖），没装就退回内置编码器。
+ * 两条路都出 PNG，写 `ui/qr.png`，页面用 `/ext-pages` 取。
+ *
+ * 为什么不把图片塞进 `ui-data.json` 的 meta：那个字段对值长度有上限，
+ * 一张 PNG 的 base64 塞不进去；而 `ui/qr.png` 本来就在构建脚本的
+ * 跳过名单里，不会污染索引哈希。
  */
 
-import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
+import { createQr, qrToPng } from './qr-encode.mjs';
+
+const GEN_URL = 'https://passport.bilibili.com/x/passport-login/web/qrcode/generate';
+const POLL_URL = 'https://passport.bilibili.com/x/passport-login/web/qrcode/poll';
+
+/** 带上 referer：这两个接口不校验登录态，但会看来源 */
+const HEADERS = {
+  referer: 'https://www.bilibili.com/',
+  origin: 'https://www.bilibili.com',
+  'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+};
+
+/** 二维码有效期（B 站给 180 秒），到点直接判过期，省得白轮询 */
 const TTL_MS = 180_000;
-const LOGIN_URL = 'https://passport.bilibili.com/login';
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-const sleep = (ms) => new Promise((r) => { const t = setTimeout(r, ms); t.unref?.(); });
 
-/** 找可用的 Chromium 内核浏览器：环境变量 → 常见安装位置 → PATH */
-export function findBrowser() {
-  const fromEnv = String(process.env.BILI_CHROME_BIN || '').trim();
-  if (fromEnv && existsSync(fromEnv)) return fromEnv;
-  const candidates = process.platform === 'win32'
-    ? [
-      'C:/Program Files/Google/Chrome/Application/chrome.exe',
-      'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
-      'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-      'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
-    ]
-    : ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'];
-  for (const p of candidates) if (existsSync(p)) return p;
-  return '';
-}
-
-/** 极简 CDP 客户端：只用到 send，够截图和取 cookie */
-class Cdp {
-  constructor(ws) {
-    this.ws = ws;
-    this.id = 1;
-    this.pending = new Map();
-    ws.addEventListener('message', (e) => {
-      let m = null;
-      try { m = JSON.parse(String(e.data)); } catch { return; }
-      if (!m || !m.id || !this.pending.has(m.id)) return;
-      const { resolve, reject } = this.pending.get(m.id);
-      this.pending.delete(m.id);
-      if (m.error) reject(new Error(m.error.message || 'CDP 调用失败'));
-      else resolve(m.result);
-    });
+/**
+ * 从 `Set-Cookie` 里挑出登录需要的那几个。
+ *
+ * 只取 `SESSDATA` / `bili_jct` / `DedeUserID`：其它（buvid、分享用的）
+ * 要么和登录无关，要么每次会话都在变，写进文件只会让「粘贴的 Cookie
+ * 和扫码产生的」越来越不一致。
+ */
+function pickCookies(setCookies) {
+  const want = new Set(['SESSDATA', 'bili_jct', 'DedeUserID']);
+  const out = [];
+  for (const line of setCookies) {
+    const first = String(line).split(';')[0];
+    const eq = first.indexOf('=');
+    if (eq <= 0) continue;
+    const name = first.slice(0, eq).trim();
+    const value = first.slice(eq + 1).trim();
+    if (want.has(name) && value) out.push(`${name}=${value}`);
   }
-
-  static connect(url, timeoutMs = 8000) {
-    return new Promise((resolve, reject) => {
-      const ws = new WebSocket(url);
-      const timer = setTimeout(() => reject(new Error('连不上浏览器调试端口')), timeoutMs);
-      timer.unref?.();
-      ws.addEventListener('open', () => { clearTimeout(timer); resolve(new Cdp(ws)); }, { once: true });
-      ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('连不上浏览器调试端口')); }, { once: true });
-    });
-  }
-
-  send(method, params = {}, timeoutMs = 20_000) {
-    return new Promise((resolve, reject) => {
-      const id = this.id++;
-      const timer = setTimeout(() => {
-        if (!this.pending.has(id)) return;
-        this.pending.delete(id);
-        reject(new Error(`${method} 超时`));
-      }, timeoutMs);
-      timer.unref?.();
-      this.pending.set(id, {
-        resolve: (v) => { clearTimeout(timer); resolve(v); },
-        reject: (e) => { clearTimeout(timer); reject(e); },
-      });
-      this.ws.send(JSON.stringify({ id, method, params }));
-    });
-  }
-
-  close() {
-    try { this.ws.close(); } catch { /* 已关 */ }
-    this.pending.clear();
-  }
-}
-
-function killTree(child) {
-  if (!child || child.exitCode !== null) return;
-  try { child.kill('SIGKILL'); } catch { /* Windows 上可能已经退出 */ }
-}
-
-async function waitForPort(profile, timeoutMs = 15_000) {
-  const file = join(profile, 'DevToolsActivePort');
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (existsSync(file)) {
-      const line = readFileSync(file, 'utf8').split(/\r?\n/)[0].trim();
-      const port = Number(line);
-      if (port > 0) return port;
-    }
-    await sleep(120);
-  }
-  return 0;
-}
-
-async function pageWs(port, timeoutMs = 15_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const r = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(3000) });
-      const list = await r.json();
-      const page = Array.isArray(list) ? list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl) : null;
-      if (page) return page.webSocketDebuggerUrl;
-    } catch { /* 还没起来 */ }
-    await sleep(150);
-  }
-  return '';
+  return out.join('; ');
 }
 
 /**
- * 一个扫码会话。`start()` 出码，`poll()` 查状态，`cancel()` 收摊。
- *
- * @param {{ root: string, log?: Function }} opts `root` 是扩展目录，二维码写 `root/ui/qr.png`
+ * @param {{root: string, log?: Function, depsDir?: string, fetchImpl?: Function}} o
+ *   `root` 是扩展目录（二维码写 `root/ui/qr.png`）；`depsDir` 是宿主的
+ *   共享依赖目录（有 `qrcode` 就用它，没有就用内置编码器）
  */
-export function createQrLogin({ root, log = () => {} } = {}) {
-  /** @type {Map<string, {child:any, profile:string, cdp:Cdp|null, at:number}>} */
-  const sessions = new Map();
-
-  const cleanup = (s) => {
-    try { s.cdp?.close(); } catch { /* 忽略 */ }
-    s.cdp = null;
-    killTree(s.child);
-    s.child = null;
-    try { rmSync(s.profile, { recursive: true, force: true, maxRetries: 3 }); } catch { /* 占用中，系统回收 */ }
-  };
+export function createQrLogin({ root, log = () => {}, depsDir = '', fetchImpl = fetch } = {}) {
+  /** 一次只维持一个会话：面板上就一个二维码 */
+  let session = null;
 
   const qrFile = () => join(root, 'ui', 'qr.png');
 
-  async function start() {
-    const bin = findBrowser();
-    if (!bin) {
-      return { ok: false, state: 'error', message: '没找到 Chrome / Edge；装一个，或在设置里填 BILI_CHROME_BIN' };
-    }
-    /** 一次只留一个会话：连点两次不该起两个浏览器 */
-    for (const [, s] of sessions) cleanup(s);
-    sessions.clear();
-
-    const id = randomUUID().slice(0, 8);
-    const profile = join(tmpdir(), `dsh-bili-qr-${id}`);
-    mkdirSync(profile, { recursive: true });
-    const child = spawn(bin, [
-      '--headless=new',
-      '--disable-gpu',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--hide-scrollbars',
-      `--user-data-dir=${profile}`,
-      '--window-size=430,760',
-      '--remote-debugging-port=0',
-      `--user-agent=${UA}`,
-      LOGIN_URL,
-    ], { stdio: 'ignore', windowsHide: true });
-
-    const s = { child, profile, cdp: null, at: Date.now() };
-    sessions.set(id, s);
-
-    const port = await waitForPort(profile);
-    if (!port) {
-      cleanup(s);
-      sessions.delete(id);
-      return { ok: false, state: 'error', message: '浏览器没起来（调试端口没开）' };
-    }
-    const wsUrl = await pageWs(port);
-    if (!wsUrl) {
-      cleanup(s);
-      sessions.delete(id);
-      return { ok: false, state: 'error', message: '浏览器起来了但找不到页面' };
-    }
+  function clearQrFile() {
     try {
-      s.cdp = await Cdp.connect(wsUrl);
-      await s.cdp.send('Page.enable');
-      /** 等登录页把二维码渲染出来；固定等 3 秒比轮询 DOM 稳 */
-      await sleep(3000);
-      const shot = await s.cdp.send('Page.captureScreenshot', { format: 'png' });
-      const dir = join(root, 'ui');
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(qrFile(), Buffer.from(shot.data, 'base64'));
-      log(`扫码会话 ${id} 已出码`);
-      return { ok: true, state: 'waiting', id, at: s.at };
-    } catch (e) {
-      cleanup(s);
-      sessions.delete(id);
-      return { ok: false, state: 'error', message: `截图失败：${e?.message ?? e}` };
-    }
+      unlinkSync(qrFile());
+    } catch { /* 没有就算了 */ }
   }
 
-  /** 查一次登录态；拿到票就写 cookie.txt 并结束会话 */
+  async function start() {
+    clearQrFile();
+    let j;
+    try {
+      const r = await fetchImpl(GEN_URL, { headers: HEADERS, signal: AbortSignal.timeout(10_000) });
+      j = await r.json();
+    } catch (e) {
+      return { ok: false, state: 'error', message: `连不上 B 站：${e?.message ?? e}` };
+    }
+    if (j?.code !== 0 || !j?.data?.url) {
+      return { ok: false, state: 'error', message: `接口返回异常（code=${j?.code ?? '?'}）` };
+    }
+
+    let png;
+    let source = 'builtin';
+    try {
+      const qr = createQr(j.data.url, { depsDir, ec: 'L' });
+      source = qr.source;
+      /** scale 8：41 模块 → 392px，手机上扫得动；再大对屏幕显示没意义 */
+      png = qrToPng(qr, { scale: 8, margin: 4 });
+    } catch (e) {
+      return { ok: false, state: 'error', message: `二维码生成失败：${e?.message ?? e}` };
+    }
+
+    try {
+      mkdirSync(dirname(qrFile()), { recursive: true });
+      writeFileSync(qrFile(), png);
+    } catch (e) {
+      return { ok: false, state: 'error', message: `二维码写盘失败：${e?.message ?? e}` };
+    }
+
+    session = { key: String(j.data.qrcode_key), at: Date.now() };
+    log(`扫码会话 ${session.key.slice(0, 8)} 已出码（${source}，${png.length} 字节）`);
+    return { ok: true, state: 'waiting', id: session.key.slice(0, 8), at: session.at, source };
+  }
+
+  /**
+   * 查一次进度。
+   *
+   * `data.code`：0 成功 / 86101 未扫码 / 86090 已扫码待确认 / 86038 已过期。
+   */
   async function poll() {
-    const alive = [...sessions.entries()].filter(([, s]) => Date.now() - s.at < TTL_MS);
-    if (!alive.length) {
-      for (const [, s] of sessions) cleanup(s);
-      sessions.clear();
-      return { ok: true, state: 'expired', message: '二维码过期了，重新生成一个' };
+    if (!session) return { ok: false, state: 'idle', message: '没有进行中的扫码' };
+
+    if (Date.now() - session.at > TTL_MS) {
+      session = null;
+      clearQrFile();
+      return { ok: true, state: 'expired', message: '二维码过期了，重新点一次「扫码登录」' };
     }
-    for (const [id, s] of alive) {
-      if (!s.cdp) continue;
+
+    let r;
+    let j;
+    try {
+      r = await fetchImpl(`${POLL_URL}?qrcode_key=${encodeURIComponent(session.key)}`, {
+        headers: HEADERS,
+        signal: AbortSignal.timeout(10_000),
+      });
+      j = await r.json();
+    } catch (e) {
+      /** 网络抖一下不算失败：保持等待，下一次再查 */
+      return { ok: true, state: 'waiting', message: `查询失败（${e?.message ?? e}），继续等` };
+    }
+
+    const code = Number(j?.data?.code);
+    if (code === 0) {
+      /**
+       * `getSetCookie()` 是 Node 20+ 的；老版本退回整串再按逗号切。
+       * 只在这条成功路径上用得到，平时不会走到。
+       */
+      const raw = typeof r.headers.getSetCookie === 'function'
+        ? r.headers.getSetCookie()
+        : String(r.headers.get('set-cookie') || '').split(/,(?=[^;]+=)/);
+      const cookie = pickCookies(raw);
+      if (!cookie) {
+        session = null;
+        clearQrFile();
+        return { ok: false, state: 'error', message: '登录成功了但没拿到 Cookie，重试一次' };
+      }
       try {
-        const r = await s.cdp.send('Network.getCookies', {
-          urls: ['https://www.bilibili.com', 'https://passport.bilibili.com'],
-        }, 8000);
-        const map = new Map((r?.cookies || []).map((c) => [c.name, c.value]));
-        const sess = map.get('SESSDATA');
-        const csrf = map.get('bili_jct');
-        if (!sess || !csrf) continue;
-        /** 只写 cookie.txt：扩展按 mtime 热读，不需要重启 */
-        const line = `SESSDATA=${sess}; bili_jct=${csrf}\n`;
-        writeFileSync(join(root, 'cookie.txt'), line, 'utf8');
-        cleanup(s);
-        sessions.delete(id);
-        try { unlinkSync(qrFile()); } catch { /* 没有就算了 */ }
-        log('扫码登录成功，cookie.txt 已更新');
-        return { ok: true, state: 'done', message: '登录成功，cookie 已写入' };
-      } catch { /* 页面还没登录，下一轮再查 */ }
+        writeFileSync(join(root, 'cookie.txt'), `${cookie}\n`, 'utf8');
+      } catch (e) {
+        session = null;
+        return { ok: false, state: 'error', message: `Cookie 写入失败：${e?.message ?? e}` };
+      }
+      session = null;
+      clearQrFile();
+      log('扫码登录成功，cookie.txt 已更新');
+      return { ok: true, state: 'done', message: '登录成功，cookie 已写入' };
     }
-    return { ok: true, state: 'waiting' };
+
+    if (code === 86038) {
+      session = null;
+      clearQrFile();
+      return { ok: true, state: 'expired', message: '二维码已过期，重新点一次「扫码登录」' };
+    }
+    if (code === 86090) {
+      return { ok: true, state: 'scanned', message: '已扫码，在手机上点确认' };
+    }
+    return { ok: true, state: 'waiting', message: '等手机扫码' };
   }
 
   function cancel() {
-    for (const [, s] of sessions) cleanup(s);
-    sessions.clear();
-    try { unlinkSync(qrFile()); } catch { /* 没有就算了 */ }
+    session = null;
+    clearQrFile();
     return { ok: true, state: 'cancelled' };
   }
 
-  return { start, poll, cancel, hasSession: () => sessions.size > 0, qrFile };
+  return { start, poll, cancel, hasSession: () => Boolean(session), qrFile, exists: () => existsSync(qrFile()) };
 }
