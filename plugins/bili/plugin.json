@@ -287,6 +287,14 @@
       {
         "id": "install_ffmpeg",
         "label": "装 ffmpeg"
+      },
+      {
+        "id": "qr_start",
+        "label": "扫码登录"
+      },
+      {
+        "id": "qr_cancel",
+        "label": "取消扫码"
       }
     ],
     "view": {

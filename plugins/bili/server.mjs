@@ -30,6 +30,7 @@ import { createWriteApi } from './lib/write.mjs';
 import { createPush } from './lib/push.mjs';
 import { createUiActions } from './lib/ui-actions.mjs';
 import { bundledFfmpeg, installFfmpeg } from './lib/ffmpeg.mjs';
+import { createQrLogin } from './lib/qr-login.mjs';
 
 const SERVER = { name: 'bili', version: '0.5.1' };
 const log = (m) => process.stderr.write(`[bili] ${m}\n`);
@@ -96,6 +97,25 @@ const shots = createShots({
 push = createPush({ cfg, api, shots, submit, write, log });
 box = createToolbox({ api, log, config: cfg, feed, shots, push });
 
+/** 扫码登录：headless 浏览器出码，拿到 cookie 就写 cookie.txt */
+const qr = createQrLogin({ root: HERE, log });
+
+function stopQrTimer() {
+  if (qrTimer) clearInterval(qrTimer);
+  qrTimer = null;
+}
+
+async function qrTick() {
+  try {
+    const r = await qr.poll();
+    lastQr = { state: r.state, message: String(r.message || ''), at: Date.now() };
+    syncMeta();
+    if (r.state !== 'waiting') stopQrTimer();
+  } catch (e) {
+    log('扫码轮询失败：' + (e?.message ?? e));
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* 面板运行状态（0.5.1）                                              */
 /* ------------------------------------------------------------------ */
@@ -103,6 +123,8 @@ box = createToolbox({ api, log, config: cfg, feed, shots, push });
 /** 最近一次「检查登录」/「发弹幕」的结果，面板下次刷新就能看到 */
 let lastAccount = null;
 let lastFfmpeg = null;
+let lastQr = null;
+let qrTimer = null;
 let lastDanmaku = null;
 
 /** 从链接或 BV 号里抠出 BV 号（面板只让填一行，不逼用户分开填） */
@@ -138,6 +160,7 @@ function metaOf() {
         : null,
     },
     write: { paused: String(write.state()?.paused || '') },
+    qr: lastQr,
     ffmpeg: {
       ready: Boolean(cfg.ffmpegPath || bundledFfmpeg(HERE)),
       path: String(cfg.ffmpegPath || bundledFfmpeg(HERE) || ''),
@@ -190,6 +213,23 @@ const uiActions = createUiActions({
         bvid: v.bvid, title: v.title, cid: v.cid, duration: v.duration,
         at: Date.now(), ok: null, dryRun: false, message: `《${v.title}》· ${v.duration} 秒`,
       };
+      syncMeta();
+    },
+    /** 扫码登录：起 headless 浏览器出码，之后每 2 秒查一次 cookie */
+    async qr_start() {
+      const r = await qr.start();
+      lastQr = { state: r.state, message: String(r.message || ''), at: Date.now() };
+      syncMeta();
+      if (!r.ok) throw new Error(r.message || '出码失败');
+      stopQrTimer();
+      qrTimer = setInterval(() => { void qrTick(); }, 2000);
+      qrTimer.unref?.();
+    },
+    /** 关闭扫码浮层：杀掉浏览器、删掉二维码 */
+    async qr_cancel() {
+      qr.cancel();
+      stopQrTimer();
+      lastQr = { state: 'cancelled', message: '', at: Date.now() };
       syncMeta();
     },
     /** 一键安装 ffmpeg 到扩展自己的 deps/（约 62 MB） */

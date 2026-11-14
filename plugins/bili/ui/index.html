@@ -392,7 +392,24 @@
       note.className = 'note';
       note.textContent = '也可以直接粘整串 Cookie；两行填一行也能用';
       acts.append(show, note);
+      /** 扫码登录：点一下起 headless 浏览器出码，扫完自动写 cookie.txt */
+      const qrBtn = document.createElement('button');
+      qrBtn.type = 'button';
+      qrBtn.className = 'ghost';
+      qrBtn.textContent = '扫码登录';
+      qrBtn.onclick = () => act('qr_start');
+      const qrCancel = document.createElement('button');
+      qrCancel.type = 'button';
+      qrCancel.className = 'ghost';
+      qrCancel.textContent = '取消';
+      qrCancel.onclick = () => act('qr_cancel');
+      qrCancel.hidden = true;
+      qrCancel.id = 'qr-cancel';
+      acts.append(qrBtn, qrCancel);
       wrap.append(acts);
+      const qrBox = document.createElement('div');
+      qrBox.id = 'qr-box';
+      wrap.append(qrBox);
       ctl.append(wrap);
       return row;
     }
@@ -613,6 +630,41 @@
     });
   }
 
+  /** 扫码区：等待时显示二维码，成功后清掉 */
+  function renderQr() {
+    const box = document.querySelector('#qr-box');
+    const cancel = document.querySelector('#qr-cancel');
+    if (!box) return;
+    const q = meta && meta.qr;
+    box.textContent = '';
+    const waiting = Boolean(q && q.state === 'waiting');
+    if (cancel) cancel.hidden = !waiting;
+    if (!waiting) {
+      if (q && q.state === 'done') {
+        const ok = document.createElement('div');
+        ok.className = 'hint';
+        ok.style.color = 'var(--ok)';
+        ok.textContent = '已登录，cookie 已写入。';
+        box.append(ok);
+      } else if (q && (q.state === 'error' || q.state === 'expired')) {
+        const err = document.createElement('div');
+        err.className = 'hint';
+        err.style.color = 'var(--warn)';
+        err.textContent = q.message || '出码失败，再点一次';
+        box.append(err);
+      }
+      return;
+    }
+    const img = document.createElement('img');
+    img.src = API + '/ext-pages?id=bili&file=ui/qr.png&t=' + Date.now();
+    img.alt = 'B 站登录二维码';
+    img.style.cssText = 'width:180px;height:180px;border-radius:10px;border:1px solid var(--line);margin-top:10px;display:block';
+    const tip = document.createElement('div');
+    tip.className = 'hint';
+    tip.textContent = '用手机 B 站 App 扫码，扫完在手机上点确认';
+    box.append(img, tip);
+  }
+
   function renderDanmaku() {
     const d = meta && meta.danmaku;
     const out = $('#dm-result');
@@ -687,6 +739,12 @@
       meta = j && j.meta ? j.meta : null;
       renderStats();
       renderDanmaku();
+      renderQr();
+      /** 扫码等待期间每 2 秒回来看一次；扩展那边也在同时查 cookie */
+      if (meta && meta.qr && meta.qr.state === 'waiting') {
+        clearTimeout(window.__qrPoll);
+        window.__qrPoll = setTimeout(() => { loadData(); }, 2000);
+      }
 
       const box = $('#videos');
       box.textContent = '';

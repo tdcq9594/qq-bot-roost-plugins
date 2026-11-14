@@ -14,8 +14,16 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 /** 不参与哈希的东西：依赖目录、缓存、VCS/IDE 元数据（每台机器都不一样） */
-const SKIP_DIRS = new Set(['node_modules', '.venv', 'venv', '__pycache__', '.git', '.idea', '.vscode']);
-const SKIP_FILES = new Set(['.deps.json', '.DS_Store', 'Thumbs.db']);
+const SKIP_DIRS = new Set([
+  'node_modules', '.venv', 'venv', '__pycache__', '.git', '.idea', '.vscode',
+  /** 扩展的运行时依赖（ffmpeg 一键安装装在这里，62 MB，且每台机器不一样） */
+  'deps',
+]);
+const SKIP_FILES = new Set([
+  '.deps.json', '.DS_Store', 'Thumbs.db',
+  /** 面板数据与扫码二维码：运行时生成，内容每次不同，算进哈希会让 --check 永远失败 */
+  'ui-data.json', 'qr.png',
+]);
 
 /** 文本文件 CRLF 折成 LF；二进制原样（判定依据同 git：有没有 NUL 字节） */
 function normalize(buf) {
