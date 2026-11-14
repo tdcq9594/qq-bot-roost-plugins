@@ -14,6 +14,7 @@
  * 回复里决定（扩展拿不到「当前是哪个会话」）。
  */
 
+import { listShots } from '../lib/gallery.mjs';
 import { BiliError, findVideoId } from './api.mjs';
 import { clamp, fmtBangumi, fmtUp, fmtVideo, fmtVideoList } from './format.mjs';
 import { cardText } from './card.mjs';
@@ -144,6 +145,28 @@ export const TOOLS = [
         link: { type: 'string', description: 'B 站链接 / BV 号 / av 号 / b23 短链' },
       },
       required: ['link'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'list_shots',
+    description: '看看手上还存着哪些 B 站截图（来自哪个视频、第几秒）。想发截图之前先看一眼，别凭印象挑。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '可选：BV 号或文件名里的关键词' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'send_shot',
+    description: '把截图库里的一张画面发到当前聊天。主人说「发张截图」「给我看看你刷到的」「刚才那个视频长啥样」时用。返回里有一行标记，**原样写进你的回复**就会发出那张图（路径一个字都不要改）。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '可选：BV 号或关键词；不填就挑最近的一张' },
+      },
       additionalProperties: false,
     },
   },
@@ -472,7 +495,55 @@ export function createToolbox({ api, log = () => {}, config = {}, feed = null, s
       : `已给《${info.title}》点赞`;
   }
 
-  const handlers = { hot, weekly, search, video, up, feed: feedTool, card, shot, push: pushTool, push_state: pushStateTool, comment, like };
+  /**
+   * 截图库：列出 / 挑一张发出去。
+   *
+   * 「发出去」不走 `/v1/send`（那要 message:write，还得知道当前 chatId），
+   * 而是返回宿主的 `<<image-alone: 绝对路径>>` 标记，让模型原样写进回复——
+   * 这是 outbound 层本来就认的写法，上传与发送都归宿主。
+   *
+   * 代价是模型得照抄路径：所以返回里把标记单独放一行，并写死「一个字都不要改」。
+   */
+  function shotCandidates(args) {
+    if (!shots) return [];
+    const all = listShots({ dir: shots.dir, limit: 200 }).items || [];
+    const q = String(args?.query || '').trim().toLowerCase();
+    if (!q) return all;
+    return all.filter((x) => String(x.file).toLowerCase().includes(q)
+      || String(x.bvid).toLowerCase().includes(q));
+  }
+
+  async function listShotsTool(args) {
+    if (!shots) throw new BiliError('这个扩展没启用截图');
+    const hit = shotCandidates(args);
+    if (!hit.length) {
+      return String(args?.query || '').trim()
+        ? '没有匹配的截图。可以不填 query 看看全部。'
+        : '截图库是空的。把「刷一轮时顺手截几张」设成大于 0（或者打开「让她看画面」），再刷一轮就会开始截。';
+    }
+    const lines = hit.slice(0, 10).map((x, i) => (
+      `${i + 1}. ${x.bvid} · 第 ${x.at} 秒 · ${Math.max(1, Math.round(Number(x.bytes) / 1024))} KB · ${x.file}`
+    ));
+    return `${hit.length} 张（最多列 10 张）：\n${lines.join('\n')}`;
+  }
+
+  async function sendShotTool(args) {
+    if (!shots) throw new BiliError('这个扩展没启用截图');
+    const hit = shotCandidates(args);
+    if (!hit.length) {
+      throw new BiliError('手上没有这张截图', { hint: '先用 list_shots 看看有哪些，或者让她刷一轮' });
+    }
+    /** 最近的一张（items 已按时间倒序） */
+    const one = hit[0];
+    const abs = shots.pathOf(one.file) || one.file;
+    return [
+      `挑好了：${one.bvid} 第 ${one.at} 秒。`,
+      '把下面这一行原样放进你的回复（路径一个字都不要改），图就会跟着发出去：',
+      `<<image-alone: ${abs}>>`,
+    ].join('\n');
+  }
+
+  const handlers = { hot, weekly, search, video, up, feed: feedTool, card, shot, push: pushTool, push_state: pushStateTool, comment, like, list_shots: listShotsTool, send_shot: sendShotTool };
 
   return {
     tools: TOOLS,

@@ -226,6 +226,7 @@
     <h2>ta 刷过什么
       <span class="h2-right">
         <button type="button" id="act-replies">看看有没有人回 ta</button>
+        <button type="button" id="act-share" title="用最近刷到的一条构造分享素材，固定发给主人（不受群推送开关影响）">测试分享</button>
         <button type="button" class="primary" id="act-feed">现在刷一轮</button>
       </span>
     </h2>
@@ -325,12 +326,12 @@
     {
       title: '评论、回复和分享',
       hint: '评论、弹幕和回复都要登录。试运行开着时只记日志不发。',
-      keys: ['ownerName', 'autoComment', 'autoDanmaku', 'autoLike', 'pushOwner', 'pushGroup', 'pushGroupTarget', 'pushDailyLimit', 'pushPerFeed', 'pushMinPlay', 'pushApproval', 'writeDryRun', 'writeDailyLimit'],
+      keys: ['ownerName', 'autoComment', 'autoDanmaku', 'autoLike', 'pushOwner', 'pushGroup', 'pushGroupTarget', 'pushDailyLimit', 'pushPerFeed', 'pushMinPlay', 'pushApproval', 'pushCover', 'writeDryRun', 'writeDailyLimit'],
     },
     {
       title: '看画面（抽帧 + 视觉）',
       hint: '默认只读标题、简介、字幕和热评。打开「让她看画面」会抽几帧交给模型描述；截的图同时进「截图库」，聊天里也能让她发。',
-      keys: ['vision', 'autoShotCount', 'shotKeep', 'ffmpegPath'],
+      keys: ['vision', 'autoShotCount', 'shotKeep', 'shotWidth', 'shotDir', 'ffmpegPath'],
       extra: () => visionExtra(),
     },
   ];
@@ -1216,6 +1217,9 @@
   $('#act-login').onclick = () => act('check_login');
   const rpBtn = document.querySelector('#act-replies');
   if (rpBtn) rpBtn.onclick = async () => { await act('check_replies'); await loadReplies(); };
+  /** 测试分享：写死发给主人，用来验证「刷到 → 主动告诉她」这条链路 */
+  const shareBtn = document.querySelector('#act-share');
+  if (shareBtn) shareBtn.onclick = () => act('test_share');
   const galBtn = document.querySelector('#gal-refresh');
   if (galBtn) galBtn.onclick = () => { void loadGallery(); };
   /**

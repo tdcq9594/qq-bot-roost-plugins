@@ -34,6 +34,8 @@ import { bumpStats, readStats } from '../lib/stats.mjs';
 import { countShots } from '../lib/gallery.mjs';
 import { createAutoShot } from '../lib/auto-shot.mjs';
 import { createPending } from '../lib/pending.mjs';
+import { createProactiveClient } from '../lib/proactive.mjs';
+import { materialOf } from '../lib/push.mjs';
 import { ffmpegState, resolveFfmpeg, sharedDepsDir } from '../lib/ffmpeg.mjs';
 
 /** `ui/main.mjs` 的上一级就是扩展根目录（ui/ 的父目录） */
@@ -135,6 +137,9 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
 
   /** 刷到但模型还没看过的一批（进程内刷也记一份，模型下次调 feed 接手） */
   const pending = createPending({ dir: HERE, log });
+
+  /** 主动素材通道：测试分享用它，写死发给主人 */
+  const proactive = createProactiveClient(env || process.env, {});
 
   /** 图库计数写进 meta，面板标题上的「n / 上限」用它 */
   function syncGalleryMeta() {
@@ -295,6 +300,53 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
       stopQrTimer();
       setMeta({ qr: qrState('cancelled') });
       return { ok: true, message: '已取消扫码' };
+    },
+
+    /**
+     * 测试分享：**写死发给主人**。
+     *
+     * 用途是验证「刷到好视频 → 主动告诉主人」这条链路通不通。走的是和真推送
+     * 完全同一条通道（`/v1/proactive/submit`），只是目标固定 `owner`，
+     * 不受「推送群」「审批」开关影响。
+     *
+     * `key` 带时间戳：宿主按 key 去重，用固定 key 点第二次会被判「已经排过了」，
+     * 而测试就是要每次都能发。
+     */
+    async test_share(payload) {
+      if (!proactive.available) {
+        return { ok: false, message: '宿主没给令牌，发不了主动消息（手动跑扩展时正常）' };
+      }
+      /** 优先用指定的 BV，其次最近一条，再没有就现拉一条热门 */
+      let v = null;
+      const want = String(payload?.bvid || '').trim();
+      const pool = feed.items() || [];
+      if (want) v = pool.find((x) => x.bvid === want) || null;
+      if (!v) v = pool[0] || null;
+      if (!v) {
+        try {
+          const hot = await api.hot({ ps: 5 });
+          v = Array.isArray(hot) ? hot[0] : null;
+        } catch (e) {
+          return { ok: false, message: '还没有刷到过视频，现拉热门也失败了：' + (e?.message ?? e) };
+        }
+      }
+      if (!v) return { ok: false, message: '还没有视频可分享，先点「现在刷一轮」' };
+
+      const text = materialOf(v, { withCover: config.pushCover !== false });
+      const r = await proactive.submit({
+        cause: '测试分享（写死发给主人）',
+        key: `test-${Date.now()}`,
+        text,
+        target: 'owner',
+      });
+      if (!r.ok) return { ok: false, message: String(r.why || '没投出去') };
+      bumpStats(ui, { shares: 1 });
+      setMeta({ share: { lastAt: Date.now(), title: String(v.title || ''), bvid: String(v.bvid || ''), id: String(r.id || '') } });
+      return {
+        ok: true,
+        message: `已把《${String(v.title || v.bvid).slice(0, 24)}》投给主人${r.retry ? '（宿主说稍后重试）' : ''}`,
+        data: { id: r.id, bvid: v.bvid },
+      };
     },
 
     /** 页面想知道 ffmpeg 现在有没有，不用等一次动作 */

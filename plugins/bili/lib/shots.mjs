@@ -16,7 +16,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 import { BiliError, UA, clockOf } from './api.mjs';
 
@@ -154,6 +154,18 @@ export function createShots({
 
   return {
     dir: root,
+    /**
+     * `shots/xxx.jpg` → 绝对路径。
+     *
+     * 工具返回的 `<<image-alone: …>>` 必须是绝对路径：宿主上传时按它读文件，
+     * 相对路径会以「宿主进程的工作目录」为基准，那是别的地方。
+     */
+    pathOf(rel) {
+      const one = String(rel || '').trim();
+      if (!one) return '';
+      if (isAbsolute(one)) return one;
+      return join(root, one.replace(/^shots[\\/]/, ''));
+    },
     ffmpegStatus() {
       const ffmpeg = findFfmpeg(ffmpegOf(), { probeImpl });
       return { ready: Boolean(ffmpeg), ffmpeg, dir: root };

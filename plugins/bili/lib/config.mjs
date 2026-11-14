@@ -145,10 +145,8 @@ export function readConfig(env = process.env) {
     pushGroup: boolOf(raw.pushGroup, false),
     pushGroupTarget: strOf(raw.pushGroupTarget, '', 64),
     pushApproval: boolOf(raw.pushApproval, false),
-    /**
-     * 封面地址不再单独做开关：素材里有链接，模型要看封面自己会调工具。
-     * 少一个配置项，字段数刚好留给 `vision`（宿主上限 32）。
-     */
+    /** 素材里带 https 封面地址。不写 <<card:>>：主动轮次那条链路不吃卡片标记 */
+    pushCover: boolOf(raw.pushCover, false),
     pushMinPlay: intOf(raw.pushMinPlay, 100000, 0, 10_000_000),
     pushDailyLimit: intOf(raw.pushDailyLimit, 20, 1, 200),
     pushPerFeed: intOf(raw.pushPerFeed, 1, 1, 5),
