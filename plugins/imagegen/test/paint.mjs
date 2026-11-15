@@ -14,7 +14,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { bytesText, listPaintings, metaOf, pathOf, removePainting, resolveRef, safeName, savePainting, stampOf } from '../lib/paint.mjs';
+import { bytesText, listPaintings, metaOf, pathOf, prunePaintings, removePainting, resolveRef, safeName, savePainting, stampOf } from '../lib/paint.mjs';
 
 /** 有 PNG 魔数就够了：`sniffMime` 只看文件头，不需要真解出一张图。 */
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32, 7)]);
@@ -129,6 +129,27 @@ test('删除：只删自己目录里的那一张', () => {
     assert.equal(removePainting(dir, drop).ok, true);
     assert.ok(existsSync(join(dir, keep)));
     assert.equal(removePainting(dir, drop).ok, false, '删第二次要如实说不在了');
+  });
+});
+
+test('保留上限：只删自己完整符合命名格式的文件，同前缀的手工文件不动', () => {
+  withDir((dir) => {
+    /** 三张自己存出来的 */
+    for (const p of ['第一张', '第二张', '第三张']) savePainting({ dir, buf: PNG, prompt: p });
+    /** 主人手动放的两张：一张同前缀但带 ..，一张普通名字 */
+    writeFileSync(join(dir, '20261114-031559-..危险.png'), PNG);
+    writeFileSync(join(dir, '主人放的图.png'), PNG);
+    const r = prunePaintings({ dir, maxKeep: 1 });
+    assert.ok(r.removed > 0);
+    assert.ok(existsSync(join(dir, '20261114-031559-..危险.png')), '同前缀但名字带 .. 的不是扩展生成的，不能删');
+    assert.ok(existsSync(join(dir, '主人放的图.png')), '手工放的图不能删');
+  });
+});
+
+test('safeName：超长文件名直接拒，别让 statSync 抛一堆无用错误', () => {
+  withDir((dir) => {
+    const long = 'x'.repeat(5000) + '.png';
+    assert.equal(safeName(dir, long), '');
   });
 });
 

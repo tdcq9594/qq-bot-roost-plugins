@@ -136,7 +136,7 @@ test('参考图：编号能取到旧图；找不到 / 功能关着都给准确�
   });
 });
 
-test('image_list：空库说空库，有图给编号 / 路径 / 当天进度', async () => {
+test('image_list：空库说空库，有图给编号 / 当天进度，并指向 image_send', async () => {
   await withDir(async (dir) => {
     const box = createToolbox({ cfg: cfg0({ dailyLimit: 10 }), dir, gen: fakeGen().fn });
     assert.match(await box.call('image_list', {}), /画作库还是空的/);
@@ -144,7 +144,8 @@ test('image_list：空库说空库，有图给编号 / 路径 / 当天进度', a
     const text = await box.call('image_list', {});
     assert.match(text, /#1 /);
     assert.match(text, /猫/);
-    assert.match(text, /路径：/);
+    /** 0.2 起列表不再给绝对路径：路径交给 image_send 生成，模型手抄容易抄错 */
+    assert.match(text, /image_send/);
     assert.match(text, /今天已画 1\/10 张/);
   });
 });

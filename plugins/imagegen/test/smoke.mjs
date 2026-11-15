@@ -71,8 +71,10 @@ try {
   const list = await rpc('tools/list', {});
   const tools = list.result?.tools || [];
   const names = tools.map((t) => t.name);
-  check(names.length === 4, `tools/list 有 4 个工具（实际 ${names.length}）`);
-  for (const n of ['image_gen', 'image_list', 'image_test', 'image_delete']) check(names.includes(n), `工具有 ${n}`);
+  check(names.length === 6, `tools/list 有 6 个工具（实际 ${names.length}）`);
+  for (const n of ['image_gen', 'image_list', 'image_send', 'image_test', 'image_delete', 'image_status']) {
+    check(names.includes(n), `工具有 ${n}`);
+  }
   check(tools.every((t) => t.inputSchema?.type === 'object'), '每个工具都有 object 入参 schema');
   /** 写操作必须自己声明，别为了「看着无害」全标成只读 */
   const gen = tools.find((t) => t.name === 'image_gen');
@@ -91,6 +93,12 @@ try {
 
   const del = await rpc('tools/call', { name: 'image_delete', arguments: { file: '#1' } });
   check(del.result?.isError === true && /没确认/.test(del.result.content[0].text), '删除没 confirm 就拒');
+
+  /** 0.2：自检不花钱，也要在没配好时说清缺什么 */
+  const status = await rpc('tools/call', { name: 'image_status', arguments: {} });
+  check(status.result?.isError !== true && /服务地址/.test(status.result.content[0].text), 'image_status 没配置时照样可用并指出缺项');
+  const send = await rpc('tools/call', { name: 'image_send', arguments: { file: '#1' } });
+  check(send.result?.isError === true && /画作库里没有/.test(send.result.content[0].text), 'image_send 空库给准确原因');
 
   const badArg = await rpc('tools/call', { name: 'image_gen', arguments: { promt: '猫' } });
   check(badArg.result?.isError === true && /不认识的参数/.test(badArg.result.content[0].text), '未知参数被拒（且给出原因）');

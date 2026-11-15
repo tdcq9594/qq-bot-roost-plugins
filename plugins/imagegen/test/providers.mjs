@@ -232,3 +232,19 @@ test('findImage：只在明确的图片字段里找，不把提示词回显当�
   assert.equal(findImage({ nested: { image: 'data:image/png;base64,AAA' } }), 'data:image/png;base64,AAA');
   assert.equal(findImage({ a: 'https://x/a.html' }), null);
 });
+
+test('自定义 GET：参数必须拼在 #fragment 之前（照搬 aurabot customRequest 的修法）', () => {
+  const req = customRequest({
+    ...cfgOf(),
+    custom: {
+      url: 'https://draw.test/api#section',
+      method: 'GET',
+      params: [{ key: 'q', value: '{prompt}' }],
+      bodyType: 'json',
+      responsePath: '',
+    },
+  }, '猫', null);
+  assert.match(req.url, /^https:\/\/draw\.test\/api\?q=/);
+  assert.ok(req.url.endsWith('#section'), `fragment 要留在最后，实际 ${req.url}`);
+  assert.ok(req.url.indexOf('?') < req.url.indexOf('#'), '参数跑到 # 后面服务端就收不到了');
+});

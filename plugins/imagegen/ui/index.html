@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>让ta画图</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --fg: #1f2329; --fg-2: #4e5969; --muted: #86909c;
+    --line: #eef0f3; --card: #fff; --page: #fafbfc;
+    --accent: #7c6cf0; --accent-soft: #efecff;
+    --ok: #1f8a4c; --warn: #b45309; --danger: #c0392b;
+    --shadow: 0 1px 2px rgba(16,24,40,.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fg: #e8eaed; --fg-2: #c2c7cf; --muted: #8b919b;
+      --line: #2a2f37; --card: #1b1e24; --page: #14171c;
+      --accent: #a99bff; --accent-soft: #2c2740;
+      --ok: #4cc38a; --warn: #e0a458; --danger: #f07171; --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 18px 22px 40px;
+    font: 13px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    color: var(--fg); background: var(--page); -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1000px; margin: 0 auto; }
+  .top { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }
+  .top h1 { font-size: 17px; font-weight: 650; margin: 0; }
+  .top .stamp { color: var(--muted); font-size: 11.5px; margin-left: auto; }
+  .lead { color: var(--fg-2); font-size: 12.5px; margin: 0 0 14px; line-height: 1.75; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 4px 18px 16px; margin-bottom: 14px; box-shadow: var(--shadow);
+  }
+  .card > h2 { display: flex; align-items: center; font-size: 13px; font-weight: 650; margin: 14px 0 2px; }
+  .card > h2::before {
+    content: ''; width: 3px; height: 13px; border-radius: 2px;
+    background: var(--accent); margin-right: 8px;
+  }
+  .card-sub { color: var(--muted); font-size: 11.5px; margin: 2px 0 10px 11px; }
+  .h2-right { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; }
+  button {
+    font: inherit; font-size: 12.5px; padding: 6px 14px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--card); color: var(--fg);
+    cursor: pointer; transition: .15s; white-space: nowrap;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { filter: brightness(1.06); color: #fff; }
+  button.ghost { border-color: transparent; color: var(--muted); padding: 6px 8px; }
+  button.ghost:hover { color: var(--accent); background: var(--accent-soft); }
+  button.danger { color: var(--danger); }
+  button:disabled { opacity: .45; cursor: default; }
+  input[type=text], input[type=password], input[type=number], select, textarea {
+    font: inherit; font-size: 12.5px; width: 100%; padding: 7px 10px;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: var(--page); color: var(--fg); transition: .15s;
+  }
+  textarea { min-height: 66px; resize: vertical; line-height: 1.6; }
+  input:focus, select:focus, textarea:focus {
+    outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px 16px; }
+  .field label { display: block; font-size: 12px; color: var(--fg-2); margin-bottom: 4px; }
+  .field .hint { display: block; font-size: 11px; color: var(--muted); margin-top: 3px; line-height: 1.5; }
+  .switch { display: flex; align-items: center; gap: 8px; min-height: 32px; }
+  .switch input { width: 16px; height: 16px; accent-color: var(--accent); }
+  .switch label { margin: 0; cursor: pointer; }
+  .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .bar .grow { flex: 1 1 180px; }
+  .stats { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 2px; }
+  .stat {
+    background: var(--page); border: 1px solid var(--line); border-radius: 9px;
+    padding: 7px 12px; min-width: 118px;
+  }
+  .stat b { display: block; font-size: 16px; font-weight: 650; }
+  .stat span { color: var(--muted); font-size: 11px; }
+  .note { font-size: 11.5px; color: var(--muted); margin-top: 8px; line-height: 1.6; }
+  .err { color: var(--danger); font-size: 12px; margin-top: 8px; min-height: 16px; }
+  .ok-text { color: var(--ok); }
+  .empty { color: var(--muted); font-size: 12.5px; padding: 18px 4px; }
+  .shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 12px; margin-top: 10px; }
+  .shot {
+    border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+    background: var(--page); display: flex; flex-direction: column;
+  }
+  .shot a.thumb { display: block; aspect-ratio: 1 / 1; background: var(--line); }
+  .shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .shot .meta { padding: 8px 9px 4px; }
+  .shot .no { font-size: 11px; color: var(--muted); }
+  .shot .prompt {
+    font-size: 12px; line-height: 1.45; max-height: 34px; overflow: hidden;
+    overflow-wrap: anywhere; margin: 2px 0 4px;
+  }
+  .shot .sub { font-size: 11px; color: var(--muted); }
+  .shot .acts { display: flex; gap: 4px; padding: 4px 8px 9px; }
+  .shot .acts button { flex: 1; padding: 4px 6px; font-size: 11.5px; }
+  .inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .inline input[type=text] { flex: 1 1 240px; width: auto; }
+  #toast {
+    position: fixed; right: 22px; bottom: 22px; max-width: 360px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 14px; box-shadow: 0 8px 24px rgba(0,0,0,.18);
+    font-size: 12.5px; opacity: 0; transform: translateY(8px);
+    pointer-events: none; transition: .2s; z-index: 99;
+  }
+  #toast.show { opacity: 1; transform: translateY(0); }
+  .mono {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 11.5px; word-break: break-all;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <h1>让ta画图</h1>
+    <span class="stamp" id="stamp">正在读设置…</span>
+  </div>
+  <p class="lead">
+    画完的图会存进扩展目录，模型在回复里写 <span class="mono">&lt;&lt;image-alone: 路径&gt;&gt;</span> 才会发到 QQ；
+    这张页面只是设置与画作库，不会自己往群里发图。改完设置下一轮工具调用就生效，不用重启 DSH。
+  </p>
+
+  <div class="card">
+    <h2>现在的状态</h2>
+    <div class="stats" id="stats"><div class="empty">正在读状态…</div></div>
+    <div class="note" id="ready-note"></div>
+    <div class="bar">
+      <button data-act="status">接口自检</button>
+      <button data-act="refresh">刷新画作</button>
+      <span class="grow"></span>
+      <span class="note" id="pending"></span>
+    </div>
+    <div id="status-out" class="note mono"></div>
+    <div class="err" id="status-err"></div>
+  </div>
+
+  <div class="card">
+    <h2>测试生图<span class="h2-right"><span class="note">会花一次钱，可能要等一两分钟</span></span></h2>
+    <div class="card-sub">不改聊天、不发消息，只真画一张验证接口通不通，画完会进下面的画作库。</div>
+    <div class="bar">
+      <input type="text" id="test-prompt" class="grow" value="一只橘猫，简笔画" placeholder="测试用的提示词">
+      <button class="primary" data-act="test_draw">测试生图</button>
+    </div>
+    <div class="note" id="test-out"></div>
+    <div class="err" id="test-err"></div>
+  </div>
+
+  <div class="card">
+    <h2>设置</h2>
+    <div class="card-sub">保存后下一轮工具调用就生效。API Key 只存宿主侧，留空表示不修改已保存的那份。</div>
+    <div id="settings"></div>
+    <div class="bar">
+      <button class="primary" id="save">保存设置</button>
+      <span class="note">开关会自动保存；文本框改完记得点保存</span>
+    </div>
+    <div class="err" id="save-err"></div>
+  </div>
+
+  <div class="card">
+    <h2>ta的画作<span class="h2-right"><button data-act="refresh">刷新画作</button></span></h2>
+    <div class="card-sub">#1 是最新那张。点图看大图，点「复制标记」拿到能直接写进回复的一行。</div>
+    <div id="gallery"><div class="empty">正在读画作库…</div></div>
+    <div class="note" id="marker-box" hidden>
+      <div>把下面这一行原样写进回复：</div>
+      <input type="text" id="marker" class="mono" readonly>
+    </div>
+    <div class="err" id="gallery-err"></div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+(function () {
+  'use strict';
+  var API = '/roost/api';
+  var ID = 'imagegen';
+  var $ = function (s) { return document.querySelector(s); };
+
+  var draft = {};
+  var cfgLoaded = false;
+  var secretsDraft = {};
+  var meta = null;
+  var busy = false;
+  var autoTimer = null;
+
+  function toast(msg) {
+    var t = $('#toast');
+    t.textContent = String(msg || '');
+    t.classList.add('show');
+    clearTimeout(t._h);
+    t._h = setTimeout(function () { t.classList.remove('show'); }, 2600);
+  }
+
+  async function op(name, arg) {
+    try {
+      var r = await fetch(API + '/quick', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ op: name, arg: arg || {}, chatId: '' })
+      });
+      var j = await r.json().catch(function () { return null; });
+      return j || { ok: false, message: 'HTTP ' + r.status };
+    } catch (e) {
+      return { ok: false, message: '连不上面板：' + (e && e.message ? e.message : e) };
+    }
+  }
+
+  /** 按钮统一入口：busy 态 + 失败原因常驻，别让两秒的 toast 把关键错误带走 */
+  var BUSY = {
+    test_draw: '正在画…',
+    refresh: '正在刷新…',
+    delete: '正在删…',
+    send: '正在取…',
+    status: '正在自检…'
+  };
+
+  async function act(name, payload, opts) {
+    var silent = Boolean(opts && opts.silent);
+    var arg = { id: ID, action: name };
+    if (payload) arg.payload = payload;
+    var buttons = document.querySelectorAll('[data-act="' + name + '"]');
+    var old = [];
+    buttons.forEach(function (b) {
+      old.push(b.textContent);
+      b.disabled = true;
+      if (BUSY[name]) b.textContent = BUSY[name];
+    });
+    var r = null;
+    try {
+      r = await op('extensions.ui.action', arg);
+    } finally {
+      buttons.forEach(function (b, i) { b.disabled = false; b.textContent = old[i]; });
+    }
+    var ok = Boolean(r && r.ok);
+    var msg = r && r.message ? r.message : (ok ? '已执行' : '没交上');
+    if (!silent) {
+      toast(msg);
+      var tag = $('#pending');
+      if (tag) tag.textContent = ok ? (r && r.mode === 'inprocess' ? '已执行' : '已提交，等扩展处理') : '没提交上：' + msg;
+    }
+    return { ok: ok, message: msg, data: (r && r.data) || null };
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* 设置表单                                                          */
+  /* ---------------------------------------------------------------- */
+
+  var FIELD = {
+    provider: { label: '接口格式', type: 'select', options: [['openai', 'OpenAI 兼容'], ['custom', '自定义接口']], hint: '绝大多数服务选 OpenAI 兼容就行' },
+    baseUrl: { label: '服务地址', type: 'text', placeholder: 'https://api.xxx.com/v1', hint: '贴到 /v1 为止，或直接贴完整的 /images/generations' },
+    apiKey: { label: 'API Key', type: 'secret', hint: '只存宿主侧；已保存过就留空，不修改' },
+    model: { label: '模型', type: 'text', placeholder: 'gpt-image-1' },
+    timeoutSec: { label: '超时秒数', type: 'number', min: 10, max: 180, hint: '面板按钮会自动夹到 120 秒' },
+    fallbackEnabled: { label: '失败自动切换', type: 'bool', hint: '主接口失败后按顺序试备用接口；排障时可关掉' },
+    fallbacks: { label: '备用接口', type: 'lines', hint: '每行一条：地址|模型（只写地址就沿用主模型）' },
+    customUrl: { label: '接口地址', type: 'text', placeholder: 'https://api.xxx.com/draw?q={prompt}', hint: '占位符：{prompt} {model} {size} {width} {height} {image}' },
+    customMethod: { label: '方法', type: 'select', options: [['POST', 'POST'], ['GET', 'GET']] },
+    customParams: { label: '参数', type: 'lines', hint: '每行一个，写成 键=值' },
+    customBodyType: { label: '请求体', type: 'select', options: [['json', 'JSON'], ['form', '表单']] },
+    customResponsePath: { label: '返回值路径', type: 'text', placeholder: 'data.0.url', hint: '留空会自动在返回 JSON 里找图片' },
+    shape: { label: '默认构图', type: 'select', options: [['square', '方 1024x1024'], ['portrait', '竖 1024x1536'], ['landscape', '横 1536x1024'], ['wide', '宽 1536x864']] },
+    size: { label: '默认尺寸', type: 'text', placeholder: '留空 = 用构图尺寸', hint: '填了会盖过构图，比如 2048x2048' },
+    stylePrompt: { label: '固定风格', type: 'text', placeholder: '厚涂、暖色调', hint: '每次生图自动加在提示词前面' },
+    img2img: { label: '参考图改画', type: 'bool', hint: '允许照着画作库里的旧图重画' },
+    dailyLimit: { label: '每天最多几张', type: 'number', min: 0, max: 200, hint: '生图按张收钱，0 = 不限' },
+    maxKeep: { label: '画作库保留', type: 'number', min: 0, max: 500, hint: '0 = 不限；只删扩展自己生成的图' }
+  };
+
+  var GROUPS = [
+    { title: '接口', keys: ['provider', 'baseUrl', 'apiKey', 'model', 'timeoutSec', 'fallbackEnabled', 'fallbacks'] },
+    { title: '自定义接口（接口格式选「自定义接口」时才用）', onlyCustom: true, keys: ['customUrl', 'customMethod', 'customParams', 'customBodyType', 'customResponsePath'] },
+    { title: '画什么', keys: ['shape', 'size', 'stylePrompt', 'img2img'] },
+    { title: '花钱与清理', keys: ['dailyLimit', 'maxKeep'] }
+  ];
+
+  function valueOf(key) {
+    var v = draft[key];
+    if (v === undefined || v === null) return '';
+    if (Array.isArray(v)) return v.join('\n');
+    return String(v);
+  }
+
+  function makeField(key) {
+    var f = FIELD[key];
+    var box = document.createElement('div');
+    box.className = 'field';
+    var label = document.createElement('label');
+    label.textContent = f.label;
+    var input;
+
+    if (f.type === 'bool') {
+      var wrap = document.createElement('div');
+      wrap.className = 'switch';
+      input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = draft[key] !== false;
+      wrap.appendChild(input);
+      var lab = document.createElement('label');
+      lab.textContent = f.label;
+      wrap.appendChild(lab);
+      box.appendChild(wrap);
+      input.addEventListener('change', function () {
+        draft[key] = input.checked;
+        queueSave();
+      });
+    } else {
+      box.appendChild(label);
+      if (f.type === 'select') {
+        input = document.createElement('select');
+        f.options.forEach(function (o) {
+          var opt = document.createElement('option');
+          opt.value = o[0];
+          opt.textContent = o[1];
+          input.appendChild(opt);
+        });
+        input.value = valueOf(key);
+        input.addEventListener('change', function () {
+          draft[key] = input.value;
+          syncCustomGroup();
+        });
+      } else if (f.type === 'lines') {
+        input = document.createElement('textarea');
+        input.value = valueOf(key);
+        input.spellcheck = false;
+        input.addEventListener('input', function () { draft[key] = input.value; });
+      } else {
+        input = document.createElement('input');
+        input.type = f.type === 'secret' ? 'password' : (f.type === 'number' ? 'number' : 'text');
+        if (f.type === 'secret') {
+          input.placeholder = '已保存则留空表示不修改';
+          input.autocomplete = 'off';
+          input.value = '';
+          input.addEventListener('input', function () { secretsDraft[key] = input.value; });
+        } else {
+          if (f.placeholder) input.placeholder = f.placeholder;
+          if (f.min !== undefined) input.min = String(f.min);
+          if (f.max !== undefined) input.max = String(f.max);
+          input.value = valueOf(key);
+          input.addEventListener('input', function () {
+            draft[key] = f.type === 'number' ? Number(input.value) : input.value;
+          });
+        }
+      }
+      box.appendChild(input);
+    }
+    if (f.hint) {
+      var hint = document.createElement('span');
+      hint.className = 'hint';
+      hint.textContent = f.hint;
+      box.appendChild(hint);
+    }
+    input.setAttribute('data-key', key);
+    return box;
+  }
+
+  function syncCustomGroup() {
+    var card = document.querySelector('#group-custom');
+    if (card) card.hidden = String(draft.provider || 'openai') !== 'custom';
+  }
+
+  function renderSettings() {
+    var host = $('#settings');
+    host.textContent = '';
+    GROUPS.forEach(function (g, gi) {
+      var card = document.createElement('div');
+      card.className = 'card';
+      if (g.onlyCustom) card.id = 'group-custom';
+      var h = document.createElement('h2');
+      h.textContent = String(gi + 1).padStart(2, '0') + ' · ' + g.title;
+      card.appendChild(h);
+      var grid = document.createElement('div');
+      grid.className = 'grid2';
+      g.keys.forEach(function (k) { if (FIELD[k]) grid.appendChild(makeField(k)); });
+      card.appendChild(grid);
+      host.appendChild(card);
+    });
+    syncCustomGroup();
+  }
+
+  async function loadConfig() {
+    var r = await op('extensions.config.get', { id: ID });
+    if (!r || r.ok === false) {
+      $('#settings').textContent = '';
+      var d = document.createElement('div');
+      d.className = 'empty';
+      d.textContent = '读不到设置：' + String((r && r.message) || '未知原因');
+      $('#settings').appendChild(d);
+      $('#save').disabled = true;
+      $('#stamp').textContent = '设置没读到';
+      return;
+    }
+    draft = Object.assign({}, r.values || {});
+    /** secret 永远不进 values：面板不回显、也不把明文带回宿主 */
+    delete draft.apiKey;
+    secretsDraft = {};
+    cfgLoaded = true;
+    $('#save').disabled = false;
+    renderSettings();
+    $('#stamp').textContent = '配置已读 · ' + new Date().toLocaleTimeString('zh-CN');
+  }
+
+  async function save(auto) {
+    /** 读不到配置时保存 = 拿空表覆盖真设置，这是出过事故的坑，必须硬拦 */
+    if (!cfgLoaded) {
+      if (!auto) toast('设置还没读到，先刷新页面');
+      return;
+    }
+    if (busy) return;
+    busy = true;
+    $('#save').disabled = true;
+    $('#save-err').textContent = '';
+    var payload = {};
+    if (secretsDraft.apiKey) payload.apiKey = secretsDraft.apiKey;
+    var r = await op('extensions.config.save', { id: ID, values: draft, secrets: payload });
+    busy = false;
+    $('#save').disabled = false;
+    if (!r || r.ok === false) {
+      $('#save-err').textContent = String((r && r.message) || '保存失败');
+      return;
+    }
+    if (payload.apiKey) {
+      secretsDraft = {};
+      var keyInput = document.querySelector('[data-key="apiKey"]');
+      if (keyInput) keyInput.value = '';
+    }
+    if (!auto) toast(r.message || '已保存');
+    void loadData();
+  }
+
+  function queueSave() {
+    clearTimeout(autoTimer);
+    autoTimer = setTimeout(function () { void save(true); }, 350);
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* 状态 / 画作库                                                     */
+  /* ---------------------------------------------------------------- */
+
+  function renderStats() {
+    var box = $('#stats');
+    box.textContent = '';
+    if (!meta) {
+      var e = document.createElement('div');
+      e.className = 'empty';
+      e.textContent = '读不到状态数据';
+      box.appendChild(e);
+      return;
+    }
+    var bits = [
+      ['今天', meta.today !== undefined ? String(meta.today) + (Number(meta.dailyLimit) > 0 ? ' / ' + meta.dailyLimit : '') + ' 张' : '—'],
+      ['画作库', meta.total !== undefined ? String(meta.total) + ' 张' : '—'],
+      ['上次', meta.lastResult || '还没画过'],
+      ['走的是', meta.lastVia || '—'],
+      ['用时', meta.lastMs ? (Number(meta.lastMs) / 1000).toFixed(1) + ' 秒' : '—']
+    ];
+    bits.forEach(function (b) {
+      var el = document.createElement('div');
+      el.className = 'stat';
+      var strong = document.createElement('b');
+      strong.textContent = b[1];
+      var span = document.createElement('span');
+      span.textContent = b[0];
+      el.appendChild(strong);
+      el.appendChild(span);
+      box.appendChild(el);
+    });
+    $('#ready-note').textContent = meta.ready ? '配置：' + meta.ready : '';
+  }
+
+  async function loadData() {
+    try {
+      var r = await fetch(API + '/extensions/ui/data?id=' + encodeURIComponent(ID) + '&t=' + Date.now());
+      var j = await r.json().catch(function () { return null; });
+      meta = j && j.meta ? j.meta : null;
+      renderStats();
+    } catch (e) {
+      $('#status-err').textContent = '读不到状态：' + (e && e.message ? e.message : e);
+    }
+  }
+
+  function galleryUrl(file) {
+    return API + '/ext-pages?id=' + encodeURIComponent(ID) + '&file=' + encodeURIComponent(file);
+  }
+
+  function renderGallery(items) {
+    var host = $('#gallery');
+    host.textContent = '';
+    if (!items.length) {
+      var e = document.createElement('div');
+      e.className = 'empty';
+      e.textContent = '还没画过图。点上面的「测试生图」，或者在聊天里说「画个 xx」。';
+      host.appendChild(e);
+      return;
+    }
+    var grid = document.createElement('div');
+    grid.className = 'shots';
+    items.forEach(function (it) {
+      var card = document.createElement('div');
+      card.className = 'shot';
+      var a = document.createElement('a');
+      a.className = 'thumb';
+      a.href = galleryUrl(it.file || '');
+      a.target = '_blank';
+      a.rel = 'noopener';
+      var img = document.createElement('img');
+      img.loading = 'lazy';
+      img.alt = it.prompt || it.name || '画作';
+      img.src = galleryUrl(it.file || '');
+      a.appendChild(img);
+      card.appendChild(a);
+
+      var m = document.createElement('div');
+      m.className = 'meta';
+      var no = document.createElement('div');
+      no.className = 'no';
+      no.textContent = '#' + (it.no || '') + ' · ' + (it.when || '时间不明');
+      var p = document.createElement('div');
+      p.className = 'prompt';
+      p.textContent = it.prompt || '(没记提示词)';
+      p.title = it.prompt || '';
+      var sub = document.createElement('div');
+      sub.className = 'sub';
+      sub.textContent = (it.size || '') + ' · ' + (it.name || '');
+      m.appendChild(no); m.appendChild(p); m.appendChild(sub);
+      card.appendChild(m);
+
+      var acts = document.createElement('div');
+      acts.className = 'acts';
+      var send = document.createElement('button');
+      send.textContent = '复制标记';
+      send.addEventListener('click', function () { void copyMarker(it.name); });
+      var del = document.createElement('button');
+      del.className = 'danger';
+      del.textContent = '删除';
+      del.addEventListener('click', function () { void deleteOne(it.name); });
+      acts.appendChild(send); acts.appendChild(del);
+      card.appendChild(acts);
+      grid.appendChild(card);
+    });
+    host.appendChild(grid);
+  }
+
+  async function loadGallery() {
+    try {
+      var r = await fetch(galleryUrl('gallery.json') + '&t=' + Date.now());
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      var j = await r.json().catch(function () { return null; });
+      renderGallery(j && Array.isArray(j.items) ? j.items : []);
+      $('#gallery-err').textContent = '';
+    } catch (e) {
+      $('#gallery-err').textContent = '读不到画作库：' + (e && e.message ? e.message : e);
+      renderGallery([]);
+    }
+  }
+
+  async function copyMarker(name) {
+    var r = await act('send', { file: name }, { silent: true });
+    if (!r.ok) { toast(r.message); return; }
+    var marker = r.data && r.data.marker ? r.data.marker : '';
+    var box = $('#marker-box');
+    var input = $('#marker');
+    box.hidden = false;
+    input.value = marker;
+    try {
+      await navigator.clipboard.writeText(marker);
+      toast('标记已复制，粘进回复就行');
+    } catch (e) {
+      toast('浏览器不让自动复制，请手动选中下面这行');
+      input.focus();
+      input.select();
+    }
+  }
+
+  async function deleteOne(name) {
+    if (!window.confirm('确定删掉这张画吗？\n' + name + '\n删了就找不回来了。')) return;
+    var r = await act('delete', { file: name, confirm: true }, { silent: true });
+    toast(r.message);
+    if (r.ok) { void loadGallery(); void loadData(); }
+  }
+
+  async function refreshAll() {
+    var r = await act('refresh', {}, { silent: true });
+    if (!r.ok) toast(r.message);
+    void loadGallery();
+    void loadData();
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* 事件绑定与首屏                                                    */
+  /* ---------------------------------------------------------------- */
+
+  $('#save').addEventListener('click', function () { void save(false); });
+
+  document.querySelectorAll('[data-act="status"]').forEach(function (b) {
+    b.addEventListener('click', async function () {
+      var r = await act('status', {}, { silent: true });
+      $('#status-out').textContent = r.message;
+      $('#status-err').textContent = r.ok ? '' : r.message;
+      if (!r.ok) toast(r.message);
+    });
+  });
+
+  document.querySelectorAll('[data-act="refresh"]').forEach(function (b) {
+    b.addEventListener('click', function () { void refreshAll(); });
+  });
+
+  document.querySelectorAll('[data-act="test_draw"]').forEach(function (b) {
+    b.addEventListener('click', async function () {
+      var prompt = $('#test-prompt').value.trim() || '一只橘猫，简笔画';
+      $('#test-out').textContent = '正在画，别关页面…';
+      $('#test-err').textContent = '';
+      var r = await act('test_draw', { prompt: prompt }, { silent: true });
+      $('#test-out').textContent = r.message;
+      $('#test-err').textContent = r.ok ? '' : r.message;
+      toast(r.message);
+      void loadGallery();
+      void loadData();
+    });
+  });
+
+  /** 三个请求并行：任何一个失败只坏自己那一块，不拖垮整页 */
+  Promise.all([loadConfig(), loadGallery(), loadData()]);
+})();
+</script>
+</body>
+</html>

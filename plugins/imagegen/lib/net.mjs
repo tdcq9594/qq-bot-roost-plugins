@@ -11,7 +11,9 @@
  * 127.0.0.1 上，那是正常用法。这里只保证「协议是 http(s)、别把内存吃爆」。
  */
 
-const MAX_BYTES = 20 * 1024 * 1024;
+/** 单张图上限：下载的 CDN 图和接口直接回的图片字节都用它 */
+export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_BYTES = MAX_IMAGE_BYTES;
 
 /**
  * 按文件头判图片类型。

@@ -11,7 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { normalizeSize, parseFallbacks, parseParams, readConfig, readyProblem, secretEnv, sizeFor } from '../lib/config.mjs';
+import { applyLiveConfig, normalizeSize, parseFallbacks, parseParams, readConfig, readyProblem, secretEnv, sizeFor } from '../lib/config.mjs';
 
 test('密钥 env 名：apiKey → ROOST_EXT_SECRET_APIKEY（与宿主同一套规则）', () => {
   assert.equal(secretEnv('apiKey'), 'ROOST_EXT_SECRET_APIKEY');
@@ -127,4 +127,64 @@ test('readyProblem：自定义接口只看地址，OpenAI 兼容要地址 + 模�
 test('谁把 provider 写成别的值：退回 openai，不当自定义接口用', () => {
   const cfg = readConfig({ ROOST_EXT_CONFIG: JSON.stringify({ provider: 'stable-diffusion' }) });
   assert.equal(cfg.provider, 'openai');
+});
+
+test('0.2 新配置：默认值、夹取、字符串布尔、密钥只从 env 来', () => {
+  const base = readConfig({ ROOST_EXT_CONFIG: '{}' });
+  assert.equal(base.fallbackEnabled, true);
+  assert.equal(base.timeoutSec, 120);
+  assert.equal(base.maxKeep, 0);
+  assert.equal(base.apiKey, '');
+
+  const cfg = readConfig({
+    ROOST_EXT_CONFIG: JSON.stringify({
+      fallbackEnabled: 'false', timeoutSec: 999, maxKeep: -3, apiKey: '从面板JSON混进来的',
+    }),
+    ROOST_EXT_SECRET_APIKEY: '只有这份能用',
+  });
+  assert.equal(cfg.fallbackEnabled, false, '面板可能把布尔写成字符串');
+  assert.equal(cfg.timeoutSec, 180, '超时夹到上限');
+  assert.equal(cfg.maxKeep, 0, '负数夹回来');
+  assert.equal(cfg.apiKey, '只有这份能用', '密钥绝不从 ROOST_EXT_CONFIG 读');
+});
+
+test('applyLiveConfig：原地改活引用；密钥时序、清空、明文注入三条都不出错', () => {
+  const env = {
+    ROOST_EXT_CONFIG: JSON.stringify({ model: 'm1', timeoutSec: 120 }),
+    ROOST_EXT_SECRET_APIKEY: '启动时注入的旧密钥',
+  };
+  const cfg = readConfig(env);
+  assert.equal(cfg.apiKey, '启动时注入的旧密钥');
+
+  /** 只改非敏感配置：secret 没变就别动，旧密钥继续用 */
+  const ref = cfg;
+  applyLiveConfig(cfg, { model: 'm2', timeoutSec: 60 }, null, env);
+  assert.equal(ref, cfg, '必须是原地改，不能换引用（toolbox 持有的是这个对象）');
+  assert.equal(cfg.model, 'm2');
+  assert.equal(cfg.timeoutSec, 60);
+  assert.equal(cfg.apiKey, '启动时注入的旧密钥');
+
+  /** 面板把密钥清空（宿主写 {}）：不能还握着旧密钥继续花钱 */
+  applyLiveConfig(cfg, null, {}, env);
+  assert.equal(cfg.apiKey, '');
+
+  /** 重新粘一把新密钥 */
+  applyLiveConfig(cfg, null, { apiKey: '新密钥' }, env);
+  assert.equal(cfg.apiKey, '新密钥');
+
+  /**
+   * 对抗测试 B1c 的时序：改完密钥之后又改了一次模型名（secrets mtime 没变，
+   * createLiveConfig 传 secrets=null）。这时若拿启动时 env 的旧值覆盖，
+   * 新密钥就被悄悄退回了 —— 必须保留现值。
+   */
+  applyLiveConfig(cfg, { model: 'm3' }, null, env);
+  assert.equal(cfg.apiKey, '新密钥', '改非敏感项不能把密钥退回启动时的旧值');
+
+  /** 明文 JSON 里夹带的 apiKey 永远不生效，且仍保留现值 */
+  applyLiveConfig(cfg, { apiKey: '想混进来的明文' }, null, env);
+  assert.equal(cfg.apiKey, '新密钥', '非敏感 JSON 不许提供密钥');
+
+  /** secrets 里只有别的键、没有 apiKey：不误清 */
+  applyLiveConfig(cfg, null, { someOtherSecret: 'x' }, env);
+  assert.equal(cfg.apiKey, '新密钥', '缺 apiKey 键不代表用户清了密钥');
 });

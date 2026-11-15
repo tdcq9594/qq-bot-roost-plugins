@@ -162,6 +162,19 @@ export function readConfig(env = process.env, log = () => {}) {
     img2img: boolOf(raw.img2img, true),
     /** 0 = 不限；面板给的是「每天最多几张」 */
     dailyLimit: intOf(raw.dailyLimit, 20, 0, 200),
+    /**
+     * 主接口失败后要不要试备用链。0.2 新增：和 aurabot 面板上的
+     * 「生图失败自动切换」是同一个开关，关掉就只打主接口，排障时
+     * 不会因为备用链把真正的错误盖掉。
+     */
+    fallbackEnabled: boolOf(raw.fallbackEnabled, true),
+    /**
+     * 单次生图超时（秒）。面板按钮跑在宿主进程内，那条通道 150 秒封顶，
+     * 所以配置上限给到 180、面板动作自己夹到 120（见 ui/main.mjs）。
+     */
+    timeoutSec: intOf(raw.timeoutSec, 120, 10, 180),
+    /** 画作库保留几张，0 = 不限。只删自己按时间戳命名的文件 */
+    maxKeep: intOf(raw.maxKeep, 0, 0, 500),
     custom: {
       url: strOf(raw.customUrl, '', 500),
       method: String(raw.customMethod ?? 'POST').toUpperCase() === 'GET' ? 'GET' : 'POST',
@@ -171,6 +184,46 @@ export function readConfig(env = process.env, log = () => {}) {
     },
     fallbacks: parseFallbacks(raw.fallbacks, model),
   };
+  return cfg;
+}
+
+/**
+ * 面板保存设置后，把磁盘上最新的两份值**原地**合进 `cfg`。
+ *
+ * `cfg` 是活引用：`server.mjs` 里所有 `() => cfg.xxx` 的闭包都会立刻看到新值，
+ * 不用重建 toolbox。由 `createLiveConfig()` 在每次工具调用前调用。
+ *
+ * 密钥这一条容易写错：只判断「有没有 apiKey 这个键」，面板把密钥**清空**
+ * （宿主把 secrets 文件写成 `{}`）时就漏掉了，扩展会一直握着启动时注入的旧密钥，
+ * 表现是「我明明删了 Key，它还在花钱」。所以只要 secret 文件真的变了，
+ * 就以磁盘为准——`{}` 也算「现在没有密钥」。
+ *
+ * @param {object} cfg 活引用，原地修改
+ * @param {object|null} values 非敏感值（没变就是 null）
+ * @param {object|null} secrets 敏感值（没变就是 null）
+ * @param {Record<string,string|undefined>} env 启动时的环境，用来兜底旧值
+ */
+export function applyLiveConfig(cfg, values, secrets, env = {}, log = () => {}) {
+  /**
+   * 先记住「这次调用前」的密钥。`readConfig(next)` 会拿启动时注入的
+   * `ROOST_EXT_SECRET_APIKEY` 把 apiKey 重置成旧值；如果 secret 文件这次
+   * 根本没变（secrets === null），必须把现值放回去，否则「改完密钥再改
+   * 一下模型名」就把新密钥悄悄退回成启动那把了（对抗测试 B1c 实证）。
+   */
+  const currentKey = String(cfg?.apiKey ?? '');
+  const next = { ...env };
+  if (values) next.ROOST_EXT_CONFIG = JSON.stringify(values);
+  Object.assign(cfg, readConfig(next, log));
+
+  if (secrets && Object.prototype.hasOwnProperty.call(secrets, 'apiKey')) {
+    cfg.apiKey = String(secrets.apiKey || '');
+  } else if (secrets && Object.keys(secrets).length === 0) {
+    /** 面板把密钥清空：宿主把 secrets 文件写成 `{}`，也要真的清掉 */
+    cfg.apiKey = '';
+  } else {
+    /** secrets=null（只改非敏感项），或 secrets 里压根没有 apiKey：保留现值 */
+    cfg.apiKey = currentKey;
+  }
   return cfg;
 }
 

@@ -13,7 +13,7 @@
  */
 
 import { PaintError } from './errors.mjs';
-import { decodeDataUrl, fetchImage, sniffMime } from './net.mjs';
+import { MAX_IMAGE_BYTES, decodeDataUrl, fetchImage, sniffMime } from './net.mjs';
 
 /** 把模板里的 `{占位符}` 替换掉；不认识的占位符原样留着（让服务端自己报错）。 */
 export function fill(tpl, vars) {
@@ -123,7 +123,16 @@ export function customRequest(cfg, prompt, image) {
   let url = fill(cp.url, enc);
   if (method === 'GET' && params.length) {
     const q = params.map((p) => `${encodeURIComponent(p.key)}=${encodeURIComponent(fill(p.value, raw))}`).join('&');
-    url += (url.includes('?') ? '&' : '?') + q;
+    /**
+     * 参数必须拼在 `#fragment` **之前**：直接 `url += '?...' ` 会把参数塞进
+     * fragment，浏览器/服务端根本收不到。这段照搬 aurabot beta
+     * `src/features/imagegen.js` 的 `customRequest()`（hashAt / base / fragment
+     * 三步），是读源码才发现的坑，不是自己猜的。
+     */
+    const hashAt = url.indexOf('#');
+    const base = hashAt < 0 ? url : url.slice(0, hashAt);
+    const fragment = hashAt < 0 ? '' : url.slice(hashAt);
+    url = base + (base.includes('?') ? '&' : '?') + q + fragment;
   }
 
   const headers = {};
@@ -187,17 +196,62 @@ async function valueToBuffer(v, { fetchImpl } = {}) {
   throw new PaintError('接口返回的既不是图片地址也不是图片', { hint: '检查「返回值路径」填的是不是图片字段' });
 }
 
+/**
+ * 上游那句话 → 具体怎么修。
+ *
+ * 对齐 aurabot 的 `serviceError()`：按张收钱的服务，把「余额不足」说成
+ * 「接口出错」等于让人去检查地址；把「不支持参考图」说成 400 也是白查。
+ * 先看消息里点名了什么，再看状态码——消息比状态码信息量大。
+ */
+export function hintOf(status, message) {
+  const raw = String(message ?? '');
+  const s = raw.toLowerCase();
+  /**
+   * 参考图张数上限：照搬 aurabot beta `src/features/imagegen.js` 的
+   * `serviceError()` 判据（at most / maximum / up to / only N images|张、
+   * only one image、multiple images not supported）。按张收钱的服务里
+   * 「最多 1 张参考图」和「完全不支持参考图」是两种修法，别混成一句。
+   */
+  /** 中文里常见「最多支持 3 张」——aurabot 原正则只写「最多 3 张」，这里补上「支持」 */
+  const limit = /(?:at most|max(?:imum)?(?: of)?|up to|only|最多(?:支持)?|只支持|仅支持)\s*([1-8])\s*(?:(?:input|reference)\s*)?(?:images?|张)/i.exec(raw);
+  if (limit) {
+    return `这个服务最多支持 ${limit[1]} 张参考图：关掉「参考图改画」，或换支持这个张数的服务`;
+  }
+  if (/only (?:one|a single) (?:input )?image|(?:multiple images|image array).*(?:not support|unsupported)|(?:最多|只支持|仅支持).*一张/i.test(raw)) {
+    return '这个服务只支持一张参考图：别一次给多张，或换支持多图的服务';
+  }
+  if (/insufficient|balance|quota|credit|余额|欠费|额度|arrears/.test(s)) {
+    return '账户余额或额度不够：去服务商充值，或换一条备用接口';
+  }
+  if (/rate.?limit|too many|限流|频率|并发/.test(s)) {
+    return '被限流了：等一会儿再画，或换一条备用接口';
+  }
+  if (/content.?policy|sensitive|nsfw|moderation|审核|敏感|违规|blocked/.test(s)) {
+    return '提示词被内容审核挡了：换个说法再试，别反复重试同一句（重试也按张算钱）';
+  }
+  if (/not support|unsupported|不支持/.test(s) && /image|edit|reference|参考图|垫图|multi/.test(s)) {
+    return '这个服务不支持参考图改画：面板里关掉「参考图改画」，或换一条支持 /images/edits 的接口';
+  }
+  if (/size|dimension|resolution|尺寸|分辨率/.test(s)) {
+    return '这个服务不认当前尺寸：面板里把「默认尺寸」留空，或换成它支持的尺寸';
+  }
+  if (/model|模型/.test(s) && /not found|unknown|invalid|不存在|不支持/.test(s)) {
+    return '模型名不对：去服务商文档核对模型名';
+  }
+  if (status === 401 || status === 403) return '密钥不对或没权限：面板里重填 API Key';
+  if (status === 429) return '被限流或余额不足：等一会儿或换个接口';
+  if (status === 404) return '接口地址不对：面板里核对「服务地址」（贴到 /v1 为止，或直接贴完整的 /images/generations）';
+  if (status >= 500) return '生图服务自己出错了，过几分钟再试';
+  return '';
+}
+
 /** HTTP 失败 → 面向用户的错误（带上服务端那句话，它通常比状态码有用）。 */
 function httpError(status, j, what) {
   const msg = j?.error?.message || j?.message || j?.msg || `HTTP ${status}`;
-  const hint = status === 401 || status === 403
-    ? '密钥不对或没权限：面板里重填 API Key'
-    : status === 429
-      ? '被限流或余额不足，等一会儿或换个接口'
-      : status >= 500
-        ? `${what}自己出错了，过几分钟再试`
-        : '';
-  return new PaintError(`${what}返回 ${status}：${String(msg).slice(0, 200)}`, { hint, status });
+  return new PaintError(`${what}返回 ${status}：${String(msg).slice(0, 200)}`, {
+    hint: hintOf(status, msg),
+    status,
+  });
 }
 
 /** 响应体 → 图片 Buffer。有些服务直接回图片字节（pollinations 那类）。 */
@@ -205,7 +259,17 @@ async function bufferOfResponse(r, { fetchImpl, responsePath, pick } = {}) {
   const type = String(r.headers?.get?.('content-type') ?? '');
   if (type.startsWith('image/')) {
     if (!r.ok) throw httpError(r.status, null, '生图接口');
-    return Buffer.from(await r.arrayBuffer());
+    const direct = Buffer.from(await r.arrayBuffer());
+    /**
+     * 「直接回图片字节」这条分支原先没有大小闸：只有 `fetchImage()` 有。
+     * 对方把一个错误页标成 image/png 再吐几十 MB 就能把内存吃满。
+     */
+    if (direct.length > MAX_IMAGE_BYTES) {
+      throw new PaintError(`接口直接返回的图片太大：${Math.round(direct.length / 1024 / 1024)}MB（上限 20MB）`, {
+        hint: '检查服务地址是不是指到了一个网页或代理',
+      });
+    }
+    return direct;
   }
   const j = await r.json().catch(() => null);
   if (!r.ok) throw httpError(r.status, j, '生图接口');
@@ -315,12 +379,19 @@ async function viaCustom(cfg, prompt, image, { fetchImpl, timeoutMs }) {
  * @param {{image?:Buffer|null}} [opts] 参考图（图生图）
  * @returns {Promise<{buf:Buffer, via:string, ms:number}>}
  */
-export async function generate({ cfg, prompt, image = null, fetchImpl, log = () => {}, timeoutMs = 180_000 }) {
+export async function generate({ cfg, prompt, image = null, fetchImpl, log = () => {}, timeoutMs } = {}) {
   const doFetch = fetchImpl || ((...a) => globalThis.fetch(...a));
   const started = Date.now();
+  /**
+   * 超时由设置给（秒），测试仍可注入毫秒覆盖。
+   * 面板按钮跑在宿主进程内、那条通道 150 秒封顶，所以 ui/main.mjs 会再夹一次。
+   */
+  const wait = Number(timeoutMs) > 0
+    ? Number(timeoutMs)
+    : Math.max(10, Math.min(180, Number(cfg?.timeoutSec) || 120)) * 1000;
   const run = (one) => (one.provider === 'custom' || cfg.provider === 'custom'
-    ? viaCustom({ ...cfg, ...one }, prompt, image, { fetchImpl: doFetch, timeoutMs })
-    : viaOpenAI({ ...cfg, ...one }, prompt, image, { fetchImpl: doFetch, timeoutMs }));
+    ? viaCustom({ ...cfg, ...one }, prompt, image, { fetchImpl: doFetch, timeoutMs: wait })
+    : viaOpenAI({ ...cfg, ...one }, prompt, image, { fetchImpl: doFetch, timeoutMs: wait }));
 
   const main = { baseUrl: cfg.baseUrl, model: cfg.model };
   let first;
@@ -332,8 +403,14 @@ export async function generate({ cfg, prompt, image = null, fetchImpl, log = () 
     log(`主接口失败：${e?.message ?? e}`);
   }
 
+  /**
+   * 「生图失败自动切换」关掉时只打主接口：排障时备用链会把真正的错误
+   * 盖成一句「主接口和备用都失败了」，反而看不出是哪一项填错了。
+   * 没写这个字段（老配置 / 测试注入）保持默认开启。
+   */
+  const chain = cfg.fallbackEnabled === false ? [] : (cfg.fallbacks ?? []);
   const failures = [`主接口：${first?.message ?? first}`];
-  for (const [i, one] of (cfg.fallbacks ?? []).entries()) {
+  for (const [i, one] of chain.entries()) {
     const where = `备用 ${i + 1}（${one.baseUrl}）`;
     try {
       const buf = await run(one);
@@ -346,9 +423,11 @@ export async function generate({ cfg, prompt, image = null, fetchImpl, log = () 
   }
 
   throw new PaintError(`没画出来。${failures.join('；')}`, {
-    hint: cfg.fallbacks?.length
+    hint: chain.length
       ? '主接口和备用接口都失败了，检查密钥 / 余额 / 地址'
-      : '面板里检查地址、密钥、模型名；也可以加一两个备用接口',
+      : cfg.fallbackEnabled === false && cfg.fallbacks?.length
+        ? '主接口失败了，而且「失败自动切换」是关着的：面板里打开它就会试备用接口'
+        : '面板里检查地址、密钥、模型名；也可以加一两个备用接口',
     status: first?.status ?? 0,
     cause: first,
   });

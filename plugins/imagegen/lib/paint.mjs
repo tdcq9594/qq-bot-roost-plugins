@@ -55,7 +55,8 @@ export function metaOf(file, { dir = '' } = {}) {
 /** 只接受本目录下的纯文件名：挡 `../`、绝对路径、盘符、NUL。 */
 export function safeName(dir, name) {
   const s = String(name ?? '').trim();
-  if (!s || s !== basename(s) || isAbsolute(s) || s.includes('\u0000')) return '';
+  /** 限长：文件系统本来就有限制，超长串也只会让 statSync 抛一堆无用错误 */
+  if (!s || s.length > 200 || s !== basename(s) || isAbsolute(s) || s.includes('\u0000')) return '';
   const full = normalize(join(dir, s));
   if (relative(dir, full).startsWith('..') || relative(dir, full).includes(':')) return '';
   return IMG_EXT.has(extname(s).toLowerCase()) ? s : '';
@@ -87,12 +88,14 @@ export function savePainting({ dir, buf, prompt, now = new Date() }) {
 }
 
 /**
- * 最近画的几张。`limit` 夹在 1–50：面板一次也显示不了更多。
+ * 最近画的几张。`limit` 默认夹在 1–50：面板一次也显示不了更多。
+ * `cap` 给「保留上限清理」用——那边要看到全部画作才删得掉旧的。
  * 0 / 负数 / 非数字一律当没填，用默认 20 —— 「要 0 条」这种请求按默认处理更不容易出错。
  */
-export function listPaintings({ dir, limit = 20 } = {}) {
+export function listPaintings({ dir, limit = 20, cap = 50 } = {}) {
   const raw = Number(limit);
-  const n = Number.isFinite(raw) && raw > 0 ? Math.min(50, Math.round(raw)) : 20;
+  const top = Number(cap) > 0 ? Number(cap) : 50;
+  const n = Number.isFinite(raw) && raw > 0 ? Math.min(top, Math.round(raw)) : Math.min(top, 20);
   let names = [];
   try {
     names = readdirSync(dir).filter((f) => IMG_EXT.has(extname(f).toLowerCase()));
@@ -142,6 +145,36 @@ export function resolveRef({ dir, ref, limit = 50 } = {}) {
   }
   if (!hit) return null;
   return { ...hit, path: pathOf(dir, hit.file) };
+}
+
+/**
+ * 画作库保留上限（0.2 新增）。
+ *
+ * **只删自己按 `YYYYMMDD-HHMMSS-` 命名的文件**：主人手动放进 out/ 的图、
+ * 或者别的程序写的图，名字不合这个格式就一律不动。扩展没有权力删
+ * 不是自己生成的东西，这条比「清理得干净」重要。
+ *
+ * 按时间倒序保留前 `maxKeep` 张，其余删掉；删失败只跳过，不抛。
+ */
+/**
+ * 自己存出来的文件名长什么样：`stamp-slug.ext`，slug 由 `slugOf()` 洗过、
+ * 最多 20 字，同秒重名再加 `-2`。只认**完整**符合这个形状的，
+ * 光看 `YYYYMMDD-HHMMSS-` 前缀会把主人手动放的同名格式文件删掉
+ * （对抗测试实证：`20261114-031559-..危险.png` 被误删）。
+ * 文件名里带 `..` 的一律跳过：宁可少删一张，也不能删别人的东西。
+ */
+const OWN_FILE = /^\d{8}-\d{6}-[^\\/:*?"<>|\u0000]{1,20}(?:-\d{1,2})?\.(?:png|jpe?g|webp|gif|bmp)$/i;
+
+export function prunePaintings({ dir, maxKeep = 0 } = {}) {
+  const keep = Math.round(Number(maxKeep) || 0);
+  if (keep <= 0) return { removed: 0, kept: 0 };
+  const { items } = listPaintings({ dir, limit: 1000, cap: 1000 });
+  const own = items.filter((it) => OWN_FILE.test(it.file) && !it.file.includes('..'));
+  let removed = 0;
+  for (const it of own.slice(keep)) {
+    if (removePainting(dir, it.file).ok) removed += 1;
+  }
+  return { removed, kept: own.length - removed };
 }
 
 /** 删一张。 */

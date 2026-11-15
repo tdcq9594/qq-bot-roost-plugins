@@ -2,7 +2,7 @@
   "schema": 1,
   "repo": "tdcq9594/qq-bot-roost-plugins",
   "branch": "main",
-  "updated": "2026-11-14",
+  "updated": "2026-11-15",
   "plugins": [
     {
       "id": "ai-chat",
@@ -248,7 +248,7 @@
     {
       "id": "imagegen",
       "name": "让ta画图",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "description": "给模型一支笔：调生图接口画图，存进自己的画作库，再把图发进聊天。支持 OpenAI 兼容接口、自定义接口和备用接口链。",
       "tags": [
         "生图",
@@ -259,7 +259,7 @@
       "kind": "dsh-extension",
       "runtime": "mcp",
       "path": "plugins/imagegen",
-      "sha256": "4d4442d0cb86707c32edc27e13566ccae1f234afd7433d72a91aa28f34840f44",
+      "sha256": "743196e7ced83aafdde25afe270fe14df5f3478d6a298571c759a94d9c383d13",
       "verified": "official",
       "author": "tdcq9594",
       "addedAt": "2026-11-14"

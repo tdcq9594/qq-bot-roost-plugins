@@ -32,9 +32,13 @@ const box = createToolbox({ cfg, dir, log: (m) => console.error(`[gen] ${m}`) })
 
 console.log(`画：${prompt}`);
 console.log(`尺寸：${sizeFor(cfg, {})}　接法：${cfg.provider === 'custom' ? '自定义接口' : 'OpenAI 兼容'}　模型：${cfg.model}`);
+/** 0.2：先把不花钱的自检打出来，真失败时好对照「当时到底填了什么」 */
+console.log(`\n${await box.call('image_status', {})}`);
 try {
   const text = await box.call('image_gen', { prompt });
   console.log(`\n${text}`);
+  /** 顺手验一下新链路：编号 → 现成标记串，路径必须是刚画出来那张 */
+  console.log(`\n${await box.call('image_send', { file: '#1' })}`);
 } catch (e) {
   console.error(`\n✗ ${textOf(e)}`);
   process.exitCode = 1;
