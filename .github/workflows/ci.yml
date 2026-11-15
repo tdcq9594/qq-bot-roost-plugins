@@ -94,7 +94,10 @@ jobs:
           # 否则会出现：框架 master 有插件依赖的新能力但还没发布 → 插件 CI 假绿，
           # 用户装到旧版运行时坏；或 master 瞬时坏掉 → 插件 CI 假红。
           # **每次发框架新版都要改这里**（或设仓库 Variables 的 FRAMEWORK_REF 覆盖）。
-          # 当前对应框架 v1.0.16（`msg.typing` / `media.convert` 两条协议方法；
+          # 当前对应框架 v1.1.0（四态：群 / 单聊 / 频道 / 频道私信；94 个官方端点，
+          # 频道类 49；`bot.status` 带 gatewayIntents，新增 quota.get / system.events；
+          # 非消息频道事件按 kind=notice 入账且不进 AI 邻文；开放平台后台 dev.* 一组）。
+          # v1.0.16 起有 `msg.typing` / `media.convert` 两条协议方法；
           # 直连协议 `msg.send` 放行纯官方图文卡片，不再要求 content/msgId/eventId；
           # 框架插件可反向调 DSH 扩展能力 ext.list/ext.call/ext.register）。
           # v1.0.14 起市场索引分叉出 kind:'dsh-extension'——扩展条目框架侧
@@ -105,7 +108,7 @@ jobs:
           # v1.0.7 起有 msg_type=8 图文卡片 replyTuwen；v1.0.6 起富媒体发图不带占位空格；
           # v1.0.4 起消息带 uin / userAliases，被动回复上限群 5 / 单聊 4，
           # ai-chat 4.4.5 依赖它。v1.0.8 修的是 1.0.7 实例锁判活回归。
-          ref: ${{ vars.FRAMEWORK_REF || 'v1.0.16' }}
+          ref: ${{ vars.FRAMEWORK_REF || 'v1.1.0' }}
 
       - name: 跑插件测试
         shell: bash
