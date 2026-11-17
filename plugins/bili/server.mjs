@@ -17,6 +17,7 @@
  */
 
 import process from 'node:process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { BiliError, createBiliApi } from './lib/api.mjs';
@@ -43,7 +44,23 @@ import { createAutoShot } from './lib/auto-shot.mjs';
 import { bumpStats, readStats } from './lib/stats.mjs';
 import { countShots } from './lib/gallery.mjs';
 
-const SERVER = { name: 'bili', version: '0.11.7' };
+/**
+ * 版本以 `plugin.json` 为唯一真相。
+ *
+ * 这里原来写死 `0.11.7`，清单早就是 `0.11.8` 了——面板和宿主显示的版本
+ * 和用户实际装的不是同一个数。扩展判更新走 sha256，不影响发版，所以这个
+ * 漂移能一直潜伏到有人去核对握手日志。读清单就不会再有第二个真相。
+ *
+ * 读不到清单也不让整个 server 起不来（缺文件时退化成 `0`，版本只用于展示）。
+ */
+const MANIFEST = (() => {
+  try {
+    return JSON.parse(readFileSync(new URL('./plugin.json', import.meta.url), 'utf8'));
+  } catch {
+    return {};
+  }
+})();
+const SERVER = { name: MANIFEST.id || 'bili', version: String(MANIFEST.version || '0') };
 const log = (m) => process.stderr.write(`[bili] ${m}\n`);
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 

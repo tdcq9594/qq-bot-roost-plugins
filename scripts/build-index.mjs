@@ -182,6 +182,36 @@ async function readVerified() {
   }
 }
 
+/**
+ * 主分类表。
+ *
+ * 和 `verified` 一样是「我们的判断，不是插件的自述」，所以也放仓库根目录
+ * （`categories.json`），由这个脚本灌进索引。
+ *
+ * 为什么不写进插件清单：分类是市场侧的组织方式，会跟着 UI 一起调整。写进
+ * 清单的话每调一次分类就要动 24 个目录、每个插件的 sha256 全变，所有用户
+ * 都会收到一次「有新版」的提示，而他们装的代码一个字都没变。
+ *
+ * 不给默认值：不在表里的插件让框架按 `categoryOf()` 退回第一个 tag，
+ * 比在这里编一个「其它」更诚实。
+ */
+async function readCategories() {
+  try {
+    const j = JSON.parse(await fs.readFile(path.join(ROOT, 'categories.json'), 'utf8'));
+    const out = new Map();
+    for (const [id, cat] of Object.entries(j)) {
+      if (id.startsWith('_')) continue; // _doc 这类说明字段
+      const c = String(cat ?? '').trim();
+      if (!c) throw new Error(`categories.json：${id} 的分类是空的`);
+      out.set(id, c);
+    }
+    return out;
+  } catch (e) {
+    if (e.code === 'ENOENT') return new Map();
+    throw e;
+  }
+}
+
 async function build() {
   let dirs;
   try {
@@ -192,6 +222,7 @@ async function build() {
   }
 
   const verified = await readVerified();
+  const categories = await readCategories();
 
   const found = [];
   for (const d of dirs) {
@@ -268,12 +299,23 @@ async function build() {
       const lv = verified.get(p.id);
       if (lv) p.verified = lv;
       else delete p.verified;
+      /** `category` 同理：以 `categories.json` 为准，改了表就要能改掉旧值 */
+      const cat = categories.get(p.id);
+      if (cat) p.category = cat;
+      else delete p.category;
       return p;
     });
 
   // 分级表里有、但插件目录已经没了 —— 提醒一句，别让它悄悄烂在那儿
   for (const id of verified.keys()) {
     if (!merged.some((p) => p.id === id)) console.warn(`  verified.json 里的 ${id} 已经不在 plugins/ 下`);
+  }
+  // 分类表同理，另外提醒「漏了」的：它们会退回第一个 tag，市场里可能落到奇怪的分组
+  for (const id of categories.keys()) {
+    if (!merged.some((p) => p.id === id)) console.warn(`  categories.json 里的 ${id} 已经不在 plugins/ 下`);
+  }
+  for (const p of merged) {
+    if (!categories.has(p.id)) console.warn(`  ${p.id} 没有分类，市场会退回用第一个 tag（请在 categories.json 里补一行）`);
   }
 
   return {
@@ -308,7 +350,7 @@ function diff(prev, next) {
      * 重跑 `build-index`，CI 一路绿灯，线上索引还是旧等级——
      * 用户看到的是「官方维护」，而我们其实已经把它降级了。
      */
-    for (const k of [...STRUCT_FIELDS, 'verified']) {
+    for (const k of [...STRUCT_FIELDS, 'verified', 'category']) {
       const a = old[k] ?? '';
       const b = p[k] ?? '';
       /** scopes / overrides 是数组，String() 会把 ['a','b'] 和 ['a,b'] 混为一谈 */

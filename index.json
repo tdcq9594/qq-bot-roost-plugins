@@ -20,7 +20,8 @@
       "sha256": "d9181ac77b8d6775aa15d5987257156f7e444d408c519d17372713364000570e",
       "author": "tdcq9594",
       "addedAt": "2026-10-24",
-      "verified": "official"
+      "verified": "official",
+      "category": "AI 对话"
     },
     {
       "id": "ai-native",
@@ -41,7 +42,8 @@
         "ai"
       ],
       "addedAt": "2026-10-27",
-      "verified": "official"
+      "verified": "official",
+      "category": "AI 对话"
     },
     {
       "id": "anime-img",
@@ -66,12 +68,13 @@
         "清图库"
       ],
       "addedAt": "2026-10-25",
-      "verified": "official"
+      "verified": "official",
+      "category": "绘图与生图"
     },
     {
       "id": "bili",
       "name": "刷 B 站",
-      "version": "0.11.8",
+      "version": "0.11.9",
       "description": "给模型一双能看 B 站的眼睛：搜视频、看榜单、读字幕与热评、看 UP 主；可填 Cookie 登录、定时刷热门、分享成官方卡片、抽帧。0.5 起「刷 B 站」页就是完整控制台：登录、27 项开关、刷新 / 刷一轮 / 查登录按钮都在页面里；可选把刷到的好视频主动推给主人 / 群，评论 / 点赞 / 弹幕默认试运行。",
       "tags": [
         "B站",
@@ -84,14 +87,15 @@
       "kind": "dsh-extension",
       "runtime": "mcp",
       "path": "plugins/bili",
-      "sha256": "c1dd749c85da8cd36b7fd548e536e898c4579c520624c07af050f9d366ff83ca",
+      "sha256": "5a61331db06a7049265ceb9f8bd6ed6fca33bf4f296e35bda083b34407ee6881",
       "scopes": [
         "memory:write",
         "state:read",
         "proactive:write",
         "agent:write",
         "message:write"
-      ]
+      ],
+      "category": "媒体与内容"
     },
     {
       "id": "comfy-draw",
@@ -113,7 +117,8 @@
       "addedAt": "2026-11-07",
       "runtime": "node",
       "sha256": "5a4503b929bad82cb628227e38c2da622c5802b81a8c012ad403cb4d609b4e0b",
-      "frameworkVersion": ">=0.6.13"
+      "frameworkVersion": ">=0.6.13",
+      "category": "绘图与生图"
     },
     {
       "id": "demo-ext",
@@ -128,7 +133,8 @@
       "kind": "dsh-extension",
       "runtime": "mcp",
       "path": "plugins/demo-ext",
-      "sha256": "1bd7ff435cd1f7fa542b969ba7bd233e0e3abac01d7db26100cdc86d96fe9f58"
+      "sha256": "1bd7ff435cd1f7fa542b969ba7bd233e0e3abac01d7db26100cdc86d96fe9f58",
+      "category": "开发示例"
     },
     {
       "id": "demo-x",
@@ -148,7 +154,8 @@
       ],
       "addedAt": "2026-10-24",
       "verified": "official",
-      "frameworkVersion": ">=1.0.0"
+      "frameworkVersion": ">=1.0.0",
+      "category": "开发示例"
     },
     {
       "id": "dice",
@@ -169,7 +176,8 @@
       ],
       "addedAt": "2026-10-23",
       "sha256": "8dfd8c402a368655546fe4f00896a60ddde0e503885f98cf83613fb4e10647ae",
-      "verified": "official"
+      "verified": "official",
+      "category": "游戏与娱乐"
     },
     {
       "id": "douluo",
@@ -179,7 +187,8 @@
       "tags": [],
       "runtime": "node",
       "path": "plugins/douluo",
-      "sha256": "6aa389451b1e1e458b8b313b26f4eb20157d4833fdaeede61b0a009a728db0ce"
+      "sha256": "6aa389451b1e1e458b8b313b26f4eb20157d4833fdaeede61b0a009a728db0ce",
+      "category": "游戏与娱乐"
     },
     {
       "id": "echo",
@@ -198,7 +207,8 @@
       ],
       "addedAt": "2026-10-23",
       "sha256": "815d28c030aca24a36ef0386c63766560249268fa41fe9385794bf424307e0c0",
-      "verified": "official"
+      "verified": "official",
+      "category": "开发示例"
     },
     {
       "id": "group-admin",
@@ -222,7 +232,8 @@
         "群管状态"
       ],
       "addedAt": "2026-10-24",
-      "verified": "official"
+      "verified": "official",
+      "category": "群管与效率"
     },
     {
       "id": "hello-py",
@@ -243,7 +254,8 @@
       ],
       "addedAt": "2026-10-23",
       "sha256": "92c3b313ea672aa06595dac1c7f92bcfffb2dd33bc68b8abd7540e044c9a4dfc",
-      "verified": "official"
+      "verified": "official",
+      "category": "开发示例"
     },
     {
       "id": "imagegen",
@@ -262,7 +274,8 @@
       "sha256": "743196e7ced83aafdde25afe270fe14df5f3478d6a298571c759a94d9c383d13",
       "verified": "official",
       "author": "tdcq9594",
-      "addedAt": "2026-11-14"
+      "addedAt": "2026-11-14",
+      "category": "绘图与生图"
     },
     {
       "id": "imgbed",
@@ -281,7 +294,8 @@
         "imgbed"
       ],
       "addedAt": "2026-10-24",
-      "verified": "official"
+      "verified": "official",
+      "category": "媒体与内容"
     },
     {
       "id": "jm-comic",
@@ -303,7 +317,8 @@
       "addedAt": "2026-11-05",
       "runtime": "node",
       "sha256": "fb6e8f0d8a9952345f41581d312f29b90704dd061babb5f6228cebdef748d227",
-      "frameworkVersion": ">=0.6.13"
+      "frameworkVersion": ">=0.6.13",
+      "category": "媒体与内容"
     },
     {
       "id": "kun",
@@ -361,7 +376,8 @@
       "credits": "玩法设计来自 Agam《简单的养鲲游戏》(CQP, 2020)",
       "sha256": "efeddd35f72bc78e391794fc2edcbd065c2b9886461b1f3994ab7482ebbc229a",
       "frameworkVersion": ">=0.6.0",
-      "verified": "official"
+      "verified": "official",
+      "category": "游戏与娱乐"
     },
     {
       "id": "media-vision",
@@ -384,7 +400,8 @@
       "addedAt": "2026-11-04",
       "runtime": "node",
       "sha256": "12aca28c035e1c43185f4fde25faf404d66e24005ef852a0e8e7cdfa122be7c1",
-      "frameworkVersion": ">=0.6.13"
+      "frameworkVersion": ">=0.6.13",
+      "category": "媒体与内容"
     },
     {
       "id": "persona-grow",
@@ -410,7 +427,8 @@
       ],
       "path": "plugins/persona-grow",
       "addedAt": "2026-11-17",
-      "sha256": "ede8353d78af05813264e837081ca32937cc86044146483d2e103ac3d06f505b"
+      "sha256": "ede8353d78af05813264e837081ca32937cc86044146483d2e103ac3d06f505b",
+      "category": "人格与人设"
     },
     {
       "id": "persona-scope",
@@ -432,7 +450,8 @@
       "addedAt": "2026-11-12",
       "runtime": "node",
       "sha256": "76f15ed64e97d6d38e139da94de4b881104738449973cbaf87b7b69a22d3fd5f",
-      "frameworkVersion": ">=0.6.18"
+      "frameworkVersion": ">=0.6.18",
+      "category": "人格与人设"
     },
     {
       "id": "persona-scope-ext",
@@ -447,7 +466,8 @@
         "prompt:write"
       ],
       "path": "plugins/persona-scope-ext",
-      "sha256": "99c12671d39535aa0eb8b42549972ae3d081f2e83cfb05bdd438492cbe23b5a1"
+      "sha256": "99c12671d39535aa0eb8b42549972ae3d081f2e83cfb05bdd438492cbe23b5a1",
+      "category": "人格与人设"
     },
     {
       "id": "pixiv-pid",
@@ -465,7 +485,8 @@
       "addedAt": "2026-11-04",
       "runtime": "node",
       "sha256": "31907c937f2fbfe90272e12bcfd5f9a14bbb203cb8116ce410422a130455f0b2",
-      "frameworkVersion": ">=0.6.13"
+      "frameworkVersion": ">=0.6.13",
+      "category": "绘图与生图"
     },
     {
       "id": "render",
@@ -484,7 +505,8 @@
         "card"
       ],
       "addedAt": "2026-10-24",
-      "verified": "official"
+      "verified": "official",
+      "category": "媒体与内容"
     },
     {
       "id": "trpg-forwarder",
@@ -506,7 +528,8 @@
       "addedAt": "2026-11-07",
       "runtime": "node",
       "sha256": "25ccabc1b702a7704d194bb9d26f6b3f1413fe4603e5f772bc9e91eace12c4f1",
-      "frameworkVersion": ">=1.0.0"
+      "frameworkVersion": ">=1.0.0",
+      "category": "游戏与娱乐"
     },
     {
       "id": "weather-card",
@@ -528,7 +551,8 @@
       "addedAt": "2026-11-09",
       "runtime": "node",
       "sha256": "44f36d30482b3ef0b71005ef896be062559b5bd53198a2f8cc7c52df3e875df4",
-      "frameworkVersion": ">=0.8.6"
+      "frameworkVersion": ">=0.8.6",
+      "category": "群管与效率"
     }
   ]
 }
