@@ -1,0 +1,129 @@
+name: 签名索引
+
+# 为什么单独一个工作流、而且必须手动触发
+# ==========================================
+#
+# 私钥不进仓库（这个仓库是公开的），放在 GitHub Environment `release-signing`
+# 的 Secret `TRUST_PRIVATE_PEM` 里。Environment 配了 required reviewers，
+# 所以拿私钥之前一定有一个人点了「批准」——这是本工作流唯一的人工闸。
+#
+# 为什么不挂在 push 上自动跑：
+#   · 索引是**线上**分发的（框架默认拉 raw.githubusercontent.com/…/main/index.json），
+#     自动重签并 push = 合并即发布，绕过了人。
+#   · 每次 push 都重算，`updated` 会天天变，于是天天多一个只改日期的提交。
+# 所以：手动点 → 先判断需不需要 → 真不一致才重签并提交。
+#
+# 第一步「校验私钥」**每次都跑**，不跟着 `go` 判断走。理由：如果只在需要重签时
+# 才校验，索引本来就一致的时候点一次，什么都不验、直接绿——你会以为 Secret
+# 配好了，其实没有。现在点一次就能拿到明确结论。
+#
+# Secret 挡不住有写权限的人：谁能改 `.github/` 谁就能把 secret 打出来。
+# 必须配合 CODEOWNERS + 分支保护（`.github/` 改动需 review）。
+# 另外：**永远不要**给这个工作流加 `pull_request` 触发。
+
+on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: 这次重签的原因（会写进提交信息）
+        required: false
+        default: 重算并签名索引
+
+permissions:
+  contents: write
+
+jobs:
+  sign:
+    name: 重算并签名
+    runs-on: ubuntu-latest
+    environment: release-signing
+    # 只允许从 main 手动触发：索引和分支名绑死（index.json 里 branch=main）
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: 写入私钥并校验能否解析
+        shell: bash
+        env:
+          TRUST_PRIVATE_PEM: ${{ secrets.TRUST_PRIVATE_PEM }}
+        run: |
+          if [ -z "$TRUST_PRIVATE_PEM" ]; then
+            echo "::error::拿不到 TRUST_PRIVATE_PEM。检查 release-signing 这个 Environment 里有没有配这个 secret（是 Environment secret，不是仓库 secret），以及这次运行有没有被批准。"
+            exit 1
+          fi
+
+          key="$RUNNER_TEMP/trust-private.pem"
+          umask 077
+          # 从网页粘贴过来的 pem 容易带 CRLF 行尾、首尾空行、行尾空格。
+          # 这把私钥是 Ed25519，只有 3 行 119 字节，多一个空行 OpenSSL 就报
+          # 「no start line」——那种报错完全看不出是粘贴问题，所以先清一遍。
+          printf '%s\n' "$TRUST_PRIVATE_PEM" \
+            | sed -e 's/\r$//' -e 's/[[:space:]]*$//' -e '/^[[:space:]]*$/d' > "$key"
+
+          # 只报「能不能解析」和结构特征，绝不打印密钥内容
+          node -e "
+            const { createPrivateKey } = require('node:crypto');
+            const fs = require('node:fs');
+            const pem = fs.readFileSync(process.argv[1], 'utf8');
+            const lines = pem.split('\n').filter((l) => l.length);
+            try {
+              const k = createPrivateKey(pem);
+              console.log('私钥可解析：' + k.asymmetricKeyType + '，' + lines.length + ' 行');
+            } catch (e) {
+              console.error('::error::私钥解析失败：' + e.message);
+              console.error('结构：' + lines.length + ' 行，首行是合法标记=' + /^-----BEGIN [A-Z ]+-----\$/.test(lines[0] || '') + '，末行是合法标记=' + /^-----END [A-Z ]+-----\$/.test(lines[lines.length - 1] || ''));
+              console.error('常见原因：粘的时候少了 BEGIN/END 行、混进了空行、或者粘成了公钥。');
+              process.exit(1);
+            }
+          " "$key"
+
+      - name: 判断需不需要重签
+        id: need
+        shell: bash
+        run: |
+          # 「索引一致」和「签名有效」都过了就什么都不做。
+          # 少了这一步，每次点都会产生一个只改 updated 日期的提交。
+          if node scripts/build-index.mjs --check >/dev/null 2>&1 \
+             && node scripts/sign-index.mjs --verify --key trust-public.pem >/dev/null 2>&1; then
+            echo "go=0" >> "$GITHUB_OUTPUT"
+            echo "索引已一致、签名有效，不用重签"
+          else
+            echo "go=1" >> "$GITHUB_OUTPUT"
+            echo "索引或签名需要重做"
+          fi
+
+      - name: 重算并签名
+        if: steps.need.outputs.go == '1'
+        shell: bash
+        run: |
+          node scripts/build-index.mjs --key "$RUNNER_TEMP/trust-private.pem"
+          # 签完立刻用**公钥**验一遍：宁可这一步红，也别把坏签名推上线
+          node scripts/sign-index.mjs --verify --key trust-public.pem
+
+      - name: 提交并推送
+        if: steps.need.outputs.go == '1'
+        shell: bash
+        run: |
+          if git diff --quiet -- index.json index.json.sig; then
+            echo "重算后没有差异，不提交"
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.json index.json.sig
+          # [skip ci]：这个提交本身已经是校验过签名的产物，不必再跑一遍检查
+          git commit -m "chore(index): ${{ inputs.note }} [skip ci]"
+          git push
+
+      - name: 清掉私钥
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/trust-private.pem"
