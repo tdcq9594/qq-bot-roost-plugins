@@ -153,7 +153,7 @@
     {
       "id": "dice",
       "name": "掷骰子",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "description": "演示参数解析、玩家数据持久化与关键词被动触发",
       "author": "tdcq9594",
       "path": "plugins/dice",
@@ -168,7 +168,7 @@
         "reset"
       ],
       "addedAt": "2026-10-23",
-      "sha256": "bb798e853d6dc000b54d1476604b9bb6f8d1b12fc72ef636e10e9fef7376d084",
+      "sha256": "8dfd8c402a368655546fe4f00896a60ddde0e503885f98cf83613fb4e10647ae",
       "verified": "official"
     },
     {
@@ -203,7 +203,7 @@
     {
       "id": "group-admin",
       "name": "群管",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "description": "禁言、解禁、踢人、群信息（需要机器人是群管理员）",
       "tags": [
         "群管",
@@ -212,7 +212,7 @@
       ],
       "runtime": "node",
       "path": "plugins/group-admin",
-      "sha256": "e8ef5f62797148485701f515f4b018087807e6f6800320e28a9a47dca6e4d203",
+      "sha256": "3d7180b12e0aed44d78a0c3e8758dd32801e503eb106b3677f994034c5f0dfe1",
       "author": "tdcq9594",
       "commands": [
         "禁言",

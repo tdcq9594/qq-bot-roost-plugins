@@ -30,7 +30,7 @@
 export default {
   id: 'group-admin',
   name: '群管',
-  version: '1.1.0',
+  version: '1.1.1',
   description: '禁言、解禁、踢人、群信息（需要机器人是群管理员）',
 
   setup(ctx) {

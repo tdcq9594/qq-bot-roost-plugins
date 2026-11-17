@@ -21,8 +21,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # 版本检查要和上一个 commit 比，得拿到历史
-          fetch-depth: 2
+          # 版本检查要拿「已发布的那一份」当基准：PR 是目标分支，push 是
+          # github.event.before。两个都可能离 HEAD 好几个提交（一次推一批、
+          # 合并提交），所以不能只取 2 层。仓库 .git 才 5.7M，全量拉不心疼。
+          fetch-depth: 0
 
       - name: 装 Node
         uses: actions/setup-node@v4
@@ -41,12 +43,22 @@ jobs:
       - name: 改了内容要升版本号
         shell: bash
         run: |
-          # push 到 main 时比 HEAD~1；PR 时比目标分支的合并基点
+          # 基准必须是「已经发出去的那一份」，不是「上一个 commit」。
+          #
+          # 以前 push 时比 HEAD~1：一次推 6 个提交，只有 tip 那个看得见，
+          # 中间 5 个改内容不升版全被放过。11-08 那天 ai-chat@4.4.5 连着
+          # 换了 6 次内容、版本号一直没动，CI 全程绿的，就是这么漏的。
+          #
+          #   PR      → 目标分支（origin/<base_ref>，fetch-depth 0 已在本地）
+          #   push    → github.event.before，即这次推送之前的 main，正好是
+          #             「已发布」，不管夹了几个提交都拦得住
+          #   新分支  → before 是 40 个 0，退回 HEAD（等于只查工作区，不误报）
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            git fetch --depth=1 origin "${{ github.base_ref }}"
             node scripts/check-versions.mjs --base "origin/${{ github.base_ref }}"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            node scripts/check-versions.mjs --base "${{ github.event.before }}"
           else
-            node scripts/check-versions.mjs --base HEAD~1
+            node scripts/check-versions.mjs --base HEAD
           fi
 
       - name: 索引与插件目录一致
