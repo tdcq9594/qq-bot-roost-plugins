@@ -1,0 +1,55 @@
+{
+  "api": 1,
+  "kind": "dsh-extension",
+  "id": "persona-grow",
+  "serverName": "persona-grow",
+  "name": "人设生长",
+  "description": "按真实 QQ 会话慢慢积累有证据的行为习惯，写成一份「成长人格」并切到那个会话；宿主删了内置生长后由扩展自己实现",
+  "version": "0.5.0",
+  "transport": "stdio",
+  "command": "node",
+  "args": [
+    "server.mjs"
+  ],
+  "scopes": [
+    "state:read",
+    "memory:read",
+    "prompt:write",
+    "agent:write"
+  ],
+  "config": {},
+  "usage": "查看成长状态；在面板里选会话后可以立刻分析一次、或清空还原。分析会读最近的群聊记录并调用一次模型，需要 memory:read / agent:write / prompt:write 三项授权。",
+  "ui": {
+    "nav": {
+      "label": "人设生长",
+      "group": "self"
+    },
+    "page": "page.html",
+    "runtime": "inprocess",
+    "entry": "actions-v7.mjs",
+    "actions": [
+      {
+        "id": "list",
+        "label": "读取会话列表"
+      },
+      {
+        "id": "status",
+        "label": "读取成长状态"
+      },
+      {
+        "id": "preview",
+        "label": "预览分析（不写入）"
+      },
+      {
+        "id": "grow",
+        "label": "立刻分析并落地",
+        "confirm": true
+      },
+      {
+        "id": "restore",
+        "label": "清空成长并还原人格",
+        "confirm": true
+      }
+    ]
+  }
+}
