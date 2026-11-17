@@ -74,10 +74,10 @@ const TOOL_DEFS = [
   },
   {
     name: 'persona_scope_repair',
-    description: '修复人格库里带 {{占位符}} 的人格（会把它们渲染成纯文本）。这类人格会让整轮没有回复。',
+    description: '修复人格库里带 {{占位符}} 的人格（会让整轮没有回复）。默认只报告；确认后传 dryRun:false 才落盘。',
     schema: {
       type: 'object', additionalProperties: false,
-      properties: { dryRun: { type: 'boolean', description: 'true = 只报告，不写入' } },
+      properties: { dryRun: { type: 'boolean', description: '默认 true（只报告）。要真正写入必须显式传 false' } },
     },
   },
   {
@@ -151,7 +151,8 @@ async function callTool(name, args) {
       if (!apiReady()) return fail(`扩展与宿主的连接不可用：${apiWhy()}`);
       return ok(await ops.applyCard({ cardId: args?.cardId, openid: args?.openid, growthChatId: args?.growthChatId || '', userLabel: args?.userLabel || '' }));
     }
-    if (name === 'persona_scope_repair') return ok(await ops.repairPersonas({ dryRun: args?.dryRun === true }));
+    // 默认只报告：批量改写宿主人格是破坏性动作，必须显式 dryRun:false
+    if (name === 'persona_scope_repair') return ok(await ops.repairPersonas({ dryRun: args?.dryRun !== false }));
     if (name === 'persona_scope_clear_growth') return ok(await ops.clearGrowthOf({ chatId: args?.chatId }));
     if (name === 'persona_scope_import') return ok(await ops.importFromPlugin({ replace: args?.replace === true }));
     if (name === 'persona_scope_export') return ok(await ops.exportToPlugin());

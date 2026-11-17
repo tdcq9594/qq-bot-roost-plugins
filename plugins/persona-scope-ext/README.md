@@ -9,7 +9,7 @@
 
 | 项 | 值 |
 |---|---|
-| 版本 | 0.7.1 |
+| 版本 | 0.8.0 |
 | 类型 | dsh-roost 扩展（`kind: dsh-extension`） |
 | 权限 | `state:read`、`prompt:write` |
 | 依赖 | dsh-roost ≥ 1.3.7（`persona.bySender`） |
@@ -91,7 +91,9 @@
 > ⚠ 有人格带 `{{占位符}}`，它会让整轮对话没有任何回复 → 「一键修复」
 
 修复就是把它们渲染成纯文本写回去（`{{user}}` → 「你」），宿主会自己留备份。
-也可以用 `persona_scope_repair`，`dryRun: true` 只报告不写。
+
+面板按钮会先弹确认框；MCP 的 `persona_scope_repair` **默认只报告**，
+要落盘必须显式传 `dryRun: false`——批量改写宿主人格是破坏性动作，不该一个调用就发生。
 
 ### 6. 生成的人格 id
 
@@ -117,7 +119,7 @@ scope-<卡片id>[-grow-<群openid>]
 | `persona_scope_save_card` | 新建 / 修改人设卡（含「受成长影响」开关） |
 | `persona_scope_save_preset` | 新建 / 修改预设 |
 | `persona_scope_apply` | 卡片（含预设、可叠加成长）生成人格，可顺带绑定 |
-| `persona_scope_repair` | 修复带 `{{占位符}}` 的人格（会让整轮没回复） |
+| `persona_scope_repair` | 修复带 `{{占位符}}` 的人格；**默认只报告**，`dryRun:false` 才落盘 |
 | `persona_scope_bind` | 绑到已存在的人格 |
 | `persona_scope_unbind` | 解除绑定 |
 | `persona_scope_clear_growth` | 清除某个群的成长（需完整 32 位群号） |
@@ -215,6 +217,11 @@ scope-<卡片id>[-grow-<群openid>]
 | 默认导入 | **保留本地**，只补本地没有的 |
 | `replace: true` | 用插件版本覆盖本地 |
 
+面板写接口（重载 / 启用 / 写配置）都从框架的 `data/ports.json` 读端口，
+**读不到就放弃并提示手动操作，绝不猜 8080**（那端口经常被别的软件占着）。
+框架设了 `webui.accessKey` 时会自动带上 `X-Access-Key`；失败时提示里会写出
+HTTP 状态（401 会明确说「访问密钥不匹配」）。
+
 导出成功后会自动请求运行中的插件**重载配置**——不重载的话，插件内存里还是旧副本，
 你下次在插件面板点保存就会把刚导出的卡片冲掉。多只机器人时重载请求带
 `?bot=<机器人id>`，只重载**被写入的那一只**。
@@ -258,7 +265,7 @@ scope-<卡片id>[-grow-<群openid>]
 ## 开发与发布
 
 ```bash
-node --test "test/*.mjs"     # 83 项
+node --test "test/*.mjs"     # 94 项
 ```
 
 覆盖：返回信封、动作白名单、openid 校验顺序、并发写、损坏文件、凭据轮换、

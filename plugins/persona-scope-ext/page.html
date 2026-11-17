@@ -410,7 +410,7 @@ $('btnRepair').onclick = async () => {
   if (!confirm('把这些人格里的 {{占位符}} 渲染成纯文本？宿主会自动留备份。')) return;
   try {
     show('修复中…');
-    const d = await act('repairPersonas', {});
+    const d = await act('repairPersonas', { dryRun: false });
     show(d.message || '已修复', 'ok');
     await refresh();
   } catch (e) { show(String(e.message || e), 'error'); }
