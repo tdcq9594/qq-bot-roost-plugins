@@ -163,8 +163,17 @@ export function createFeed({
        * 每个来源单独打 `src`，后面按来源轮流取，避免一轮全是同一类。
        */
       const smart = cfg?.feedSmartKeywords !== false ? snap.nextKeywords : [];
+      /**
+       * 面板上这一项是**单行**输入框（配置声明 `type: 'string'`），
+       * 回车不会插入换行——以前 hint 写着「一行一个」，用户却只能把三个
+       * 方向连成「白米饭 做法猫咪游戏解说」一整串，搜索等于白跑。
+       *
+       * 现在按常见分隔符切：换行（老配置/手改 config.json 里可能有）、
+       * 中英文逗号、顿号、分号。空格**不切**——「白米饭 做法」本身就是一个
+       * 搜索词，按空格切会把词组打碎。
+       */
       const manual = String(cfg?.feedKeywords || '')
-        .split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+        .split(/[\r\n,，、;；]+/).map((x) => x.trim()).filter(Boolean);
       const kws = [...new Set([...smart, ...manual])].slice(0, 6);
 
       const groups = [];

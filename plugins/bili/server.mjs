@@ -232,6 +232,13 @@ async function qrTick() {
   try {
     const r = await qr.poll();
     lastQr = { state: r.state, message: String(r.message || ''), at: Date.now() };
+    /**
+     * 扫码成功 = Cookie 刚写进 `cookie.txt`，这里立刻重查一次登录态。
+     * 不查的话面板会同时显示「已登录，cookie 已写入」和状态格里的
+     * 「没登录（只能看）」——扫码前那次检测的结果一直挂着（`nav` 缓存
+     * 十分钟，`setMeta` 又是合并写入，不会自己变）。
+     */
+    if (r.state === 'done') lastAccount = await api.account({ force: true });
     syncMeta();
     if (r.state !== 'waiting') stopQrTimer();
   } catch (e) {
@@ -322,8 +329,11 @@ const uiActions = createUiActions({
       if (!r?.ok) log(`手动刷一轮没有完成：${r?.why ?? '未知原因'}`);
     },
     async check_login() {
-      lastAccount = await api.account();
-      log(lastAccount?.isLogin ? `登录态正常：${lastAccount.uname}` : '没有登录（只能看，不能评论）');
+      /** `force`：面板点这个按钮就是要此刻的真实状态，不吃十分钟缓存 */
+      lastAccount = await api.account({ force: true });
+      log(lastAccount?.isLogin
+        ? `登录态正常：${lastAccount.uname}`
+        : `没有登录（只能看，不能评论）${lastAccount?.error ? `：${lastAccount.error}` : ''}`);
       syncMeta();
     },
     /**

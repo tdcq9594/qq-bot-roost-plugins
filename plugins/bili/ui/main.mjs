@@ -240,13 +240,20 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
     },
 
     async check_login() {
-      const a = await api.account();
+      /**
+       * **`force: true`**：这个按钮的语义就是「现在到底登没登」，吃 10 分钟
+       * 缓存会把扫码前的旧结果当成现状回给用户 —— 那正是「扫完码提示成功、
+       * 状态卡却一直显示没登录」的直接原因。
+       */
+      const a = await api.account({ force: true });
       const logged = Boolean(a?.isLogin);
       const account = { isLogin: logged, uname: String(a?.uname || '') };
       setMeta({ account });
+      /** 查不到时把真实原因带出来：风控 / 网络和「Cookie 过期」不是一回事 */
+      const why = logged ? '' : String(a?.error || '');
       return {
         ok: true,
-        message: logged ? `已登录：${a.uname}` : '没登录（只能看，不能评论）',
+        message: logged ? `已登录：${a.uname}` : `没登录（只能看，不能评论）${why ? `：${why}` : ''}`,
         data: account,
       };
     },
@@ -365,6 +372,17 @@ export function createActions({ config = {}, secrets = {}, env = {}, log = () =>
           try {
             const p = await qr.poll();
             setMeta({ qr: qrState(p.state, p.message) });
+            /**
+             * 扫码刚把 Cookie 写进 `cookie.txt`：顺手用新身份查一次登录态。
+             *
+             * 不查的话，状态卡那一格还是扫码前的「没登录（只能看）」——
+             * 页面看到的却是「已登录，cookie 已写入」，两句话互相打架，
+             * 用户当然认为没登上。这里也不弹 toast，只是把状态刷成真的。
+             */
+            if (p.state === 'done') {
+              const a = await api.account({ force: true });
+              setMeta({ account: { isLogin: Boolean(a?.isLogin), uname: String(a?.uname || '') } });
+            }
             if (p.state !== 'waiting') stopQrTimer();
           } catch (e) {
             log(`扫码轮询失败：${e?.message ?? e}`);

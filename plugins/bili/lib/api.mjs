@@ -167,6 +167,18 @@ export function createBiliApi({ getCookie = () => '', log = () => {}, fetchImpl 
 
   /** cookie.txt 按 mtime 热读：用户改完文件不用重启扩展。 */
   let cookieCache = { at: 0, file: '', text: '' };
+  /** 上一次真正生效的 Cookie 头；null = 还没比对过 */
+  let activeCookie = null;
+
+  /**
+   * 当前该用的 Cookie 头。
+   *
+   * **身份变了必须让缓存的登录态失效**：`nav` 有 10 分钟缓存，而这个
+   * api 实例在进程内动作里是按扩展文件 mtime 长期复用的（见宿主
+   * `ext-inprocess.js`）。扫码登录把 cookie 写进文件以后，如果缓存还留着
+   * 扫码前那次 `isLogin:false`，面板就会连续十分钟都说「没登录」——
+   * 用户看到的是「扫了码、提示成功，但就是登录不上」。
+   */
   function cookieText() {
     let mtime = 0;
     try { mtime = statSync(cookieFile).mtimeMs; } catch { /* 没有文件就走匿名 */ }
@@ -179,7 +191,15 @@ export function createBiliApi({ getCookie = () => '', log = () => {}, fetchImpl 
       }
     }
     /** 面板里的 secret Cookie 优先；`cookie.txt` 是 0.2 老写法的兼容通道。 */
-    return getCookie() || cookieCache.text || '';
+    const text = getCookie() || cookieCache.text || '';
+    if (activeCookie === null) activeCookie = text;
+    else if (text !== activeCookie) {
+      activeCookie = text;
+      /** 只丢登录态；热门/视频这些与身份无关的缓存留着 */
+      cache.delete('nav');
+      log(`Cookie 变了（${text ? '已登录' : '已清空'}），登录态缓存已失效`);
+    }
+    return text;
   }
 
   const cookieHeader = () => {
@@ -193,6 +213,17 @@ export function createBiliApi({ getCookie = () => '', log = () => {}, fetchImpl 
     if (hit && Date.now() - hit.at < ttl) return hit.value;
     const value = fn();
     cache.set(key, { at: Date.now(), ttl, value });
+    /**
+     * **失败不缓存**：`cached` 存的是 Promise，reject 之后那 10 分钟里
+     * 每次取到的都是同一个 rejected Promise（`account()` 又会把它吞成
+     * 「没登录」）。网络抖一下 = 面板十分钟都说没登录，等于登录不上。
+     */
+    if (value && typeof value.catch === 'function') {
+      value.catch(() => {
+        const cur = cache.get(key);
+        if (cur && cur.value === value) cache.delete(key);
+      });
+    }
     if (cache.size > 200) cache.delete(cache.keys().next().value);
     return value;
   }
@@ -269,8 +300,20 @@ export function createBiliApi({ getCookie = () => '', log = () => {}, fetchImpl 
     }
   }
 
-  /** 登录态 + WBI 签名用的两个 key（没登录也能拿到 key）。 */
-  function nav() {
+  /**
+   * 登录态 + WBI 签名用的两个 key（没登录也能拿到 key）。
+   *
+   * `force: true` 跳过缓存 —— 面板点「检查登录」是用户明确要看**此刻**的
+   * 状态，拿十分钟前的缓存回他等于骗人。wbi key 不受影响（另有时效）。
+   */
+  function nav({ force = false } = {}) {
+    /**
+     * **先比一次 Cookie**：缓存命中时不会发请求，`cookieText()` 也就不会
+     * 被调用；不在这里主动比对，「扫码换了 Cookie」这件事永远发现不了
+     * （要等缓存自己过期）。这一行是让它生效的关键。
+     */
+    cookieText();
+    if (force) cache.delete('nav');
     return cached('nav', 10 * 60_000, async () => {
       const r = await raw('https://api.bilibili.com/x/web-interface/nav');
       const j = await r.json();
@@ -614,7 +657,17 @@ export function createBiliApi({ getCookie = () => '', log = () => {}, fetchImpl 
   return {
     nav, search, searchUser, hot, weekly, view, playurl, subtitle, comments, replyFeed, danmaku, up, bangumi, resolveShort,
     /** 给工具层用的登录态（带 10 分钟缓存）。 */
-    account: () => nav().catch(() => ({ isLogin: false, uname: '', mid: 0, vip: false })),
+    /**
+     * 查登录态。`force` 透传给 `nav`：用户点「检查登录」时不要吃缓存。
+     *
+     * 失败时把原因带出来（`error`），别一律折成 `isLogin:false` ——
+     * 风控期 / 网络不通和「Cookie 过期」在面板上是完全不同的两件事，
+     * 都被写成「没登录」时，用户只会反复扫码。
+     */
+    account: (opts) => nav(opts).catch((e) => ({
+      isLogin: false, uname: '', mid: 0, vip: false,
+      error: String(e?.message || '查不到登录态'),
+    })),
     /** 只读状态：给 --status 自检用。 */
     state: () => ({ hasCookie: Boolean(cookieText()), pausedUntil, cache: cache.size, wbi: Boolean(wbi), buvid: Boolean(buvid) }),
   };

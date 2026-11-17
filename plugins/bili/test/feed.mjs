@@ -310,6 +310,21 @@ test('关键词走 search(keyword,{limit})：以前把对象当关键词，方�
   assert.deepEqual(calls[0][1], { limit: 4 });
 });
 
+test('关键词除换行外还认逗号/顿号/分号：面板那一项是单行输入框', async () => {
+  const calls = [];
+  const feed = createFeed({
+    cfg: { feedActiveHours: '', feedPerRun: 4, feedKeywords: '猫咪，做菜、观鸟;折纸', hotPages: 1 },
+    api: {
+      hot: async () => [],
+      search: async (kw) => { calls.push(kw); return []; },
+      state: () => ({}),
+    },
+    hostState: async () => ({ ok: true }),
+  });
+  await feed.tick('手动');
+  assert.deepEqual(calls, ['猫咪', '做菜', '观鸟', '折纸'], '一行里用分隔符写的多个方向要各自去搜');
+});
+
 test('按来源轮流取：一轮里搜索词和热门各占，不整轮都是同一类', async () => {
   const feed = createFeed({
     cfg: { feedActiveHours: '', feedPerRun: 4, feedKeywords: '猫咪', hotPages: 1 },

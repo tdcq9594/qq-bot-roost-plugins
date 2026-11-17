@@ -74,7 +74,7 @@
     {
       "id": "bili",
       "name": "刷 B 站",
-      "version": "0.11.9",
+      "version": "0.11.10",
       "description": "给模型一双能看 B 站的眼睛：搜视频、看榜单、读字幕与热评、看 UP 主；可填 Cookie 登录、定时刷热门、分享成官方卡片、抽帧。0.5 起「刷 B 站」页就是完整控制台：登录、27 项开关、刷新 / 刷一轮 / 查登录按钮都在页面里；可选把刷到的好视频主动推给主人 / 群，评论 / 点赞 / 弹幕默认试运行。",
       "tags": [
         "B站",
@@ -87,7 +87,7 @@
       "kind": "dsh-extension",
       "runtime": "mcp",
       "path": "plugins/bili",
-      "sha256": "5a61331db06a7049265ceb9f8bd6ed6fca33bf4f296e35bda083b34407ee6881",
+      "sha256": "5c706652c3c2a5cc2319d23bd859f8a2b3c84b0b849e9056cbce9561ba4dcda3",
       "scopes": [
         "memory:write",
         "state:read",
