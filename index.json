@@ -2,7 +2,7 @@
   "schema": 1,
   "repo": "tdcq9594/qq-bot-roost-plugins",
   "branch": "main",
-  "updated": "2026-11-15",
+  "updated": "2026-11-17",
   "plugins": [
     {
       "id": "ai-chat",
@@ -385,6 +385,32 @@
       "runtime": "node",
       "sha256": "12aca28c035e1c43185f4fde25faf404d66e24005ef852a0e8e7cdfa122be7c1",
       "frameworkVersion": ">=0.6.13"
+    },
+    {
+      "id": "persona-grow",
+      "name": "人设生长",
+      "version": "0.5.0",
+      "description": "按真实 QQ 会话慢慢积累有证据的行为习惯，写成一份「成长人格」并切到那个会话；宿主删了内置生长后由扩展自己实现",
+      "author": "haibiandefengshu",
+      "credits": "插件由 haibiandefengshu 提交（PR #13），由维护者用离线私钥重签",
+      "tags": [
+        "人格",
+        "成长",
+        "人设",
+        "会话",
+        "DSH扩展"
+      ],
+      "kind": "dsh-extension",
+      "runtime": "mcp",
+      "scopes": [
+        "state:read",
+        "memory:read",
+        "prompt:write",
+        "agent:write"
+      ],
+      "path": "plugins/persona-grow",
+      "addedAt": "2026-11-17",
+      "sha256": "ede8353d78af05813264e837081ca32937cc86044146483d2e103ac3d06f505b"
     },
     {
       "id": "persona-scope",
