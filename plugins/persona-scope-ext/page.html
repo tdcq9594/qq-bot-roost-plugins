@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>专属人设</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.6 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; margin: 0; padding: 16px 16px 40px; }
+  h2 { font-size: 15px; margin: 20px 0 8px; }
+  h3 { font-size: 13px; margin: 12px 0 6px; color: #888; font-weight: 600; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+  select, input, textarea { padding: 6px 8px; border-radius: 6px; border: 1px solid #8884; background: transparent; color: inherit; font: inherit; }
+  input[type=text] { flex: 1; min-width: 220px; }
+  textarea { width: 100%; min-height: 120px; resize: vertical; font-family: inherit; }
+  button { padding: 6px 14px; border-radius: 6px; border: 1px solid #8884; background: #8881; color: inherit; font: inherit; cursor: pointer; }
+  button:hover { background: #8882; }
+  button.danger { color: #d55; }
+  .muted { color: #888; font-size: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid #8882; vertical-align: top; }
+  code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .card { border: 1px solid #8883; border-radius: 8px; padding: 10px; margin: 8px 0; }
+  #result { margin-top: 12px; white-space: pre-wrap; font-size: 13px; min-height: 20px; }
+  .error { color: #d33; }
+  .ok { color: #2a7; }
+  pre { background: #8881; padding: 8px; border-radius: 6px; max-height: 220px; overflow: auto; white-space: pre-wrap; font-size: 12px; }
+  .note { margin-top: 28px; padding: 12px 14px; border: 1px solid #8883; border-left: 3px solid #6a9; border-radius: 6px; font-size: 12.5px; line-height: 1.7; }
+  .note b { font-size: 13px; }
+  .note table { margin-top: 8px; }
+  .note td, .note th { padding: 3px 6px; }
+</style>
+</head>
+<body>
+
+<div id="brokenWarn" class="note" style="display:none;border-left-color:#d55;margin:0 0 14px">
+  <b>⚠ 有人格带 <code>{{占位符}}</code>，它会让整轮对话<strong>没有任何回复</strong></b>
+  <p style="margin:6px 0 0" id="brokenList"></p>
+  <div class="row"><button id="btnRepair" class="danger">一键修复（渲染成纯文本）</button></div>
+</div>
+
+<p class="muted">
+  绑上之后，这个人在<strong>任何群</strong>都用他那一套人格，别人不受影响。<br>
+  走宿主的「按人指定人格」（<code>persona.bySender</code>），在<strong>系统提示层</strong>生效。
+</p>
+
+<!-- ── 人设卡 ───────────────────────────────────────── -->
+<h2>1. 人设卡</h2>
+<div class="row">
+  <select id="cardSel" style="min-width:220px"></select>
+  <button id="btnCardNew">＋ 新建</button>
+  <button id="btnCardSave">保存</button>
+  <button id="btnCardDel" class="danger">删除</button>
+  <button id="btnPreview">预览拼装结果</button>
+</div>
+<div class="row"><input type="text" id="cardName" placeholder="卡片名（比如：爱莉安娜）"></div>
+<div class="row">
+  <label class="muted"><input type="checkbox" id="cardGrowth"> 这张卡受人设成长影响（叠加成长条目）</label>
+</div>
+<textarea id="cardText" placeholder="卡片正文。按 RP 卡写：角色 / 性格 / 说话方式 / 台词示例&#10;&#10;例：&#10;# 角色设定：爱莉安娜&#10;## 基础信息&#10;- 身份：…目前是对方的恋人&#10;## 性格特征&#10;1. …"></textarea>
+<pre id="preview" hidden></pre>
+
+<!-- ── 预设 ───────────────────────────────────────── -->
+<h2>2. 预设（附加约束）</h2>
+<p class="muted">启用的预设会按顺序接在卡片正文后面，一起生成人格。比如「不要替对方说话」「不要用括号写动作」。</p>
+<div class="row">
+  <select id="presetSel" style="min-width:220px"></select>
+  <button id="btnPresetNew">＋ 新建</button>
+  <button id="btnPresetSave">保存</button>
+  <button id="btnPresetToggle">启用 / 停用</button>
+  <button id="btnPresetDel" class="danger">删除</button>
+</div>
+<div class="row"><input type="text" id="presetName" placeholder="预设名（比如：去ai味）"></div>
+<textarea id="presetText" placeholder="预设正文（可提示词注入）。例：&#10;- 不要替对方补全言行&#10;- 保持角色的说话口吻，不要突然变成客服语气"></textarea>
+
+<!-- ── 应用与绑定 ─────────────────────────────────── -->
+<h2>3. 生成人格并绑给人</h2>
+<div class="row">
+  <input type="text" id="openid" placeholder="那个人的 openid（32 位十六进制），留空只生成人格不绑人">
+  <button id="btnApply">生成并绑定</button>
+  <button id="btnUnbind">解除绑定</button>
+</div>
+<div class="row">
+  <label class="muted" for="userLabel">对方称呼（卡片里的 {{user}}）：</label>
+  <input type="text" id="userLabel" placeholder="默认「对方」；填了就用人设卡里的那个名字" style="max-width:320px">
+</div>
+<div class="row">
+  <label class="muted" for="growthChat">叠加成长（可选）：</label>
+  <select id="growthChat" style="min-width:280px"><option value="">不叠加</option></select>
+  <button id="btnClearGrowth" class="danger">清除该群成长</button>
+</div>
+<p class="muted">
+  选了群之后，那个群的**成长条目**会接在卡片和预设后面一起生成人格（id 带 <code>-grow</code>）。
+  这样即使这个人被按人绑定，成长对他也照样生效——成长扩展本身的数据不会被改动。
+</p>
+<p class="muted">不知道 openid？让他在群里发 <code>/人设 我是谁</code>。</p>
+
+<h2>3.5 与 Roost 插件互通</h2>
+<p class="muted">
+  两边的卡片和预设可以互导：插件配置里的 <code>content</code> / <code>when</code> / <code>targets</code>
+  会被原样保留，导回去不会丢条件。只改 <code>cards</code> / <code>presets</code> 两个键，插件其他设置不碰。
+</p>
+<div class="row">
+  <button id="btnImport">从插件导入</button>
+  <button id="btnExport">导出到插件</button>
+  <span id="interop" class="muted"></span>
+</div>
+
+<h2>3.6 每轮提示词注入（可选）</h2>
+<p class="muted">
+  扩展本身**没有每轮钩子**，做不到每条消息都改一次正文。要那个效果，就把它接上 Roost 插件
+  <code>rp人设</code>：点一下会把卡片与预设同步过去、启用插件并重载。
+  之后插件按自己的规则每轮注入（支持 <code>{{if /正则/}}</code> 条件预设）。
+</p>
+<div class="row">
+  <button id="btnInject">同步到插件并启用每轮注入</button>
+  <span class="muted" id="injectState"></span>
+</div>
+
+<h3>当前的按人绑定</h3>
+<table>
+  <thead><tr><th>openid</th><th>人格</th></tr></thead>
+  <tbody id="bindings"><tr><td colspan="2" class="muted">加载中…</td></tr></tbody>
+</table>
+
+<div id="growth" class="muted" style="margin-top:8px"></div>
+
+<div id="result"></div>
+
+<!-- ── 说明 ───────────────────────────────────────── -->
+<div class="note">
+  <b>本扩展与 Roost 插件「rp人设」的区别</b>
+  <table>
+    <thead><tr><th>对比项</th><th>本扩展（专属人设）</th><th>Roost 插件 rp人设</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>生效层</td>
+        <td><strong>系统提示</strong>（压得住全局人格，不用改全局）</td>
+        <td>消息正文（用户层，权重低于系统提示）</td>
+      </tr>
+      <tr>
+        <td>作用范围</td>
+        <td>这个人，<strong>跨所有群</strong>生效</td>
+        <td>只在指定的群里，只对名单上的人</td>
+      </tr>
+      <tr>
+        <td>预设条件</td>
+        <td>静态：启用就全拼上</td>
+        <td>支持 <code>{{if /正则/}}</code>，按这一轮说的话决定命中</td>
+      </tr>
+      <tr>
+        <td>触发时机</td>
+        <td>点按钮 / 模型调工具时才写一次</td>
+        <td>每条消息都重新判断</td>
+      </tr>
+      <tr>
+        <td>安装</td>
+        <td>放进 <code>extensions/</code>，面板启用</td>
+        <td>放进 <code>plugins/</code>，还要另外装 ai-chat 之类的 AI 插件</td>
+      </tr>
+    </tbody>
+  </table>
+  <p style="margin:10px 0 0">
+    简述：<strong>扩展装完就能用；插件版还要另外装 ai-chat 之类的 AI 插件，而且宿主版本太新时 ai-chat 可能不兼容。</strong>两个都装不冲突——扩展决定他是谁，插件决定这一轮额外说什么。
+  </p>
+  <p style="margin:6px 0 0" class="muted">
+    注意：扩展没有「每轮钩子」，做不到按当句话切换。需要条件分支的预设，请用插件版。
+  </p>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const show = (m, kind) => { $('result').textContent = m || ''; $('result').className = kind || ''; };
+
+let state = { cards: [], presets: [], personas: [], bySender: {} };
+let newCard = false;
+let newPreset = false;
+
+async function act(name, payload) {
+  const r = await fetch('/roost/api/quick', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ op: 'extensions.ui.action', arg: { id: 'persona-scope-ext', action: name, payload: payload || {} }, chatId: '' }),
+  });
+  const out = await r.json().catch(() => null);
+  if (!r.ok || !out) throw new Error((out && (out.message || out.error)) || ('请求失败（HTTP ' + r.status + '）'));
+  if (out.ok === false) throw new Error(out.message || '动作失败');
+  return Object.assign({}, out.data || {}, { message: out.message || '' });
+}
+
+const curCard = () => state.cards.find((c) => c.id === $('cardSel').value) || null;
+const curPreset = () => state.presets.find((p) => p.id === $('presetSel').value) || null;
+
+function renderCards() {
+  const sel = $('cardSel');
+  const keep = newCard ? '' : (sel.value || state.cards[0]?.id || '');
+  sel.innerHTML = state.cards.map((c) =>
+    '<option value="' + c.id + '">' + esc(c.name) + ' · ' + c.chars + ' 字' + (c.enabled === false ? '（停用）' : '') + '</option>').join('')
+    || '<option value="">（还没有人设卡）</option>';
+  if (keep) sel.value = keep;
+  /**
+   * 删掉当前选中的那张后，keep 指向已不存在的 id，浏览器会把 value 置空 ——
+   * 明明还有别的卡，下拉框和编辑区却是空的，点应用会被「先选一张」挡回来。
+   * 这里兜一下：选不中任何一项时退到第一张。
+   */
+  if (!sel.value && state.cards.length) sel.value = state.cards[0].id;
+  fillCard();
+}
+
+function fillCard() {
+  const c = curCard();
+  $('cardName').value = c ? c.name : '';
+  $('cardText').value = c ? c.text : '';
+  $('cardGrowth').checked = Boolean(c && c.growth === true);
+}
+
+function renderPresets() {
+  const sel = $('presetSel');
+  const keep = newPreset ? '' : (sel.value || state.presets[0]?.id || '');
+  sel.innerHTML = state.presets.map((p) =>
+    '<option value="' + p.id + '">' + esc(p.name) + ' · ' + p.chars + ' 字' + (p.enabled === false ? '（停用）' : '') + '</option>').join('')
+    || '<option value="">（还没有预设）</option>';
+  if (keep) sel.value = keep;
+  if (!sel.value && state.presets.length) sel.value = state.presets[0].id;
+  fillPreset();
+}
+
+function fillPreset() {
+  const p = curPreset();
+  $('presetName').value = p ? p.name : '';
+  $('presetText').value = p ? p.text : '';
+}
+
+function renderBindings() {
+  const rows = Object.entries(state.bySender || {});
+  const labelOf = (id) => (state.personas || []).find((p) => p.id === id)?.label || id;
+  const tb = $('bindings');
+  tb.innerHTML = rows.length
+    ? rows.map(([k, v]) => '<tr><td><code>' + k + '</code></td><td>' + esc(labelOf(v)) + ' <span class="muted">(' + esc(v) + ')</span></td></tr>').join('')
+    : '<tr><td colspan="2" class="muted">还没有任何绑定</td></tr>';
+}
+
+function renderGrowthChats(g) {
+  const sel = $('growthChat');
+  if (!sel) return;
+  const keep = sel.value;
+  /**
+   * 下拉列的是「有可用成长条目的群」（pickable），不是「正在用成长人格的群」。
+   * 用 active 会导致：群还在长但已切回普通人格时选不到它。
+   */
+  const rows = (g && (g.pickable || g.active)) || [];
+  sel.innerHTML = '<option value="">不叠加</option>' + rows.map((c) =>
+    '<option value="' + c.chatId + '">' + c.chatId.slice(0, 10) + '… · ' + (c.entries || 0) + ' 条</option>').join('');
+  if (keep) sel.value = keep;
+}
+
+function renderBroken(list) {
+  const box = $('brokenWarn');
+  if (!box) return;
+  const rows = Array.isArray(list) ? list : [];
+  if (!rows.length) { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+  $('brokenList').textContent = rows.map((x) => x.label || x.id).join('、')
+    + '（' + rows.length + ' 份）—— 修复前模型每轮都会失败。';
+}
+
+function renderGrowth(g) {
+  const box = $('growth');
+  if (!g || g.installed === false) { box.textContent = '人设成长扩展：未安装或还没长过，无需处理。'; return; }
+  if (g.error) { box.textContent = '人设成长扩展：' + g.error; return; }
+  const active = g.active || [];
+  if (!active.length) { box.textContent = '人设成长扩展：已安装，当前没有生效中的成长人格。'; return; }
+  box.innerHTML = '人设成长扩展：<strong>' + active.length + ' 个群在用成长人格</strong>。'
+    + '被绑定的 ' + (g.shadowed || []).length + ' 个人在这些群里使用专属人设（按人 &gt; 按群）；'
+    + '要让成长人格对他们生效，解绑即可。';
+}
+
+function renderInterop(io) {
+  const el = $('interop');
+  if (!io) { el.textContent = ''; return; }
+  el.textContent = io.ok
+    ? '插件配置：' + io.pluginPath + '（' + io.pluginCards + ' 张卡 / ' + io.pluginPresets + ' 条预设）'
+    : '插件配置读不到：' + (io.reason || '');
+}
+
+async function interopAct(name) {
+  try {
+    show('处理中…');
+    const d = await act(name, {});
+    show(d.message || '完成', 'ok');
+    await refresh();
+  } catch (e) { show(String(e.message || e), 'error'); }
+}
+
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+async function refresh() {
+  try {
+    const d = await act('status', {});
+    state = { cards: d.cards || [], presets: d.presets || [], personas: d.personas || [], bySender: d.bySender || {} };
+    renderCards(); renderPresets(); renderBindings();
+    renderBroken(d.brokenPersonas);
+    renderGrowth(d.growth);
+    renderGrowthChats(d.growth);
+    renderInterop(d.interop);
+    if (d.hostError) show(d.hostError, 'error');
+    else show('已连接宿主 · 人设卡 ' + state.cards.length + ' 张 · 预设 ' + state.presets.length + ' 条 · 已绑定 ' + Object.keys(state.bySender).length + ' 人', 'ok');
+  } catch (e) { show(String(e.message || e), 'error'); }
+}
+
+/* 卡片 */
+$('btnCardNew').onclick = () => {
+  newCard = true;
+  $('cardSel').value = '';
+  $('cardName').value = '';
+  $('cardText').value = '';
+  $('cardGrowth').checked = false;   // 新建卡默认不叠加成长
+  show('新建卡片：填好名字和正文后点保存', '');
+};
+$('btnCardSave').onclick = async () => {
+  try {
+    const id = newCard ? '' : $('cardSel').value;
+    const name = $('cardName').value.trim();
+    const text = $('cardText').value;
+    if (!name) return show('先填卡片名', 'error');
+    if (!text.trim()) return show('卡片正文不能为空', 'error');
+    const d = await act('saveCard', { id, name, text, growth: $('cardGrowth').checked === true });
+    newCard = false;
+    await refresh();
+    /**
+     * 保存后把选中项切到这张卡。
+     * 不切的话 refresh() 会沿用上一次的选择（通常是第一张），
+     * 用户接着点「生成并绑定」应用的就是**旧卡**。
+     */
+    if (d.id) { $('cardSel').value = d.id; fillCard(); }
+    show('已保存人设卡「' + name + '」', 'ok');
+  } catch (e) { show(String(e.message || e), 'error'); }
+};
+$('btnCardDel').onclick = async () => {
+  const c = curCard(); if (!c) return;
+  if (!confirm('删除人设卡「' + c.name + '」？已生成的人格不受影响。')) return;
+  try { await act('removeCard', { id: c.id }); await refresh(); show('已删除', 'ok'); } catch (e) { show(String(e.message || e), 'error'); }
+};
+$('btnPreview').onclick = async () => {
+  const c = curCard(); if (!c) return show('先选一张人设卡', 'error');
+  try {
+    const d = await act('preview', {
+      cardId: c.id,
+      growthChatId: $('growthChat').value || '',
+      openid: $('openid').value.trim(),
+      userLabel: ($('userLabel')?.value || '').trim(),
+    });
+    $('preview').hidden = false;
+    $('preview').textContent = d.raw || '（空）';
+    show('拼装结果：' + d.chars + ' 字，用到预设：' + ((d.usedPresets || []).join('、') || '无')
+      + (d.growthEntries ? '，叠加成长 ' + d.growthEntries + ' 条' : '')
+      + (d.strippedConditions ? '；' + d.strippedConditions + ' 处 {{if}} 取了 else 分支' : '')
+      + (d.unknownVars && d.unknownVars.length ? '；⚠ 未知占位符已移除：' + d.unknownVars.join('、') : ''), 'ok');
+  } catch (e) { show(String(e.message || e), 'error'); }
+};
+
+/* 预设 */
+$('btnPresetNew').onclick = () => { newPreset = true; $('presetSel').value = ''; $('presetName').value = ''; $('presetText').value = ''; show('新建预设：填好名字和正文后点保存', ''); };
+$('btnPresetSave').onclick = async () => {
+  try {
+    const id = newPreset ? '' : $('presetSel').value;
+    const name = $('presetName').value.trim();
+    const text = $('presetText').value;
+    if (!name) return show('先填预设名', 'error');
+    if (!text.trim()) return show('预设正文不能为空', 'error');
+    const p = curPreset();
+    await act('savePreset', { id, name, text, enabled: newPreset ? true : (p ? p.enabled !== false : true) });
+    newPreset = false;
+    await refresh();
+    show('已保存预设「' + name + '」', 'ok');
+  } catch (e) { show(String(e.message || e), 'error'); }
+};
+$('btnPresetToggle').onclick = async () => {
+  const p = curPreset(); if (!p) return;
+  try { await act('savePreset', { id: p.id, name: p.name, text: p.text, enabled: p.enabled === false }); await refresh(); show('已' + (p.enabled === false ? '启用' : '停用') + '「' + p.name + '」', 'ok'); } catch (e) { show(String(e.message || e), 'error'); }
+};
+$('btnPresetDel').onclick = async () => {
+  const p = curPreset(); if (!p) return;
+  if (!confirm('删除预设「' + p.name + '」？')) return;
+  try { await act('removePreset', { id: p.id }); await refresh(); show('已删除', 'ok'); } catch (e) { show(String(e.message || e), 'error'); }
+};
+
+/* 应用 */
+$('btnApply').onclick = async () => {
+  const c = curCard(); if (!c) return show('先选一张人设卡', 'error');
+  try {
+    show('生成中…');
+    const d = await act('apply', {
+      cardId: c.id,
+      openid: $('openid').value.trim(),
+      growthChatId: $('growthChat').value || '',
+      userLabel: ($('userLabel')?.value || '').trim(),
+    });
+    show(d.message || '完成', 'ok');
+    await refresh();
+  } catch (e) { show(String(e.message || e), 'error'); }
+};
+$('btnUnbind').onclick = async () => {
+  const v = $('openid').value.trim();
+  if (!v) return show('要填那个人的 openid', 'error');
+  try { const d = await act('unbind', { openid: v }); show(d.message || '已解绑', 'ok'); await refresh(); } catch (e) { show(String(e.message || e), 'error'); }
+};
+
+$('btnRepair').onclick = async () => {
+  if (!confirm('把这些人格里的 {{占位符}} 渲染成纯文本？宿主会自动留备份。')) return;
+  try {
+    show('修复中…');
+    const d = await act('repairPersonas', {});
+    show(d.message || '已修复', 'ok');
+    await refresh();
+  } catch (e) { show(String(e.message || e), 'error'); }
+};
+
+$('btnClearGrowth').onclick = async () => {
+  const chatId = $('growthChat').value;
+  if (!chatId) return show('先在「叠加成长」里选一个群', 'error');
+  if (!confirm('清除该群的人设成长？\n\n条目与采样会归零（会留备份），persona-grow 的其余数据不动。')) return;
+  try {
+    const d = await act('clearGrowth', { chatId });
+    show(d.message || '已清除', 'ok');
+    await refresh();
+  } catch (e) { show(String(e.message || e), 'error'); }
+};
+
+$('btnInject').onclick = async () => {
+  if (!confirm('把卡片与预设同步到 Roost 插件并启用每轮注入？\n\n插件会按自己的规则每条消息都注入一次。')) return;
+  try {
+    show('处理中…');
+    const d = await act('enableInjection', {});
+    $('injectState').textContent = d.pluginEnabled ? '已启用' : '未启用（请手动启用）';
+    show(d.message || '完成', d.pluginEnabled ? 'ok' : 'error');
+    await refresh();
+  } catch (e) { show(String(e.message || e), 'error'); }
+};
+
+$('btnImport').onclick = () => {
+  if (!confirm('从 Roost 插件导入卡片与预设？\n\n会补上本地没有的条目；同 id 的**保留本地版本**，不覆盖你的改动。')) return;
+  interopAct('importPlugin');
+};
+$('btnExport').onclick = () => interopAct('exportPlugin');
+
+$('cardSel').onchange = () => { newCard = false; fillCard(); };
+$('presetSel').onchange = () => { newPreset = false; fillPreset(); };
+
+refresh();
+</script>
+</body>
+</html>

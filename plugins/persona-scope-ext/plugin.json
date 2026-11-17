@@ -1,0 +1,101 @@
+{
+  "api": 1,
+  "kind": "dsh-extension",
+  "id": "persona-scope-ext",
+  "serverName": "persona-scope-ext",
+  "name": "专属人设",
+  "description": "给某个人绑定专属人设卡；可叠加该群的人设成长条目，与 Roost 插件互通",
+  "version": "0.7.1",
+  "transport": "stdio",
+  "command": "node",
+  "args": [
+    "server.mjs"
+  ],
+  "scopes": [
+    "state:read",
+    "prompt:write"
+  ],
+  "config": {},
+  "usage": "管理「人设卡」和「预设」，生成人格并绑给某个 openid；卡片可选是否受人设成长影响，支持单独清除某群成长。每轮提示词注入通过同步到 Roost 插件实现（扩展本身没有每轮钩子）。需要 prompt:write 授权。",
+  "ui": {
+    "nav": {
+      "label": "专属人设",
+      "group": "self"
+    },
+    "page": "page.html",
+    "runtime": "inprocess",
+    "entry": "actions.mjs",
+    "actions": [
+      {
+        "id": "status",
+        "label": "读取卡片与绑定"
+      },
+      {
+        "id": "saveCard",
+        "label": "保存人设卡"
+      },
+      {
+        "id": "removeCard",
+        "label": "删除人设卡",
+        "confirm": true
+      },
+      {
+        "id": "savePreset",
+        "label": "保存预设"
+      },
+      {
+        "id": "removePreset",
+        "label": "删除预设",
+        "confirm": true
+      },
+      {
+        "id": "preview",
+        "label": "预览拼装结果"
+      },
+      {
+        "id": "apply",
+        "label": "生成人格并绑定",
+        "confirm": true
+      },
+      {
+        "id": "bind",
+        "label": "绑定已有的人格",
+        "confirm": true
+      },
+      {
+        "id": "unbind",
+        "label": "解除绑定",
+        "confirm": true
+      },
+      {
+        "id": "read",
+        "label": "读取人格正文"
+      },
+      {
+        "id": "importPlugin",
+        "label": "从插件导入",
+        "confirm": true
+      },
+      {
+        "id": "exportPlugin",
+        "label": "导出到插件",
+        "confirm": false
+      },
+      {
+        "id": "clearGrowth",
+        "label": "清除该群成长",
+        "confirm": true
+      },
+      {
+        "id": "enableInjection",
+        "label": "开启每轮注入（走插件）",
+        "confirm": true
+      },
+      {
+        "id": "repairPersonas",
+        "label": "修复带占位符的人格",
+        "confirm": true
+      }
+    ]
+  }
+}

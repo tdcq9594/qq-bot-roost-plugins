@@ -435,6 +435,21 @@
       "frameworkVersion": ">=0.6.18"
     },
     {
+      "id": "persona-scope-ext",
+      "name": "专属人设",
+      "version": "0.7.1",
+      "description": "给某个人绑定专属人设卡；可叠加该群的人设成长条目，与 Roost 插件互通",
+      "tags": [],
+      "kind": "dsh-extension",
+      "runtime": "mcp",
+      "scopes": [
+        "state:read",
+        "prompt:write"
+      ],
+      "path": "plugins/persona-scope-ext",
+      "sha256": "99c12671d39535aa0eb8b42549972ae3d081f2e83cfb05bdd438492cbe23b5a1"
+    },
+    {
       "id": "pixiv-pid",
       "name": "Pixiv 发图",
       "version": "1.0.1",
