@@ -42,13 +42,34 @@ const H = {
 const git = (args, opts = {}) => execFileSync('git', args, { maxBuffer: 256 * 1024 * 1024, ...opts });
 
 async function gh(path, init = {}) {
-  const r = await fetch(`${API}${path}`, { ...init, headers: { ...H, ...(init.headers || {}) } });
+  /**
+   * GET 必须绕缓存。
+   *
+   * 本机代理会缓存 `api.github.com` 的响应，`/git/ref`、`/git/trees` 都是 GET。
+   * 读到过期的 ref，就会拿旧父提交去建新树——远端这期间别人的提交没有进父链，
+   * 文件也从新树里消失，等于**把别人的提交甩掉**。2026-11-17 真踩过：
+   * persona-scope-ext 的 0.6.2 与 0.7.1 被这条路径覆盖掉，事后靠 Git Data API
+   * 按父链重建才接回来。
+   */
+  const method = init.method || 'GET';
+  const url =
+    method === 'GET'
+      ? `${API}${path}${path.includes('?') ? '&' : '?'}t=${Date.now()}`
+      : `${API}${path}`;
+  const r = await fetch(url, {
+    ...init,
+    headers: {
+      ...H,
+      ...(method === 'GET' ? { 'cache-control': 'no-cache', pragma: 'no-cache' } : {}),
+      ...(init.headers || {}),
+    },
+  });
   const text = await r.text();
   let j = null;
   try {
     j = text ? JSON.parse(text) : null;
   } catch {}
-  if (!r.ok) throw new Error(`${init.method || 'GET'} ${path} → ${r.status} ${j?.message || text.slice(0, 200)}`);
+  if (!r.ok) throw new Error(`${method} ${path} → ${r.status} ${j?.message || text.slice(0, 200)}`);
   return j;
 }
 
@@ -110,6 +131,22 @@ async function main() {
   if (changed.length > 20) console.log(`  …还有 ${changed.length - 20} 个`);
   for (const d of deleted.slice(0, 10)) console.log(`  D ${d}`);
 
+  /**
+   * 建提交前再读一次 ref。
+   *
+   * 上面那次读到的 ref 可能已经被代理缓存，也可能这一两秒里别人刚推了一版。
+   * 只要远端动了，就不能再拿手里的旧父提交去建树——那会把中间那些提交连同文件
+   * 一起甩出主线。宁可让这次同步白跑一遍，也不能覆盖别人的提交。
+   */
+  const fresh = await gh(`/git/ref/heads/${BRANCH}`);
+  if (fresh.object.sha !== ref.object.sha) {
+    console.error(
+      `✗ 远端在读树期间前移了：${ref.object.sha.slice(0, 8)} → ${fresh.object.sha.slice(0, 8)}\n` +
+        '  先 git fetch 对齐再重跑；直接推会覆盖别人的提交。',
+    );
+    process.exit(1);
+  }
+
   /* ---- 建 blob（内容必须取自 git 对象，不能读工作区——行尾归一化会改字节） ---- */
   const entries = [];
   for (const c of changed) {
@@ -137,9 +174,16 @@ async function main() {
     }),
   });
 
+  /**
+   * 非快进就让它失败（422），不要 force。
+   *
+   * 新提交的父就是刚读到的 ref，正常情况下这次更新必然是快进；能走到「非快进」
+   * 只有一种情况：读到的 ref 是过期的，中间有人推过。这时候强推 = 覆盖别人的提交，
+   * 宁可报错让人重跑一次。
+   */
   await gh(`/git/refs/heads/${BRANCH}`, {
     method: 'PATCH',
-    body: JSON.stringify({ sha: commit.sha, force: true }),
+    body: JSON.stringify({ sha: commit.sha, force: false }),
   });
 
   /* ---- 回读校验：新树必须和本地一模一样 ---- */
