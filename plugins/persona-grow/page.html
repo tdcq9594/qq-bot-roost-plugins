@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>人设生长</title>
+<style>
+:root{font:14px/1.55 system-ui,sans-serif;color:var(--dsw-alias-label-primary,#eee);background:transparent}html,body{background:transparent}body{margin:0;padding:18px;max-width:760px}h1{font-size:20px;margin:0 0 8px}h2{font-size:15px;margin:24px 0 8px}p{margin:7px 0}.muted{opacity:.72}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}select,button{font:inherit;color:inherit;background:var(--dsw-alias-background-secondary,#32343a);border:1px solid currentColor;border-radius:5px;padding:6px 10px}select{max-width:100%}button{cursor:pointer}button:disabled{opacity:.5;cursor:wait}.entry{padding:8px 0;border-bottom:1px solid color-mix(in srgb,currentColor 20%,transparent)}#result{min-height:22px}#result.error{color:#e97878}.tag{opacity:.6;font-size:12px;margin-left:6px}
+</style></head><body>
+<h1>人设生长</h1>
+<p class="muted">按这个会话最近的真实对话，提炼出「她慢慢形成的习惯」，写成一份<strong>成长人格</strong>（原人格不动），再把这个会话切过去。想还原就点下面的按钮。</p>
+
+<h2>选择会话</h2>
+<div class="row"><select id="chats" aria-label="选择会话"></select><button id="refresh">刷新</button></div>
+<p id="target" class="muted"></p>
+<p id="persona"></p>
+
+<h2>成长状态</h2>
+<p id="state"></p><p id="progress"></p><p id="error" class="muted"></p><div id="entries"></div>
+
+<h2>操作</h2>
+<div class="row"><button id="preview">预览分析（不写入）</button><button id="grow">立刻分析一次</button><button id="restore">清空成长并还原人格</button></div>
+<p id="result" role="status"></p>
+
+<h2>说明</h2>
+<p class="muted">
+  成长结果会写成一份<strong>派生人格</strong>（例如 <code>杂鱼-grow-ab12cd</code>），原人格文件不动。
+  你可以直接在 Roost 面板里编辑它；再次分析时<strong>只替换「慢慢长出来的习惯」那一段</strong>，你手写的其它内容会保留。
+</p>
+<p class="muted">
+  <strong>在 Roost 面板里把这个群切回原人格，只是「临时停用」</strong>：成长条目一条都不会丢，再点一次「立刻分析一次」就会重新生成派生人格并接上。
+  想换个底子也可以先切到别的人格——下次分析会以它为底座重建，条目同样保留。
+</p>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let busy = false;
+
+async function act(name, payload) {
+  const r = await fetch('/roost/api/quick', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ op: 'extensions.ui.action', arg: { id: 'persona-grow', action: name, payload: payload || {} }, chatId: '' }),
+  });
+  const out = await r.json().catch(() => null);
+  /**
+   * 把宿主说的原因原样抛出来。
+   *
+   * 以前只抛「请求失败（HTTP 400）」，而 400 的真实原因（比如「没有声明动作 list」）
+   * 就躺在响应体里 —— 用户看不到，只能靠猜。
+   */
+  if (!r.ok || !out) throw new Error((out && (out.message || out.error)) || ('请求失败（HTTP ' + r.status + '）'));
+  if (out.ok === false) throw new Error(out.message || '动作失败');
+  return out.data || {};
+}
+
+const show = (id, v) => { $(id).textContent = v || ''; };
+const result = (m, err) => { show('result', m); $('result').className = err ? 'error' : ''; };
+
+function prev(id) { return $('chats').value === id; }
+
+async function loadList(force) {
+  try {
+    const d = await act('list', { refresh: force === true });
+    const sel = $('chats'); sel.replaceChildren();
+    for (const g of d.groups || []) {
+      const o = document.createElement('option');
+      o.value = g.chatId; o.textContent = (g.name || '未命名') + ' · ' + String(g.chatId).slice(0, 8);
+      sel.appendChild(o);
+    }
+    if (!sel.options.length) { show('target', '没有可用的群会话（Roost 里还没有群加入）。'); return; }
+    sel.disabled = false;
+    await loadDetail();
+  } catch (e) { show('target', '读取失败：' + e.message); }
+}
+
+async function loadDetail() {
+  const id = $('chats').value; if (!id) return;
+  show('target', '读取中…'); show('entries', '');
+  try {
+    const d = await act('status', { chatId: id });
+    if (!prev(id)) return;
+    if (d.api && d.api !== 'ok') { show('target', '连接异常：' + d.api); return; }
+    show('target', '群 · ' + String(id).slice(0, 12) + '…');
+    show('persona', d.generation ? '已生成过成长人格（第 ' + d.generation + ' 代）。' : '还没生成过成长人格。');
+    show('state', d.paused ? '已暂停。' : d.enabled ? '正在累计。' : '功能已关闭。');
+    const auto = d.auto || {};
+    show('progress', '最近对话 ' + (auto.period ?? 0) + ' 条 · 建议分析门槛 ' + (auto.threshold ?? d.threshold) + ' 条'
+      + (auto.ready ? '（已够，点下面「立刻分析一次」）' : '（还差 ' + (auto.remaining ?? 0) + ' 条）')
+      + ' · 累计 ' + (d.total || 0) + ' 轮');
+    show('error', d.lastError ? '最近错误：' + d.lastError : '');
+    const box = $('entries'); box.replaceChildren();
+    if (!d.entries || !d.entries.length) { box.textContent = '还没有被证据支持的成长条目。'; return; }
+    for (const e of d.entries) {
+      const row = document.createElement('div'); row.className = 'entry';
+      const t = document.createElement('div'); t.textContent = '【' + e.category + '】' + e.text;
+      const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = '成熟度 ' + e.maturity;
+      t.appendChild(tag); row.appendChild(t);
+      if (e.evidence) { const ev = document.createElement('div'); ev.className = 'muted'; ev.textContent = '证据：' + e.evidence; row.appendChild(ev); }
+      box.appendChild(row);
+    }
+  } catch (e) { show('target', '读取失败：' + e.message); }
+}
+
+function setBusy(v) {
+  busy = v;
+  for (const id of ['preview', 'grow', 'restore', 'refresh']) $(id).disabled = v;
+  $('chats').disabled = v;
+}
+
+async function run(name, label) {
+  if (busy) return;
+  const id = $('chats').value; if (!id) return result('先选一个会话', true);
+  const tip = name === 'preview'
+    ? '预览分析？\n会读最近的群聊记录并调用一次模型（消耗额度），但不写入任何状态。'
+    : '分析会读最近的群聊记录并调用一次模型，消耗额度。';
+  if (name !== 'list' && !confirm(label + '？\n' + tip)) return;
+  setBusy(true); result('运行中…');
+  try {
+    const d = await act(name, { chatId: id });
+    result(d.message || (d.skipped ? d.skipped : '完成') || '完成');
+    await loadDetail();
+  } catch (e) { result(e.message, true); }
+  finally { setBusy(false); }
+}
+
+$('refresh').addEventListener('click', () => loadList(true));
+$('chats').addEventListener('change', () => loadDetail());
+$('preview').addEventListener('click', () => run('preview', '预览分析'));
+$('grow').addEventListener('click', () => run('grow', '立刻分析一次'));
+$('restore').addEventListener('click', () => run('restore', '清空成长并还原人格'));
+
+setBusy(true); loadList().finally(() => setBusy(false));
+</script>
+</body></html>
