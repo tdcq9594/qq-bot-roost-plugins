@@ -148,23 +148,6 @@ function currentTriples() {
   }
 }
 
-/** 这个插件目录里有哪些文件（相对路径，排序后用于比对内容） */
-function listFiles(dir, out = [], prefix = '') {
-  let entries;
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return out;
-  }
-  for (const e of entries) {
-    if (e.name === 'node_modules' || e.name === '__pycache__') continue;
-    const rel = prefix ? `${prefix}/${e.name}` : e.name;
-    if (e.isDirectory()) listFiles(path.join(dir, e.name), out, rel);
-    else out.push(rel);
-  }
-  return out.sort();
-}
-
 const problems = [];
 const checked = [];
 
