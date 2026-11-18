@@ -143,6 +143,24 @@ jobs:
         shell: bash
         run: bash scripts/ci-index-staging.sh
 
+      - name: 解析框架已发布版本
+        id: framework
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 取框架 releases/latest 作为「已发布」版本，不再手改下面的 ref。
+          # 钉已发布 tag 而不是 master HEAD 的理由见下面 checkout 的注释。
+          # 以前靠手改，1.0.1/1.0.2/1.0.3 连漏三次，插件测试一直跑在旧框架上。
+          # 仓库 Variables 的 FRAMEWORK_REF 仍是紧急回退开关（见下面 checkout）。
+          ref=$(gh api repos/tdcq9594/qq-bot-roost/releases/latest --jq .tag_name)
+          if [ -z "$ref" ]; then
+            echo "框架 releases/latest 为空，检查框架仓是否建了 Release" >&2
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "插件测试使用框架 $ref"
+
       - name: 取框架（测试夹具在那边）
         uses: actions/checkout@v4
         with:
@@ -151,8 +169,10 @@ jobs:
           # 固定到已发布的框架 tag，而不是默认分支 HEAD。
           # 否则会出现：框架 master 有插件依赖的新能力但还没发布 → 插件 CI 假绿，
           # 用户装到旧版运行时坏；或 master 瞬时坏掉 → 插件 CI 假红。
-          # **每次发框架新版都要改这里**（或设仓库 Variables 的 FRAMEWORK_REF 覆盖）。
-          # 当前对应框架 v1.1.5（OneBot 独占模式只放行绑定四条命令；1.1.4 配置页
+          # 版本由上一步从 releases/latest 解析，不用手改；设仓库 Variables 的
+          # FRAMEWORK_REF 可紧急覆盖（框架发了问题版时钉回旧 tag）。
+          # 版本沿革（只是历史记录，不再影响 ref）：
+          # v1.1.5（OneBot 独占模式只放行绑定四条命令；1.1.4 配置页
           # 扫码换凭证；1.1.3 起 rpc 错误透传 `qqCode`、
           # 新增协议方法 `qr.svg`；1.1.2 起面板「查询」页与宿主账本两条协议方法。
           # 1.1.0 起四态：群 / 单聊 / 频道 / 频道私信；94 个官方端点，
@@ -169,7 +189,7 @@ jobs:
           # v1.0.7 起有 msg_type=8 图文卡片 replyTuwen；v1.0.6 起富媒体发图不带占位空格；
           # v1.0.4 起消息带 uin / userAliases，被动回复上限群 5 / 单聊 4，
           # ai-chat 4.4.5 依赖它。v1.0.8 修的是 1.0.7 实例锁判活回归。
-          ref: ${{ vars.FRAMEWORK_REF || 'v1.1.5' }}
+          ref: ${{ vars.FRAMEWORK_REF || steps.framework.outputs.ref }}
 
       - name: 跑插件测试
         shell: bash
