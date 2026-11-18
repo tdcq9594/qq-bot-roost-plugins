@@ -67,7 +67,11 @@ export function createActions({ env = {}, log = () => {} } = {}) {
       /** 带 {{…}} 的人格会让整轮没有回复，必须主动报出来 */
       let broken = { ok: true, total: 0, broken: [] };
       try { broken = await ops.scanBrokenPersonas(); } catch { /* 读不到就跳过 */ }
-      return { ok: true, ...local, ...host, api: 'ok', growth, interop, brokenPersonas: broken.broken };
+      return {
+        ok: true, ...local, ...host, api: 'ok', growth, interop,
+        brokenPersonas: broken.broken,
+        legacyBindings: ops.legacyBindings({ bySender: host.bySender || {} }),
+      };
     }),
 
     saveCard: wrap(async (p) => { setApiEnv(env); return ops.saveCard(p); }),

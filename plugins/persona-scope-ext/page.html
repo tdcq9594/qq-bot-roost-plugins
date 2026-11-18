@@ -116,6 +116,8 @@
   <span class="muted" id="injectState"></span>
 </div>
 
+<p class="muted" id="legacyHint" style="display:none"></p>
+
 <h3>当前的按人绑定</h3>
 <table>
   <thead><tr><th>openid</th><th>人格</th></tr></thead>
@@ -254,6 +256,16 @@ function renderGrowthChats(g) {
   if (keep) sel.value = keep;
 }
 
+function renderLegacy(list) {
+  const el = $('legacyHint');
+  if (!el) return;
+  const rows = Array.isArray(list) ? list : [];
+  if (!rows.length) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.textContent = '有 ' + rows.length + ' 条绑定还指向旧规则生成的人格（' + rows.map((r) => r.personaId).join('、')
+    + '）。它们仍然生效；想迁到新规则，对那个人再点一次「生成并绑定」即可。';
+}
+
 function renderBroken(list) {
   const box = $('brokenWarn');
   if (!box) return;
@@ -300,6 +312,7 @@ async function refresh() {
     state = { cards: d.cards || [], presets: d.presets || [], personas: d.personas || [], bySender: d.bySender || {} };
     renderCards(); renderPresets(); renderBindings();
     renderBroken(d.brokenPersonas);
+    renderLegacy(d.legacyBindings);
     renderGrowth(d.growth);
     renderGrowthChats(d.growth);
     renderInterop(d.interop);

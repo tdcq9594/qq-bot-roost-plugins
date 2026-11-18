@@ -279,6 +279,26 @@ export async function exportToPlugin() {
  * 这类人格会让 DSH 的提示词渲染失败 **整轮没有回复**，而且没有任何报错——
  * 用户只看到「不说话了」。所以状态页要主动报出来，并提供一键修复。
  */
+/**
+ * 找「按人绑定仍然指向旧规则 id」的条目。
+ *
+ * 0.8.0 起人格 id 带发送者（`scope-<卡>…-<openid>`），而升级前生成的是
+ * `scope-<卡>`。这种绑定**还能用**（人格确实存在），只是：
+ *   · 重绑同一个人的时候会生成一个新的人格，旧的那份变成孤儿
+ *   · 两个人先后用同一张卡时，旧规则那份可能被别人覆盖过
+ * 所以状态里标出来，提示重新应用一次即可迁移。
+ */
+export function legacyBindings({ bySender = {} } = {}) {
+  const out = [];
+  for (const [openid, pid] of Object.entries(bySender || {})) {
+    const id = String(pid || '');
+    if (!id.startsWith(GEN_PREFIX)) continue;          // 用户自制的人格不算
+    if (id.toUpperCase().endsWith(String(openid).toUpperCase())) continue; // 新规则：带发送者
+    out.push({ openid, personaId: id });
+  }
+  return out;
+}
+
 export async function scanBrokenPersonas() {
   const st = await statusOf({});
   const broken = [];
