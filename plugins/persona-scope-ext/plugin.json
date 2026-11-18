@@ -5,7 +5,7 @@
   "serverName": "persona-scope-ext",
   "name": "专属人设",
   "description": "给某个人绑定专属人设卡；可叠加该群的人设成长条目，与 Roost 插件互通",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "transport": "stdio",
   "command": "node",
   "args": [

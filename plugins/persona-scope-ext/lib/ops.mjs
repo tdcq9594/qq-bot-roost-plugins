@@ -54,10 +54,10 @@ function shortHash(text, hex = 16) {
  *
  * 拼法（长的那部分才压缩）：
  *
- *   `scope-<卡片>[-g<群哈希8>]-<完整发送者openid>`
+ *   `scope-<卡片>[-g<群哈希8–12>]-<完整发送者openid>`
  *
  * - **发送者用完整 openid**：它是「专属」的唯一标识，截断就会串人
- * - 群用 8 位哈希（32 位空间）：同一个人 + 同一张卡下才需要区分群，量很小
+ * - 群哈希按剩余长度自适应为 8–12 位 hex；同一个人 + 同一张卡下区分群
  * - 卡片放不下时换成 `h<8位哈希>`，保证总长不超 60
  */
 export function genPersonaId({ cardId = '', chatId = '', senderId = '' } = {}) {
@@ -75,9 +75,36 @@ export function genPersonaId({ cardId = '', chatId = '', senderId = '' } = {}) {
     return `${GEN_PREFIX}${shortHash(`${card}|${chat}`, 24)}`;
   }
 
-  const chatPart = chat ? `-g${shortHash(chat, 8)}` : '';
-  const budget = MAX_PERSONA_ID - GEN_PREFIX.length - 1 - sender.length - chatPart.length;
-  const cardPart = card.length <= budget ? card : `h${shortHash(card, 8)}`;
+  /**
+   * 位宽按**剩余预算**给，能长就长。
+   *
+   * 固定 8 位 hex（32 位）是我一开始的取舍：同一人 + 同一张卡下群的个数通常只有
+   * 个位数，直接碰撞概率 ≈ k²/2³³（k=10 时约 1e-8），够用但不够漂亮。
+   * 既然 60 字符的预算本来就是共享的，就把没用完的那几位给群哈希：
+   *
+   *   6(前缀) + 1(分隔) + 32(发送者) = 39，剩 **21 字符** 分给「卡片 + 群哈希」
+   *
+   * 优先保证卡片可读（≤11 字时原样保留），剩下的位宽给群哈希，上限 12 位 hex
+   * （48 位空间）；卡片太长需要压成 `h`+8 位时，群哈希退到 10 位（40 位空间）。
+   *
+   * 无论哪种，**至少 8 位**，所以不会比原来更弱。
+   */
+  const room = MAX_PERSONA_ID - GEN_PREFIX.length - 1 - sender.length;
+  let cardPart;
+  let chatWidth = 0;
+  if (!chat) {
+    cardPart = card.length <= room ? card : `h${shortHash(card, 8)}`;
+  } else {
+    const readableWidth = room - 2 - card.length;
+    if (readableWidth >= 8) {
+      cardPart = card;
+      chatWidth = Math.min(12, readableWidth);
+    } else {
+      cardPart = `h${shortHash(card, 8)}`;
+      chatWidth = Math.min(12, room - 2 - cardPart.length);
+    }
+  }
+  const chatPart = chat ? `-g${shortHash(chat, chatWidth)}` : '';
   const id = `${GEN_PREFIX}${cardPart}${chatPart}-${sender}`;
   if (id.length <= MAX_PERSONA_ID) return id;
   // 极端：发送者本身特别长，退回全哈希
