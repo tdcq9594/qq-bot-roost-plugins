@@ -1,0 +1,64 @@
+{
+  "api": 1,
+  "kind": "dsh-extension",
+  "id": "sticker-reply",
+  "serverName": "sticker-reply",
+  "name": "表情标注",
+  "description": "管理表情库与逐张标注，导出带标签的图库给宿主内置表情功能发图；可用一次独立模型判断这一轮是否只发图",
+  "version": "0.2.7",
+  "transport": "stdio",
+  "command": "node",
+  "args": [
+    "server.mjs"
+  ],
+  "scopes": [
+    "state:read",
+    "agent:write"
+  ],
+  "config": {},
+  "usage": "依赖宿主开启内置表情并添加本扩展导出的图库。覆盖内置“文字照常写”的建议：一张图能完整回应时，最终回复仅含一个 <<image-alone: 完整路径>>，不配文字或动作，也不调用 qq_send；要知识、数据、命令和任务结果时正常回答。拿不准时调用 sticker_decide。",
+  "ui": {
+    "nav": {
+      "label": "表情标注",
+      "group": "express"
+    },
+    "page": "page.html",
+    "runtime": "inprocess",
+    "entry": "actions-builtin-v5.mjs",
+    "actions": [
+      {
+        "id": "list",
+        "label": "读取表情列表"
+      },
+      {
+        "id": "thumb",
+        "label": "读取缩略图"
+      },
+      {
+        "id": "save",
+        "label": "保存标注"
+      },
+      {
+        "id": "settings",
+        "label": "读取/保存设置"
+      },
+      {
+        "id": "rescan",
+        "label": "重新扫描"
+      },
+      {
+        "id": "test",
+        "label": "匹配测试"
+      },
+      {
+        "id": "exportLibrary",
+        "label": "导出内置图库",
+        "confirm": true
+      },
+      {
+        "id": "dependency",
+        "label": "检查内置表情依赖"
+      }
+    ]
+  }
+}
