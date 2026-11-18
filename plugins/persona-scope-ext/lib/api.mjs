@@ -69,11 +69,37 @@ export function apiWhy() {
 }
 
 /** 从 secrets 目录读最新令牌：轮换后 env 可能是旧的，这条路上永远是新的 */
+/** 本扩展的 id：以 plugin.json 为准，环境变量只在没读到清单时才用 */
+function ownExtId() {
+  if (OWN_ID) return OWN_ID;
+  try {
+    const j = JSON.parse(readFileSync(new URL('../plugin.json', import.meta.url), 'utf8'));
+    return String(j?.id || '');
+  } catch { return ''; }
+}
+
+/**
+ * 令牌轮换后从 secrets 里取新的。
+ *
+ * **必须校验 extId**：它来自环境变量，一旦被污染（或宿主换了注入方式），
+ * 这里就会读到**别的扩展**的令牌——带着别人的权限去调宿主。
+ * 所以只有 `ROOST_EXT_ID` 与本扩展 id 一致时才读。
+ */
+let OWN_ID = '';
+
+export function setOwnExtId(id) { OWN_ID = String(id || '').trim(); }
+
 function tokenFromSecrets() {
   const { launcherDir, extId } = cfg();
   if (!launcherDir || !extId) return '';
+  const own = ownExtId();
+  if (!own) return '';
+  if (extId !== own) {
+    try { process.stderr.write(`[persona-scope] 忽略不匹配的扩展 id：${extId}（本扩展是 ${own}）\n`); } catch { /* 忽略 */ }
+    return '';
+  }
   try {
-    const j = JSON.parse(readFileSync(join(launcherDir, 'secrets', `${extId}.json`), 'utf8'));
+    const j = JSON.parse(readFileSync(join(launcherDir, 'secrets', `${own}.json`), 'utf8'));
     return String(j?.token || '');
   } catch { return ''; }
 }
