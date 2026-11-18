@@ -43,40 +43,72 @@ function shortHash(text, hex = 16) {
 }
 
 /**
- * 生成人格 id —— **必须同时满足三件事**：
+ * 生成人格 id —— 必须同时满足：
  *
- *   1. **不超过 60 字符**（宿主上限；超了 `personas/create` 直接 400）
- *   2. **不同群不碰撞**（碰撞的后果是覆盖已绑定用户的正文）
- *   3. **同卡同群幂等**（重复应用是更新，不是新建）
+ *   1. **≤ 60 字符**（宿主上限，超了 `personas/create` 直接 400）
+ *   2. **不同人、不同群都不碰撞**（碰撞 = 覆盖别人正在用的正文）
+ *   3. **同人同卡同群幂等**（重复应用是更新，不是新建）
  *
- * 拼法是：能读就读
+ * 这是「专属人设」，所以 **发送者必须进 id**。以前只有卡片和群，
+ * 同一张卡给两个人用会得到同一个 id，第二个人的称呼会覆盖第一个人的正文。
  *
- *   `scope-<卡片id>[-grow-<群openid>]`
+ * 拼法（长的那部分才压缩）：
  *
- * 放不下时把**卡片那一截**换成 16 位哈希（64 位空间），群号仍然保留完整：
+ *   `scope-<卡片>[-g<群哈希8–12>]-<完整发送者openid>`
  *
- *   `scope-<hash16>[-grow-<群openid>]`  → 6+16+6+32 = 60，刚好卡在上限
- *
- * 群号一直用完整的（它本身唯一，截断必碰撞）；卡片部分才做哈希，
- * 因为卡片 id 再长也不影响「不同群」的区分度。
+ * - **发送者用完整 openid**：它是「专属」的唯一标识，截断就会串人
+ * - 群哈希按剩余长度自适应为 8–12 位 hex；同一个人 + 同一张卡下区分群
+ * - 卡片放不下时换成 `h<8位哈希>`，保证总长不超 60
  */
-export function genPersonaId({ cardId = '', chatId = '' } = {}) {
+export function genPersonaId({ cardId = '', chatId = '', senderId = '' } = {}) {
   const card = String(cardId || '').trim();
   const chat = String(chatId || '').trim().toUpperCase();
-  const tail = chat ? `-grow-${chat}` : '';
+  const sender = String(senderId || '').trim().toUpperCase();
 
-  const readable = `${GEN_PREFIX}${card}${tail}`;
-  if (readable.length <= MAX_PERSONA_ID) return readable;
-
-  const hashed = `${GEN_PREFIX}${shortHash(card)}${tail}`;
-  if (hashed.length <= MAX_PERSONA_ID) return hashed;
+  // 没有发送者：保持旧规则（用于兼容既有 id 与「只生成不绑定」的场景）
+  if (!sender) {
+    const tail = chat ? `-grow-${chat}` : '';
+    const readable = `${GEN_PREFIX}${card}${tail}`;
+    if (readable.length <= MAX_PERSONA_ID) return readable;
+    const hashed = `${GEN_PREFIX}${shortHash(card)}${tail}`;
+    if (hashed.length <= MAX_PERSONA_ID) return hashed;
+    return `${GEN_PREFIX}${shortHash(`${card}|${chat}`, 24)}`;
+  }
 
   /**
-   * 极端情况：群号本身长到连哈希版都放不下（非 QQ 的频道 id 可能很长）。
-   * 这时把「卡片 + 群」一起哈希 —— 用 24 位（96 位空间）换确定性，
-   * 代价是 id 不再可读。
+   * 位宽按**剩余预算**给，能长就长。
+   *
+   * 固定 8 位 hex（32 位）是我一开始的取舍：同一人 + 同一张卡下群的个数通常只有
+   * 个位数，直接碰撞概率 ≈ k²/2³³（k=10 时约 1e-8），够用但不够漂亮。
+   * 既然 60 字符的预算本来就是共享的，就把没用完的那几位给群哈希：
+   *
+   *   6(前缀) + 1(分隔) + 32(发送者) = 39，剩 **21 字符** 分给「卡片 + 群哈希」
+   *
+   * 优先保证卡片可读（≤11 字时原样保留），剩下的位宽给群哈希，上限 12 位 hex
+   * （48 位空间）；卡片太长需要压成 `h`+8 位时，群哈希退到 10 位（40 位空间）。
+   *
+   * 无论哪种，**至少 8 位**，所以不会比原来更弱。
    */
-  return `${GEN_PREFIX}${shortHash(`${card}|${chat}`, 24)}`;
+  const room = MAX_PERSONA_ID - GEN_PREFIX.length - 1 - sender.length;
+  let cardPart;
+  let chatWidth = 0;
+  if (!chat) {
+    cardPart = card.length <= room ? card : `h${shortHash(card, 8)}`;
+  } else {
+    const readableWidth = room - 2 - card.length;
+    if (readableWidth >= 8) {
+      cardPart = card;
+      chatWidth = Math.min(12, readableWidth);
+    } else {
+      cardPart = `h${shortHash(card, 8)}`;
+      chatWidth = Math.min(12, room - 2 - cardPart.length);
+    }
+  }
+  const chatPart = chat ? `-g${shortHash(chat, chatWidth)}` : '';
+  const id = `${GEN_PREFIX}${cardPart}${chatPart}-${sender}`;
+  if (id.length <= MAX_PERSONA_ID) return id;
+  // 极端：发送者本身特别长，退回全哈希
+  return `${GEN_PREFIX}${shortHash(`${card}|${chat}|${sender}`, 24)}`;
 }
 
 export function checkOpenid(raw) {
@@ -138,14 +170,61 @@ export async function importFromPlugin({ replace = false } = {}) {
   };
 }
 
-/** Roost 面板端口：从框架自己的 ports.json 读，读不到退回 8080 */
+/**
+ * Roost 面板端口：只信框架自己写的 `ports.json`。
+ *
+ * 读不到就**返回 null，绝不猜 8080** —— 8080 太常见（Steam 的 CEF 调试口也在用），
+ * 猜错会把「启用插件」「写配置」这类写请求打到别人家的服务上。
+ */
 function roostPort() {
   try {
     const root = String(process.env.ROOST_LAUNCHER_DIR || join(homedir(), '.dsh', 'dsh-roost'));
     const j = JSON.parse(readFileSync(join(root, 'roost', 'data', 'ports.json'), 'utf8'));
     const p = Number(j?.roost?.actual) || Number(j?.roost?.want) || 0;
-    return p > 0 ? p : 8080;
-  } catch { return 8080; }
+    return p > 0 ? p : null;
+  } catch { return null; }
+}
+
+/** 面板访问密钥（框架 `config/bot.json` 的 `webui.accessKey`，没设就是空） */
+function panelKey() {
+  try {
+    const root = String(process.env.ROOST_LAUNCHER_DIR || join(homedir(), '.dsh', 'dsh-roost'));
+    const j = JSON.parse(readFileSync(join(root, 'roost', 'config', 'bot.json'), 'utf8'));
+    return String(j?.webui?.accessKey || j?.webui?.token || '');
+  } catch { return ''; }
+}
+
+/**
+ * 调面板的写接口。
+ *
+ * 两个坑都在这一个函数里堵掉：
+ *   · 端口缺失 → 直接放弃（不猜）
+ *   · 面板设了 accessKey → 带上 `X-Access-Key`，否则必然 401
+ * 失败时把 **HTTP 状态**带回给调用方，而不是吞成 false。
+ */
+async function panelCall(path, { method = 'POST', body = {} } = {}) {
+  const port = roostPort();
+  if (!port) return { ok: false, status: 0, reason: '读不到 Roost 面板端口（ports.json），请在面板里手动操作' };
+  const key = panelKey();
+  const headers = { 'content-type': 'application/json' };
+  if (key) headers['x-access-key'] = key;
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+      method,
+      headers,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(8000),
+    });
+    const j = await res.json().catch(() => null);
+    return {
+      ok: res.ok && j?.ok !== false,
+      status: res.status,
+      json: j,
+      reason: res.ok ? (j?.ok === false ? '面板返回失败' : '') : `面板返回 HTTP ${res.status}${res.status === 401 ? '（访问密钥不匹配）' : ''}`,
+    };
+  } catch (e) {
+    return { ok: false, status: 0, reason: `面板连不上：${e?.message ?? e}` };
+  }
 }
 
 /**
@@ -163,39 +242,23 @@ function roostPort() {
  */
 export async function enableInjectionChannel() {
   const r = await exportToPlugin();
-  const port = roostPort();
   const q = r.botId ? `?bot=${encodeURIComponent(r.botId)}` : '';
 
   /**
    * **两个开关是两件事**：框架「启用插件」（加载它）和插件配置里的 `enabled`
    * （它内部 `if (!c.enabled) return` 的闸门）。只打开前者，注入照样被跳过。
-   * 所以先写配置，再开框架开关，最后重载并回读确认。
    */
-  let configEnabled = false;
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/plugins/persona-scope/config${q}`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ enabled: true }),
-      signal: AbortSignal.timeout(8000),
-    });
-    const j = await res.json().catch(() => null);
-    configEnabled = Boolean(res.ok && (j?.config?.enabled === true || j?.ok === true));
-  } catch { configEnabled = false; }
+  const cfg = await panelCall(`/api/plugins/persona-scope/config${q}`, {
+    method: 'PUT',
+    body: { enabled: true },
+  });
+  const configEnabled = Boolean(cfg.ok && (cfg.json?.config?.enabled === true || cfg.json?.ok === true));
 
-  let enabled = false;
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/plugins/persona-scope/enable${q}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: '{}',
-      signal: AbortSignal.timeout(8000),
-    });
-    const j = await res.json().catch(() => null);
-    enabled = Boolean(res.ok && j?.ok !== false);
-  } catch { enabled = false; }
+  const en = await panelCall(`/api/plugins/persona-scope/enable${q}`, { method: 'POST', body: {} });
+  const enabled = Boolean(en.ok);
 
   const done = enabled && configEnabled;
+  const why = (!cfg.ok && cfg.reason) || (!en.ok && en.reason) || '';
   return {
     ok: true,
     ...r,
@@ -204,29 +267,20 @@ export async function enableInjectionChannel() {
     note: done
       ? '已开启每轮注入：卡片与预设同步到 Roost 插件，框架开关与插件内 enabled 都已打开'
       : enabled && !configEnabled
-        ? '插件已被框架加载，但插件内部的「启用」没能改成功——请到插件设置里勾上「启用」，否则它仍会跳过注入'
-        : '卡片与预设已同步到插件，但没能自动启用——请到面板的插件列表里手动启用「rp人设」',
+        ? `插件已被框架加载，但插件内部的「启用」没能改成功（${cfg.reason || '未知原因'}）——请到插件设置里勾上「启用」，否则它仍会跳过注入`
+        : `卡片与预设已同步到插件，但没能自动启用${why ? `：${why}` : ''}——请到面板的插件列表里手动启用「rp人设」`,
   };
 }
 
 async function reloadPlugin(botId = '') {
-  const port = roostPort();
   /**
    * **必须带 `?bot=`**：Roost 面板用 `pickRuntime(url)` 选机器人，不带就永远落到
    * `runtimes[0]`。多只鸟时会出现「写的是第二只的配置、重载的是第一只」——
    * 目标那只的插件内存还是旧的，用户下一次保存就把导出冲掉。
    */
   const q = botId ? `?bot=${encodeURIComponent(botId)}` : '';
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/plugins/persona-scope/reload${q}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: '{}',
-      signal: AbortSignal.timeout(8000),
-    });
-    const j = await res.json().catch(() => null);
-    return Boolean(res.ok && j?.ok !== false);
-  } catch { return false; }
+  const r = await panelCall(`/api/plugins/persona-scope/reload${q}`, { method: 'POST', body: {} });
+  return r.ok;
 }
 
 /** 导出到 Roost 插件配置（只改 cards / presets，其他设置原样保留） */
@@ -252,6 +306,26 @@ export async function exportToPlugin() {
  * 这类人格会让 DSH 的提示词渲染失败 **整轮没有回复**，而且没有任何报错——
  * 用户只看到「不说话了」。所以状态页要主动报出来，并提供一键修复。
  */
+/**
+ * 找「按人绑定仍然指向旧规则 id」的条目。
+ *
+ * 0.8.0 起人格 id 带发送者（`scope-<卡>…-<openid>`），而升级前生成的是
+ * `scope-<卡>`。这种绑定**还能用**（人格确实存在），只是：
+ *   · 重绑同一个人的时候会生成一个新的人格，旧的那份变成孤儿
+ *   · 两个人先后用同一张卡时，旧规则那份可能被别人覆盖过
+ * 所以状态里标出来，提示重新应用一次即可迁移。
+ */
+export function legacyBindings({ bySender = {} } = {}) {
+  const out = [];
+  for (const [openid, pid] of Object.entries(bySender || {})) {
+    const id = String(pid || '');
+    if (!id.startsWith(GEN_PREFIX)) continue;          // 用户自制的人格不算
+    if (id.toUpperCase().endsWith(String(openid).toUpperCase())) continue; // 新规则：带发送者
+    out.push({ openid, personaId: id });
+  }
+  return out;
+}
+
 export async function scanBrokenPersonas() {
   const st = await statusOf({});
   const broken = [];
@@ -271,7 +345,7 @@ export async function scanBrokenPersonas() {
  * 且这份人格可能被整个群共用，不能绑死在某一个 openid 上）。
  * 写前由宿主自己留备份（`personas/.backup`）。
  */
-export async function repairPersonas({ dryRun = false, userId = '' } = {}) {
+export async function repairPersonas({ dryRun = true, userId = '' } = {}) {
   const { broken } = await scanBrokenPersonas();
   if (!broken.length) return { ok: true, fixed: 0, items: [], note: '没有发现带占位符的人格' };
 
@@ -398,7 +472,7 @@ export function composeRaw({ card, presets = [], vars = {}, openid = '' } = {}) 
 }
 
 /** 预览：不发写请求，让用户看清楚会生成什么 */
-export function previewOf({ cardId, growthChatId = '', openid = '', userLabel = '' } = {}) {
+export function previewOf({ cardId, growthChatId = '', openid = '', userLabel = '', senderId = '' } = {}) {
   const st = loadState();
   const card = pick(st, 'cards', String(cardId ?? '').trim());
   if (!card) throw new Error('没找到这张人设卡');
@@ -444,7 +518,7 @@ export function previewOf({ cardId, growthChatId = '', openid = '', userLabel = 
 
   return {
     ok: true,
-    id: genPersonaId({ cardId: card.id, chatId: growth.text ? growth.chatId : '' }),
+    id: genPersonaId({ cardId: card.id, chatId: growth.text ? growth.chatId : '', senderId: String(senderId || openid || '').trim() }),
     label: card.name + (growth.text ? '（含成长）' : ''),
     needsGrowthChat,
     chars: raw.length,
@@ -477,7 +551,7 @@ export async function applyCard({ cardId = '', openid = '', personaId = '', grow
    * 函数确实报错了，但原先绑定者正在用的那份人格正文已经被覆盖掉了 ——
    * 用户看到的是「报错」，实际已经改了别人的设定。
    */
-  const pv = previewOf({ cardId, growthChatId, openid, userLabel });
+  const pv = previewOf({ cardId, growthChatId, openid, userLabel, senderId: openid });
   /**
    * 卡片要求叠加成长，但群没定下来（多个群在长）→ **拒绝执行**。
    * 以前只把警告放在预览字段里，应用仍会静默生成一份不含成长的人格并绑上去，

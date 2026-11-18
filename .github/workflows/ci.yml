@@ -7,6 +7,9 @@ name: CI
 #   1. 语法别写错
 #   2. 改了内容要升版本号（市场只比版本号，不升版等于没发）
 #   3. 索引和插件目录对得上（sha256 一致）
+#   4. 投稿 PR 按约定不碰签名链，索引必然暂时漂移。此时在 CI 的**临时副本**里
+#      重建索引来跑一致性/契约检查；正式 index.json / .sig 永远只验、不改写。
+#      重签仍由 sign-index.yml 在 release-signing 里经人工批准后进行。
 
 on:
   push:
@@ -30,6 +33,23 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22.x'
+
+      - name: 计算索引检查基准
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "CI_BASE_REF=origin/${{ github.base_ref }}" >> "$GITHUB_ENV"
+          else
+            before="${{ github.event.before }}"
+            if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
+              before=HEAD
+            fi
+            echo "CI_BASE_REF=$before" >> "$GITHUB_ENV"
+          fi
+
+      - name: 准备索引（漂移时用临时副本）
+        shell: bash
+        run: bash scripts/ci-index-staging.sh
 
       - name: 语法检查
         shell: bash
@@ -65,9 +85,11 @@ jobs:
         shell: bash
         # 索引里的 sha256 必须和插件目录的真实内容对得上，
         # 否则用户装的时候会校验失败（那是我们自己的错，不该让用户撞上）。
-        # 哈希算法在 scripts/build-index.mjs 里，和框架的 src/hashdir.js 同一套；
-        # 以前这段是内联在 yml 里的第二份实现，两份漏改一边就会互相打架。
-        run: node scripts/build-index.mjs --check
+        # 漂移时 ci-index-staging.sh 已准备好临时重建索引，这里验的是它；
+        # 正式索引是否漂移由上面的准备步骤发 warning，不再让 PR 假红。
+        run: |
+          cd "${CI_INDEX_DIR:-$GITHUB_WORKSPACE}"
+          node scripts/build-index.mjs --check
 
       - name: 索引签名有效
         shell: bash
@@ -79,7 +101,11 @@ jobs:
         #
         # 这里用的是**公钥**（仓库根的 trust-public.pem，可以公开）；
         # 私钥只在发版的人手里，`keys/` 已在 .gitignore 里。
-        run: node scripts/sign-index.mjs --verify --key trust-public.pem
+        # 注意：即使上面用了临时索引，这一步也**始终验仓库里那份正式索引**，
+        # 临时索引没有签名，拿它验签等于没验。
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          node scripts/sign-index.mjs --verify --key trust-public.pem
 
   # 插件自己的断言测试。
   #
@@ -91,11 +117,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # ci-index-staging.sh 要用 git diff 判断 PR 有没有碰签名链
+          fetch-depth: 0
 
       - name: 装 Node
         uses: actions/setup-node@v4
         with:
           node-version: '22.x'
+
+      - name: 计算索引检查基准
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "CI_BASE_REF=origin/${{ github.base_ref }}" >> "$GITHUB_ENV"
+          else
+            before="${{ github.event.before }}"
+            if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
+              before=HEAD
+            fi
+            echo "CI_BASE_REF=$before" >> "$GITHUB_ENV"
+          fi
+
+      - name: 准备索引（漂移时用临时副本）
+        shell: bash
+        run: bash scripts/ci-index-staging.sh
 
       - name: 取框架（测试夹具在那边）
         uses: actions/checkout@v4
@@ -128,13 +174,16 @@ jobs:
       - name: 跑插件测试
         shell: bash
         run: |
+          # 框架夹具在 workspace 的 .framework/，临时索引副本里没有它
+          fw="$GITHUB_WORKSPACE/.framework"
+          cd "${CI_INDEX_DIR:-$GITHUB_WORKSPACE}"
           fail=0
           for t in test/*.mjs; do
             case "$(basename "$t")" in
               kun-play.mjs) continue ;;   # 通关脚本只打印过程，不断言，不参与 CI
             esac
             echo "--- $t"
-            ROOST_FRAMEWORK="$PWD/.framework" node "$t" || fail=1
+            ROOST_FRAMEWORK="$fw" node "$t" || fail=1
           done
           exit $fail
 
@@ -146,6 +195,8 @@ jobs:
       - name: 跑插件自带测试
         shell: bash
         run: |
+          fw="$GITHUB_WORKSPACE/.framework"
+          cd "${CI_INDEX_DIR:-$GITHUB_WORKSPACE}"
           fail=0
           shopt -s nullglob
           for t in plugins/*/test/*.mjs; do
@@ -158,7 +209,7 @@ jobs:
               */test/live.mjs) continue ;;
             esac
             echo "--- $t"
-            ROOST_FRAMEWORK="$PWD/.framework" node "$t" || fail=1
+            ROOST_FRAMEWORK="$fw" node "$t" || fail=1
           done
           exit $fail
 
