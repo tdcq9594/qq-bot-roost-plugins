@@ -511,6 +511,33 @@
       "category": "媒体与内容"
     },
     {
+      "id": "sticker-reply",
+      "name": "表情标注",
+      "version": "0.2.7",
+      "description": "管理表情库与逐张标注，导出带标签的图库给宿主内置表情功能发图；可用一次独立模型判断这一轮是否只发图",
+      "tags": [
+        "表情",
+        "图库",
+        "标注",
+        "只发图"
+      ],
+      "kind": "dsh-extension",
+      "runtime": "mcp",
+      "scopes": [
+        "state:read",
+        "agent:write"
+      ],
+      "path": "plugins/sticker-reply",
+      "sha256": "e36e60646409ef46ec29a61239fdc49290f2bda63c77e2282f31353ff4929cef",
+      "category": "媒体与内容",
+      "author": "haibiandefengshu",
+      "credits": "插件由 haibiandefengshu 提交（PR #16）；索引分类与署名由维护者补齐，并用离线私钥重签",
+      "commands": [
+        "sticker_decide"
+      ],
+      "addedAt": "2026-11-18"
+    },
+    {
       "id": "trpg-forwarder",
       "name": "跑团转发器",
       "version": "0.6.5",
