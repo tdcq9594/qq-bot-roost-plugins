@@ -44,8 +44,8 @@ index.json 的 sha256  ──►  用户下载插件目录  ──►  本地重
 `index.json` 由 `build-index.mjs` 从 `plugins/*/` 重算生成，**只有维护者改**；
 投稿 PR 不许碰。安装时的 sha256 校验保证「装到的是索引记载的那份」，
 索引本身的权威来自仓库提交历史（`main` 只收维护者合并的提交），不再来自签名。
-投稿风险目前由 `pr-guard.yml` 拦截 + 维护者人工审；分支保护 + required check
-尚未开启，开启后才是硬闸门（见 `.github/CODEOWNERS`）。
+投稿风险由 `pr-guard.yml` 拦截 + 维护者人工审；`main` 已开分支保护 +
+required PR + required checks，投稿 CI 不全绿合不进来（见 `.github/CODEOWNERS`）。
 
 > 2026-11-19 起插件索引不再签名（原 `index.json.sig` / `trust-public.pem` /
 > 手动签名 workflow 均已移除）。原因是个人仓无法同时开分支保护与机器人回推，
