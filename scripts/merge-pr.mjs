@@ -22,8 +22,8 @@
  *
  * 边界
  * ----
- * 只做「拉 + 校正身份 + merge」。**不 push、不重建索引、不签名**——
- * 那些要私钥、要人工补 credits，见 README「维护者发版完整流程」。
+ * 只做「拉 + 校正身份 + merge」。**不 push、不重建索引**——
+ * 那些要人工补 credits，见 README「维护者发版完整流程」。
  */
 
 import { execFileSync } from 'node:child_process';
@@ -33,8 +33,8 @@ import path from 'node:path';
 
 const REPO = 'tdcq9594/qq-bot-roost-plugins';
 
-/** 这三个文件出现任何改动都直接中止：签名链是维护者独占的 */
-const FORBIDDEN = ['index.json', 'index.json.sig', 'trust-public.pem'];
+/** 索引是维护者独占的产物：投稿 PR 不许碰（插件索引已不签名） */
+const FORBIDDEN = ['index.json'];
 
 const argv = process.argv.slice(2);
 const num = argv.find((a) => /^\d+$/.test(a));
@@ -97,8 +97,8 @@ const files = await fetch(`https://api.github.com/repos/${REPO}/pulls/${num}/fil
 if (Array.isArray(files)) {
   const bad = files.map((f) => f.filename).filter((f) => FORBIDDEN.includes(f));
   if (bad.length) {
-    console.error(`\n✗ 这个 PR 动了签名链文件：${bad.join(', ')}`);
-    console.error('  按 README「签名与信任链」，这类改动一律不收，先和作者确认意图。');
+    console.error(`\n✗ 这个 PR 动了索引文件：${bad.join(', ')}`);
+    console.error('  索引由维护者合并后用 build-index.mjs 重建，这类改动一律不收，先和作者确认意图。');
     process.exit(1);
   }
 }
@@ -179,12 +179,9 @@ say(`\n✓ 已合并：${git('rev-parse', '--short', 'HEAD')}`);
 say(`
 下一步（都要人工做，脚本不碰）：
   1. 过一遍代码：node --check plugins/<id>/index.js
-  2. 重建索引 + 签名：
-       node scripts/build-index.mjs --key ../bot/keys/trust-private.pem
+  2. 重建索引：node scripts/build-index.mjs
   3. 在 index.json 里补 credits / addedAt / tags（脚本不覆盖展示字段）；
      author 一律填投稿者 @${login}，不要填维护者——署名归插件作者本人
-  4. 重新签名（改过 index.json 必须重签）：
-       node scripts/sign-index.mjs --key ../bot/keys/trust-private.pem
-  5. 验：node scripts/build-index.mjs --check && node scripts/sign-index.mjs --verify --key trust-public.pem
-  6. 推：git push origin main（Gitee 见 README 第 6 步）
+  4. 验：node scripts/build-index.mjs --check
+  5. 推：git push origin main（只推 GitHub；Gitee 由镜像自动同步）
 `);

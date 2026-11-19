@@ -7,9 +7,9 @@ name: CI
 #   1. 语法别写错
 #   2. 改了内容要升版本号（市场只比版本号，不升版等于没发）
 #   3. 索引和插件目录对得上（sha256 一致）
-#   4. 投稿 PR 按约定不碰签名链，索引必然暂时漂移。此时在 CI 的**临时副本**里
-#      重建索引来跑一致性/契约检查；正式 index.json / .sig 永远只验、不改写。
-#      重签仍由 sign-index.yml 在 release-signing 里经人工批准后进行。
+#   4. 投稿 PR 按约定不碰 index.json，索引必然暂时漂移。此时在 CI 的**临时副本**里
+#      重建索引来跑一致性/契约检查；正式 index.json 永远只验、不改写。
+#      重建由维护者在合并后做（2026-11-19 起插件索引不再签名）。
 
 on:
   push:
@@ -91,22 +91,6 @@ jobs:
           cd "${CI_INDEX_DIR:-$GITHUB_WORKSPACE}"
           node scripts/build-index.mjs --check
 
-      - name: 索引签名有效
-        shell: bash
-        # 签名是「这份索引没被改过」的全体属性。
-        #
-        # 以前 CI 只查 sha256，不查签名——于是「没有私钥就重生成索引」这条路
-        # 会悄悄改掉 `updated` 让签名失效，而配了公钥的用户市场会直接变空，
-        # 我们这边却全绿。
-        #
-        # 这里用的是**公钥**（仓库根的 trust-public.pem，可以公开）；
-        # 私钥只在发版的人手里，`keys/` 已在 .gitignore 里。
-        # 注意：即使上面用了临时索引，这一步也**始终验仓库里那份正式索引**，
-        # 临时索引没有签名，拿它验签等于没验。
-        run: |
-          cd "$GITHUB_WORKSPACE"
-          node scripts/sign-index.mjs --verify --key trust-public.pem
-
   # 插件自己的断言测试。
   #
   # 夹具（src/plugin/testkit.js）在框架仓库里，所以先把框架 checkout 到
@@ -118,7 +102,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # ci-index-staging.sh 要用 git diff 判断 PR 有没有碰签名链
+          # ci-index-staging.sh 要用 git diff 判断 PR 有没有碰 index.json
           fetch-depth: 0
 
       - name: 装 Node

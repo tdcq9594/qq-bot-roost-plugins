@@ -1,0 +1,190 @@
+name: 投稿风险拦截
+
+# 收外部（fork）PR 时的供应链闸门。和 ci.yml 的分工：
+#   ci.yml   —— 跑在 PR 代码上，验证插件本身（语法/版本/索引/测试）
+#   本文件   —— 只读 PR 的「文件清单 + patch + 树/blob」，不执行 PR 里的
+#               任何代码，判断投稿有没有碰维护者专属路径 / 夹带凭证。
+#
+# 为什么用 pull_request_target 而不是 pull_request：
+#   用 pull_request 时 GitHub 跑的是 **PR 分支里的 workflow**——投稿人只要把
+#   这个检查文件删了/改了，拦截就没了。pull_request_target 永远用 main 上的
+#   这份定义，PR 改不到；这是个人仓（开不了 bypass、没有 CODEOWNERS 强制）
+#   能拿到的唯一不可被投稿人篡改的闸门。
+#
+# 安全前提（改这个文件的人必须守住）：
+#   1. 不 checkout PR 代码、不跑仓库里的脚本、不装依赖——只用 API 读 JSON。
+#   2. 权限只给 pull-requests: read + contents: read；job 不挂 environment、
+#      不碰任何 secret（GITHUB_TOKEN 只用来读 API，不用于写仓库）。
+#   3. 检查只对 fork PR 执行；本仓 PR 的 job 仍要跑（四个检查 step 跳过），
+#      这样本仓 PR 能拿到 success 状态的 required check，不会被自己设的闸门卡住。
+#
+# 拦四类风险（合投稿约定「只交 plugins/<id>/ 这一个目录」）：
+#   1. 改了 plugins/ 以外的任何文件——尤其索引、构建脚本、CI 自身、测试夹具；
+#   2. patch 或 blob 里有私钥块 / GitHub token / 硬编码凭证；
+#   3. 夹带 keys/、node_modules、*.pem、运行时数据；
+#   4. 投稿树里有符号链接（mode 120000）或 gitlink（mode 160000）。
+#
+# 边界：这是必要条件不是充分条件。它读不懂插件代码在干什么，替代不了人工
+# 看 diff；恶意业务逻辑（偷偷发消息到外站等）仍靠维护者审。
+# 另：取消插件索引签名后，main 可以开分支保护 + 把本检查设为 required check，
+# 让它成为真正的硬闸门；开之前用 merge-pr.mjs 收 PR 时仍需人工先看结论。
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+  contents: read
+
+jobs:
+  guard:
+    name: 投稿风险拦截
+    # 本仓 PR 也跑这个 job（四个检查 step 会跳过），这样 job 是 success，
+    # 能满足 required check；fork PR 才真正执行检查。用 step 级 if 而不是
+    # job 级 if——后者会让本仓 PR 的 check 是 skipped，required 不认。
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+    steps:
+      - name: 拉 PR 文件清单 + 投稿树（只走 API，不 checkout）
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          api() {
+            curl -sS -o "$2" -w '%{http_code}' \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' \
+              "https://api.github.com$1"
+          }
+
+          # 文件清单：分页拉全，逐页追加
+          : > "$RUNNER_TEMP/pr-files.json"
+          page=1
+          while :; do
+            chunk="$RUNNER_TEMP/pr-files-$page.json"
+            code=$(api "/repos/$REPO/pulls/$PR/files?per_page=100&page=$page" "$chunk")
+            [ "$code" = 200 ] || { echo "::error::拉取 PR 文件清单失败 HTTP $code"; exit 1; }
+            cat "$chunk" >> "$RUNNER_TEMP/pr-files.json"
+            [ "$(jq 'length' "$chunk")" -eq 100 ] || break
+            page=$((page + 1))
+          done
+          echo "fork 投稿 PR #$PR from $HEAD_REPO，改动文件："
+          jq -r '.[] | "  \(.status) \(.filename)"' "$RUNNER_TEMP/pr-files.json"
+
+          # 投稿树：用 **本仓** + PR head SHA。GitHub 把 PR head commit 放进 base
+          # 仓的 refs/pull/N/head，所以即使 fork 被删/改私有也读得到。
+          code=$(api "/repos/$REPO/git/trees/$HEAD_SHA?recursive=1" "$RUNNER_TEMP/tree.json")
+          [ "$code" = 200 ] || { echo "::error::取不到投稿树对象 HTTP $code，无法查符号链接 / 补扫 blob"; exit 1; }
+
+      - name: 路径红线（投稿只能改 plugins/**）
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          list="$RUNNER_TEMP/pr-files.json"
+          [ -s "$list" ] || { echo "::error::没有拿到 PR 文件清单"; exit 1; }
+
+          # 投稿约定：只提交 plugins/<id>/ 这一个目录。
+          # 用白名单（不是黑名单）：任何 plugins/ 以外的路径都拦，
+          # 覆盖 index.json / .sig / 公钥 / scripts / .github / test / README /
+          # verified.json / categories.json 等所有维护者专属文件。
+          outside=$(jq -r '.[].filename' "$list" | grep -v '^plugins/' | grep -v '^$' || true)
+          if [ -n "$outside" ]; then
+            echo "::error::投稿 PR 只能改 plugins/<id>/**，以下路径越界："
+            printf '%s\n' "$outside" | sed 's/^/  - /'
+            echo "::error::索引 / 构建脚本 / CI 由维护者单独维护；"
+            echo "::error::外部改动等于能让 CI 检查形同虚设。"
+            exit 1
+          fi
+          echo "OK：所有改动都在 plugins/ 下"
+
+      - name: patch + blob 内容红线
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          list="$RUNNER_TEMP/pr-files.json"
+          [ -s "$list" ] || { echo "::error::没有拿到 PR 文件清单"; exit 1; }
+
+          # 新增行（+ 开头，排除 +++ 文件头）
+          jq -r '.[].patch // ""' "$list" \
+            | grep '^+' | grep -v '^+++' > "$RUNNER_TEMP/added.txt" || true
+
+          # patch 会被 GitHub 截断（大文件）或对二进制缺失。把这类文件的 blob
+          # 从树里取 sha 再读正文补进来，避免「把凭证塞进大文件」绕过扫描。
+          missing=$(jq -r '.[] | select((.patch // "") == "") | .filename' "$list" \
+            | grep -Ei '\.(js|mjs|cjs|json|html|css|md|txt|ya?ml|sh|py|toml|xml)$' || true)
+          if [ -n "$missing" ] && [ -s "$RUNNER_TEMP/tree.json" ]; then
+            while IFS= read -r path; do
+              [ -z "$path" ] && continue
+              sha=$(jq -r --arg p "$path" '.tree[]? | select(.path == $p) | .sha' "$RUNNER_TEMP/tree.json" | head -1)
+              [ -z "$sha" ] && continue
+              code=$(curl -sS -o "$RUNNER_TEMP/blob.json" -w '%{http_code}' \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H 'Accept: application/vnd.github+json' \
+                "https://api.github.com/repos/$REPO/git/blobs/$sha")
+              [ "$code" = 200 ] || { echo "::error::读 blob 失败 HTTP $code ($path)"; exit 1; }
+              jq -r '.content' "$RUNNER_TEMP/blob.json" \
+                | base64 -d 2>/dev/null \
+                | sed 's/^/+/' >> "$RUNNER_TEMP/added.txt" || true
+            done <<< "$missing"
+          fi
+
+          hits="$RUNNER_TEMP/hits.txt"
+          : > "$hits"
+          # 1) 私钥块：忽略大小写，匹配任意 PEM 变体（含被字符串拼接拆开的写法，
+          #    只要同一行里同时出现 BEGIN 与 PRIVATE KEY----- 就命中）
+          grep -niE '^\+.*-----BEGIN .*PRIVATE KEY-----' "$RUNNER_TEMP/added.txt" >> "$hits" || true
+          grep -niE '^\+.*PRIVATE KEY-----' "$RUNNER_TEMP/added.txt" >> "$hits" || true
+          # 2) GitHub token：经典 ghp_/gho_/ghu_/ghs_ + 36 位，fine-grained 更长
+          #    过滤掉明显占位（example/test/demo），免得文档里的示例 token 误拦投稿
+          grep -nE '^\+.*(gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{50,})' "$RUNNER_TEMP/added.txt" \
+            | grep -viE '(example|placeholder|your[_-]?|xxxx|dummy|test|demo|sample|fake)' >> "$hits" || true
+          # 3) 疑似硬编码凭证：key = 长串。字符集补 +/= （base64）；引号可选。
+          #    过滤掉明显占位（example/your/xxxx/test/demo）以免误杀示例。
+          grep -niE '^\+.*(password|passwd|secret|api[_-]?key|access[_-]?key|token)[[:space:]]*[:=][[:space:]]*["'"'"'`]?[A-Za-z0-9_/+=-]{24,}' "$RUNNER_TEMP/added.txt" \
+            | grep -viE '(example|placeholder|your[_-]?|xxxx|dummy|test|demo|sample|fake|<[^>]+>)' >> "$hits" || true
+
+          if [ -s "$hits" ]; then
+            echo "::error::PR 新增内容里有疑似私钥 / token / 凭证："
+            sort -u "$hits" | head -20 | sed 's/^/  - /'
+            echo "::error::凭证绝不入库；若真实存在按泄露处理：立即换密钥并轮换对应公钥。"
+            echo "::error::token / 口令立即删掉并轮换。"
+            exit 1
+          fi
+          echo "OK：patch 与 blob 里没有凭证特征"
+
+      - name: 夹带与符号链接红线
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          list="$RUNNER_TEMP/pr-files.json"
+          [ -s "$list" ] || { echo "::error::没有拿到 PR 文件清单"; exit 1; }
+          files=$(jq -r '.[].filename' "$list")
+
+          # 1) 不该进仓库的目录 / 后缀（投稿 README 要求「无运行时数据 / 无符号链接」）
+          junk=$(printf '%s\n' "$files" | grep -Ei \
+            '(^|/)(keys|node_modules|\.git)/|\.pem$|\.key$|\.p12$|\.pfx$|\.env(\.|$)|id_rsa|/(settings|annotations|recent|last)\.json$' || true)
+          if [ -n "$junk" ]; then
+            echo "::error::PR 夹带了不该入库的文件："
+            printf '%s\n' "$junk" | sed 's/^/  - /'
+            exit 1
+          fi
+
+          # 2) 符号链接 / gitlink：mode 120000 / 160000。取不到就红（fail closed）。
+          [ -s "$RUNNER_TEMP/tree.json" ] || { echo "::error::投稿树为空，无法检查符号链接"; exit 1; }
+          links=$(jq -r '.tree[]? | select(.mode == "120000" or .mode == "160000") | "\(.mode) \(.path)"' "$RUNNER_TEMP/tree.json" || true)
+          if [ -n "$links" ]; then
+            echo "::error::投稿分支里有符号链接 / gitlink（约定「无符号链接」，且会让 sha256 / 路径逃逸判断失真）："
+            printf '%s\n' "$links" | sed 's/^/  - /'
+            exit 1
+          fi
+
+          echo "OK：没有夹带密钥 / 运行时数据 / 符号链接"

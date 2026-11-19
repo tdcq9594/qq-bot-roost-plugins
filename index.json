@@ -2,7 +2,7 @@
   "schema": 1,
   "repo": "tdcq9594/qq-bot-roost-plugins",
   "branch": "main",
-  "updated": "2026-11-18",
+  "updated": "2026-11-19",
   "plugins": [
     {
       "id": "ai-chat",
@@ -103,7 +103,7 @@
       "version": "1.0.3",
       "description": "发「ai绘图+一只猫」，它就用你电脑上的 ComfyUI 画出来并直接发到会话",
       "author": "haibiandefengshu",
-      "credits": "插件由 haibiandefengshu 提交（PR #4），1.0.3 由 PR #7 更新；签名由维护者用离线私钥重签",
+      "credits": "插件由 haibiandefengshu 提交（PR #4），1.0.3 由 PR #7 更新",
       "path": "plugins/comfy-draw",
       "tags": [
         "AI 绘图",
@@ -133,7 +133,7 @@
       "kind": "dsh-extension",
       "runtime": "mcp",
       "path": "plugins/demo-ext",
-      "sha256": "1bd7ff435cd1f7fa542b969ba7bd233e0e3abac01d7db26100cdc86d96fe9f58",
+      "sha256": "9c34d9cf9e75f3ea68f3bb9612325aed1341764232697e2dea0584c8c6e205b8",
       "category": "开发示例"
     },
     {
@@ -303,7 +303,7 @@
       "version": "1.0.0",
       "description": "群里发禁漫 ID（jm123456 / 18comic 链接），后台下载整本、还原竖切打乱、合成 PDF 并发回会话",
       "author": "haibiandefengshu",
-      "credits": "插件由 haibiandefengshu 提交（PR #3），签名由维护者用离线私钥重签",
+      "credits": "插件由 haibiandefengshu 提交（PR #3）",
       "path": "plugins/jm-comic",
       "tags": [
         "漫画",
@@ -385,7 +385,7 @@
       "version": "1.0.1",
       "description": "视频抽帧、大图压小，让会回话的 AI 真能看清消息里的图和视频",
       "author": "haibiandefengshu",
-      "credits": "插件由 haibiandefengshu 提交（PR #1），签名由维护者用离线私钥重签",
+      "credits": "插件由 haibiandefengshu 提交（PR #1）",
       "path": "plugins/media-vision",
       "tags": [
         "识图",
@@ -409,7 +409,7 @@
       "version": "0.5.0",
       "description": "按真实 QQ 会话慢慢积累有证据的行为习惯，写成一份「成长人格」并切到那个会话；宿主删了内置生长后由扩展自己实现",
       "author": "haibiandefengshu",
-      "credits": "插件由 haibiandefengshu 提交（PR #13），由维护者用离线私钥重签",
+      "credits": "插件由 haibiandefengshu 提交（PR #13）",
       "tags": [
         "人格",
         "成长",
@@ -469,7 +469,7 @@
       "sha256": "53e906100df370576a5a21b6beacceebdc495385c7d0e15003bdfc2f0b59d2cf",
       "category": "人格与人设",
       "author": "haibiandefengshu",
-      "credits": "插件由 haibiandefengshu 提交（PR #15，0.8.3 修复人格 ID 覆盖与长度问题并补齐 104 项测试）；索引由维护者用离线私钥重建并重签"
+      "credits": "插件由 haibiandefengshu 提交（PR #15，0.8.3 修复人格 ID 覆盖与长度问题并补齐 104 项测试）；索引由维护者重建"
     },
     {
       "id": "pixiv-pid",
@@ -477,7 +477,7 @@
       "version": "1.0.1",
       "description": "群里出现「pid 12345678」就把那张 Pixiv 插画取回来发到会话，带缓存防重",
       "author": "haibiandefengshu",
-      "credits": "插件由 haibiandefengshu 提交（PR #2），签名由维护者用离线私钥重签",
+      "credits": "插件由 haibiandefengshu 提交（PR #2）",
       "path": "plugins/pixiv-pid",
       "tags": [
         "Pixiv",
@@ -531,7 +531,7 @@
       "sha256": "e36e60646409ef46ec29a61239fdc49290f2bda63c77e2282f31353ff4929cef",
       "category": "媒体与内容",
       "author": "haibiandefengshu",
-      "credits": "插件由 haibiandefengshu 提交（PR #16）；索引分类与署名由维护者补齐，并用离线私钥重签",
+      "credits": "插件由 haibiandefengshu 提交（PR #16）；索引分类与署名由维护者补齐",
       "commands": [
         "sticker_decide"
       ],
@@ -543,7 +543,7 @@
       "version": "0.6.5",
       "description": "把群消息桥给本机 dsh-trpg，再把骰点与剧情直发回群；单独装它不会回复",
       "author": "haibiandefengshu",
-      "credits": "插件由 haibiandefengshu 提交（PR #5），0.6.5 由 PR #8 更新；签名由维护者用离线私钥重签",
+      "credits": "插件由 haibiandefengshu 提交（PR #5），0.6.5 由 PR #8 更新",
       "path": "plugins/trpg-forwarder",
       "tags": [
         "跑团",
@@ -566,7 +566,7 @@
       "version": "1.0.3",
       "description": "问「上海天气」「今天天气怎么样」就回一张天气卡图片，支持多地区、四大天气源与每日定时播报",
       "author": "haibiandefengshu",
-      "credits": "插件由 haibiandefengshu 提交（PR #9），1.0.2 由 PR #10 更新，1.0.3 由 PR #12 更新；签名由维护者用离线私钥重签",
+      "credits": "插件由 haibiandefengshu 提交（PR #9），1.0.2 由 PR #10 更新，1.0.3 由 PR #12 更新",
       "path": "plugins/weather-card",
       "tags": [
         "天气",
