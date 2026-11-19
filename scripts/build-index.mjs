@@ -23,7 +23,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { hashDir } from './hashdir.mjs';
-import { signIndex, resolveKeyPath } from './sign-index.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const PLUGINS = path.join(ROOT, 'plugins');
@@ -88,7 +87,7 @@ async function readMeta(dir) {
        *
        * 只把作者要的 scope / 要接管的内置能力 / 运行形态写进索引，等级本身
        * 由宿主 `ext-tier.js` 实时推导 —— 索引里存一个 `permissionTier` 等于
-       * 让作者自己填等级，签名也防不住虚标。这些字段受 index.json.sig 保护，
+       * 让作者自己填等级，校验也防不住虚标。这些字段写进索引后，
        * 市场卡片和安装确认都从它们算风险。
        */
       ...(isExt && Array.isArray(raw.scopes) ? { scopes: raw.scopes.map(String) } : {}),
@@ -127,7 +126,7 @@ async function readMeta(dir) {
  *      credits）—— 手写的，往往比代码里的短描述更完整（比如 kun 的
  *      「24 个命令」）。脚本不该改文案，只给新插件补默认值。
  *      其中 `author` 一律写插件作者本人：社区投稿写 PR 发起人的 GitHub 用户名，
- *      维护者不占署名（签名链只约束「索引由谁的私钥签」，不约束这个字段）。
+ *      维护者不占署名。
  *
  * 早期版本是整份覆盖，结果跑一次「更新索引」就把 tags 清空、把描述里的
  * 补充说明抹掉，看起来像升级，实际是数据丢失。
@@ -157,9 +156,6 @@ const STRUCT_FIELDS = [
  *   reviewed  我们复核过内容（看过代码、试过跑）
  *   self      作者自证（作者说他是谁，我们没核）
  * 没列出 = 未验证，索引里不写这个键。
- *
- * **签名是另一回事**：签名是「这份索引没被改过」的全体属性，
- * 所有签名插件都落同一个状态，不能当成档位。
  */
 const VERIFIED_LEVELS = ['official', 'reviewed', 'self'];
 
@@ -379,39 +375,15 @@ if (checkOnly) {
 }
 
 /**
- * **先决定能不能签名，再动磁盘。**
+ * 写回索引。
  *
- * 以前是先写 json、再签名。没私钥时只更新了 json、`.sig` 还是旧的——
- * 索引变了签名没变，CI 的验签必红；开了安全校验的用户更是整个市场被拦，
- * 一个插件都装不上。而它只打一行「未签名」，看上去一切正常。
- *
- * 2026-11-02 就这么坏了一次：私钥在 `bot/keys/`，这儿默认找
- * `qq-bot-roost-plugins/keys/`，目录不存在 → 静默跳过签名。
- *
- * 所以规矩改成：**已经签过名的仓库，没私钥就不许改索引**（退出码 1，
- * 一个字节都不写）。本地开发、还没签过名的仓库不受影响。
+ * 2026-11-19 起本仓不再对 index.json 签名（框架自更新的签名仍保留）。
+ * 以前这里有「已签过名、没私钥就拒绝写」的闸门——那是防「只更新 json、
+ * .sig 还是旧的」把用户市场弄空。现在没有 .sig 了，闸门自然消失：
+ * 索引只是脚本产物，重算后直接写。完整性仍由每个插件的 sha256 保证，
+ * 用户安装时按同一算法重算比对（market.js 的 verifyPluginDir）。
  */
-const keyPath = resolveKeyPath(process.argv.slice(2));
-const sigPath = `${TARGET}.sig`;
-const signed = await fs.access(sigPath).then(
-  () => true,
-  () => false,
-);
-if (!keyPath && signed) {
-  console.error('✗ 这个仓库的 index.json 是签过名的，但没找到私钥，拒绝改写。');
-  console.error('  私钥默认在 keys/trust-private.pem，或用 ROOST_TRUST_KEY / --key 指定。');
-  console.error('  真要不带签名地重算（等于弄坏现有签名），先删掉 index.json.sig。');
-  process.exit(1);
-}
-
 await fs.writeFile(TARGET, `${JSON.stringify(result.out, null, 2)}\n`.replace(/\n/g, result.prevEol), 'utf8');
-
-if (keyPath) {
-  signIndex(TARGET, keyPath);
-  console.log('  已签名 → index.json.sig');
-} else {
-  console.log('  （未签名：这个仓库还没有 .sig，不当发布产物用）');
-}
 
 console.log(`已生成 ${path.relative(ROOT, TARGET)}`);
 console.log(`  ${result.out.plugins.length} 个插件${result.out.repo ? `，repo=${result.out.repo}` : '（没有 repo，安装会失败）'}`);

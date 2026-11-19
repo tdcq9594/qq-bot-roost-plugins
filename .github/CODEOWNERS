@@ -1,27 +1,25 @@
 # 谁改这些文件，就必须要谁 review。
 #
 # 这条文件本身不会拦下任何推送 —— 它只在分支保护/规则集里打开
-# 「Require review from Code Owners」之后才生效。现在没打开，原因是
-# 打开了就必须走 PR，而 sign-index.yml 要往 main 回推索引（见下面第 2 条）。
+# 「Require review from Code Owners」之后才生效。
 #
-# 但它现在就有用：
+# 2026-11-19 插件索引取消签名后，sign-index.yml 已删除、不再往 main 回推，
+# 所以 main 可以安全开 require PR + required check 了，届时这个文件才真正生效。
+# 在那之前它仍有用：
 #   1. 在 PR 页面上会自动带上 review 请求，不会被忘掉；
-#   2. 哪天想把 main 切成「必须走 PR」，把这个文件打开就好，不用现编规则。
+#   2. 哪天想打开分支保护，把这个开关开起来就好，不用现编规则。
 #
-# 为什么 .github/ 要单独标出来：谁能改 workflow，谁就能加一行
-# `echo "$TRUST_PRIVATE_PEM"` 把 Environment Secret 打出来。Secret 本身
-# 挡不住这个，只有「改 .github/ 必须有人看」才挡得住。
+# 为什么 .github/ 要单独标出来：谁能改 workflow，谁就能在 CI 里执行任意代码
+# 或改-check 逻辑。权限挡不住这个，只有「改 .github/ 必须有人看」才挡得住。
 
 *                       @tdcq9594
 
-# 能拿到签名私钥的路径
+# 能改 CI / 构建逻辑的路径
 /.github/               @tdcq9594
 /.github/workflows/     @tdcq9594
-
-# 能改索引内容和索引构建逻辑的路径
 /scripts/               @tdcq9594
+
+# 能改索引内容与索引构建逻辑的路径
 /index.json             @tdcq9594
-/index.json.sig         @tdcq9594
-/trust-public.pem       @tdcq9594
 /verified.json          @tdcq9594
 /categories.json        @tdcq9594

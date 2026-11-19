@@ -211,7 +211,7 @@ const r = await fetch(API + '/whoami', { headers: { authorization: `Bearer ${TOK
 **上市场**：把目录放进 `qq-bot-roost-plugins/plugins/<id>/`，然后
 
 ```bash
-node scripts/build-index.mjs            # 重算 sha256 并写 index.json（仓库已签名时会自动重签）
+node scripts/build-index.mjs            # 重算 sha256 并写 index.json
 node scripts/build-index.mjs --check    # CI 用：索引与目录必须一致
 ```
 
