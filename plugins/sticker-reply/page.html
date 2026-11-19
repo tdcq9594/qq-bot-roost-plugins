@@ -27,7 +27,9 @@ code{font-size:12px}
 <div class="panel">
   <p>1. 点击「导出图库」。2. 在面板「表达 —— 表情包 —— 启用」打开开关。3. 将下面目录添加到表情包目录列表，保留你原来的目录。</p>
   <div class="row"><button id="exportLibrary">导出图库</button><button id="checkDependency">检查接入状态</button></div>
-  <div class="field"><label>需要添加到内置表情包设置的目录</label><input id="libraryDir" type="text" readonly style="width:100%;box-sizing:border-box"></div>
+  <div class="field"><label>图库导出目录（可修改，填绝对路径；改完记得同步到内置表情包设置）</label>
+    <input id="libraryDir" type="text" style="width:100%;box-sizing:border-box" placeholder="留空 = 使用默认位置"></div>
+  <div class="row"><button id="saveLibraryDir">保存目录</button><button id="resetLibraryDir">恢复默认</button></div>
   <p class="muted" id="builtinState"></p>
   <p class="muted" id="libraryState"></p>
   <p class="muted">扩展只维护自己的图库副本。开启开关和添加目录由你在宿主设置中操作；扩展不创建、切换或改写人格。</p>
@@ -202,7 +204,14 @@ async function load(keepEditor) {
   images = d.images || []; settings = d.settings || {};
   $('disableAll').textContent = settings.enabled === false ? '启用扩展' : '关闭扩展';
   $('libraryDir').value = d.library?.directory || '';
-  show('libraryState', settings.enabled === false ? '扩展当前已关闭，请先在下方「目录与设置」点击「启用扩展」，图库会同步导出。' : d.library?.published ? '当前导出 ' + d.library.count + ' 张；保存标注、设置或重新扫描会同步更新副本。' : '尚未导出图库。');
+  const lib = d.library || {};
+  $('libraryDir').value = lib.directory || '';
+  $('libraryDir').dataset.defaultDir = lib.defaultDir || '';
+  show('libraryState', settings.enabled === false
+    ? '扩展当前已关闭：先在下方「目录与设置」点「启用扩展」，图库会同步导出。'
+    : lib.published
+      ? `当前导出 ${lib.count} 张${lib.custom ? '（自定义目录）' : ''}；保存标注、设置或重新扫描会同步更新副本。`
+      : '尚未导出图库，点上方「导出图库」生成。');
   show('apiState', d.api === 'ok' ? '模型判断接口：可用' : '模型判断接口：' + d.api);
   if (d.last) {
     const t = new Date(d.last.at).toLocaleString('zh-CN');
@@ -277,6 +286,37 @@ $('exportLibrary').addEventListener('click', async () => {
   catch (e) { result(e.message, true); }
   finally { setBusy(false); }
 });
+$('saveLibraryDir').addEventListener('click', async () => {
+  if (busy) return;
+  const dir = $('libraryDir').value.trim();
+  if (dir && !confirm('改目录会把旧目录里由本扩展导出的副本自动搬到新目录；你自己放进去的文件不会动。继续？')) return;
+  setBusy(true); result('保存目录…');
+  try {
+    const d = await act('settings', { patch: { libraryDir: dir } });
+    const mv = d.migration || {};
+    const bits = [];
+    if (mv.moved) bits.push(`搬运 ${mv.moved} 张`);
+    if (mv.alreadyThere) bits.push(`新目录已有 ${mv.alreadyThere} 张相同文件`);
+    if (mv.leftBehind?.length) bits.push(`留在原目录 ${mv.leftBehind.length} 个（内容被改过或同名冲突）`);
+    if (mv.conflicts?.length) bits.push(`同名冲突 ${mv.conflicts.length} 个已改用备用名`);
+    if (mv.reason) bits.push(mv.reason);
+    result('目录已保存：' + d.library.directory + (bits.length ? '；' + bits.join('；') : ''));
+    await act('exportLibrary').catch(() => null);
+    await load(true); await checkDependency();
+  } catch (e) { result(e.message, true); }
+  finally { setBusy(false); }
+});
+
+$('resetLibraryDir').addEventListener('click', async () => {
+  const def = $('libraryDir').dataset.defaultDir || '';
+  $('libraryDir').value = def;
+  if (busy) return;
+  setBusy(true); result('恢复默认目录…');
+  try { await act('settings', { patch: { libraryDir: '' } }); await load(true); await checkDependency(); }
+  catch (e) { result(e.message, true); }
+  finally { setBusy(false); }
+});
+
 $('checkDependency').addEventListener('click', async () => {
   if (busy) return; setBusy(true);
   try { await checkDependency(); } catch (e) { result(e.message, true); }

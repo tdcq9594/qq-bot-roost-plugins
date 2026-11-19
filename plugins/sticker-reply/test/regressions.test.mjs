@@ -10,6 +10,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdtempSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
 const sandbox = mkdtempSync(join(tmpdir(), 'sticker-regress-'));
 process.env.STICKER_REPLY_DATA_DIR = sandbox;
@@ -315,4 +316,202 @@ test('list 动作把 missing 传给页面', async () => {
   assert.ok(row, '失效行必须出现在返回里');
   assert.equal(row.missing, true, 'missing 字段不能漏传');
   assert.ok(d.data.stats.missing >= 1);
+});
+
+/* ── GIF：动图进库的整条链路 ──────────────────────── */
+
+test('GIF 能被扫描、导出、缩略图与出站标记正确识别', async () => {
+  const extra = join(sandbox, 'gif-dir');
+  mkdirSync(extra, { recursive: true });
+  // 最小合法 GIF89a（1x1，两帧动画），避免依赖外部素材
+  const gif = Buffer.from(
+    'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+    'base64',
+  );
+  const gifFile = join(extra, '猫猫探头.gif');
+  writeFileSync(gifFile, gif);
+  store.saveSettings({ extraDir: extra, enabled: true });
+
+  const id = store.sha256Of(gifFile);
+  assert.equal(id.length, 64);
+
+  const row = store.listAnnotated().images.find((i) => i.id === id);
+  assert.ok(row, 'GIF 必须被扫描出来');
+  assert.equal(row.missing, false);
+
+  // 未标注不参与导出
+  const beforeExport = JSON.parse(readFileSync(join(builtin.libraryDir(), '.sticker-reply.json'), 'utf8'));
+  assert.equal(beforeExport.files.some((f) => f.id === id), false);
+
+  await store.mutateAnnotations((cur) => {
+    cur.images[id] = { name: '猫猫探头', meaning: '探出头偷看', tags: ['探头'], enabled: true };
+    return cur;
+  });
+  const r = await builtin.exportLibrary();
+  const entry = JSON.parse(readFileSync(join(builtin.libraryDir(), '.sticker-reply.json'), 'utf8')).files
+    .find((f) => f.id === id);
+  assert.ok(entry, '标注后应导出');
+  assert.match(entry.file, /\.gif$/, '扩展名必须保持 .gif');
+  assert.equal(store.sha256Of(join(builtin.libraryDir(), entry.file)), id, '导出内容不变');
+
+  // 出站解析：中文路径 + .gif 要被认成 image-alone 动作
+  const HOST = process.env.DSH_ROOST_DIR;
+  if (HOST) {
+    const outbound = await import(pathToFileURL(join(HOST, 'src/outbound-actions.js')).href);
+    const marker = `<<image-alone: ${join(builtin.libraryDir(), entry.file)}>>`;
+    const parsed = outbound.parseOutboundActions(marker);
+    assert.equal(parsed.text, '', '纯标记不应留下正文');
+    assert.equal(parsed.actions.length, 1);
+    assert.equal(parsed.actions[0].type, 'imageAlone');
+    assert.ok(parsed.actions[0].value.endsWith('.gif'));
+  }
+
+  store.saveSettings({ extraDir: '' });
+});
+
+/* ── 图库目录可改 ──────────────────────────────────── */
+
+test('自定义图库目录：校验、导出、恢复默认', async () => {
+  const custom = join(sandbox, 'my-library');
+  // 相对路径要拒
+  assert.equal(builtin.checkLibraryDir('表情库').ok, false);
+  // 扩展代码目录要拒
+  const shared = await import('../lib/shared.mjs');
+  assert.equal(builtin.checkLibraryDir(join(shared.EXT_ROOT, 'assets')).ok, false);
+  // 绝对路径要过
+  assert.equal(builtin.checkLibraryDir(custom).ok, true);
+
+  store.saveSettings({ libraryDir: custom, enabled: true });
+  assert.equal(builtin.libraryDir(), custom);
+  const r = await builtin.exportLibrary();
+  assert.equal(r.directory, custom);
+  assert.ok(existsSync(join(custom, '.sticker-reply.json')), '清单要落在新目录');
+  assert.ok(r.count >= 1);
+
+  // 恢复默认
+  store.saveSettings({ libraryDir: '' });
+  assert.equal(builtin.libraryDir(), builtin.DEFAULT_LIBRARY());
+});
+
+test('只改设置、不走保存目录动作时，旧目录副本保留（迁移由动作触发）', async () => {
+  const first = join(sandbox, 'lib-a');
+  store.saveSettings({ libraryDir: first, enabled: true });
+  await builtin.exportLibrary();
+  const manifestA = JSON.parse(readFileSync(join(first, '.sticker-reply.json'), 'utf8'));
+  const firstName = manifestA.files[0]?.file;
+  assert.ok(firstName, '第一处导出应有文件');
+
+  const second = join(sandbox, 'lib-b');
+  store.saveSettings({ libraryDir: second });
+  await builtin.exportLibrary();
+  assert.ok(existsSync(join(first, firstName)), '旧目录副本必须保留，交给用户自己清理');
+  store.saveSettings({ libraryDir: '' });
+});
+
+test('迁移不接管目标用户文件，关闭扩展后用户文件仍保留', async () => {
+  const from = join(sandbox, 'ownership-from');
+  const to = join(sandbox, 'ownership-to');
+  store.saveSettings({ libraryDir: from, enabled: true });
+  await builtin.exportLibrary();
+  const sourceManifest = JSON.parse(readFileSync(join(from, '.sticker-reply.json'), 'utf8'));
+  const one = sourceManifest.files[0];
+  mkdirSync(to, { recursive: true });
+  const userFile = join(to, one.file);
+  copyFileSync(join(from, one.file), userFile);
+  const original = readFileSync(userFile);
+  await builtin.migrateLibrary(from, to);
+  const migrated = JSON.parse(readFileSync(join(to, '.sticker-reply.json'), 'utf8'));
+  assert.ok(!migrated.files.some((f) => f.file === one.file), '用户文件不能加入受管清单');
+  assert.ok(migrated.files.some((f) => f.id === one.id), '源副本仍应迁移到备用名');
+  store.saveSettings({ libraryDir: to, enabled: false });
+  await builtin.exportLibrary();
+  assert.deepEqual(readFileSync(userFile), original, '关闭扩展后仍保留原用户文件');
+  store.saveSettings({ libraryDir: '', enabled: true });
+});
+
+test('Windows 仅改目录大小写不触发迁移或删除', { skip: process.platform !== 'win32' }, async () => {
+  const from = join(sandbox, 'Case-Library');
+  store.saveSettings({ libraryDir: from, enabled: true });
+  await builtin.exportLibrary();
+  const manifestFile = join(from, '.sticker-reply.json');
+  const before = readFileSync(manifestFile);
+  const entries = JSON.parse(before).files;
+  const result = await builtin.migrateLibrary(from, from.toUpperCase());
+  assert.equal(result.reason, '目录没变');
+  assert.equal(result.moved, 0);
+  assert.equal(result.alreadyThere, 0);
+  assert.deepEqual(readFileSync(manifestFile), before);
+  for (const entry of entries) assert.equal(store.sha256Of(join(from, entry.file)), entry.id);
+  assert.equal(builtin.checkLibraryDir(shared.EXT_ROOT.toUpperCase()).ok, false);
+  store.saveSettings({ libraryDir: '', enabled: true });
+});
+
+/* ── 保存目录时自动搬运 ────────────────────────────── */
+
+test('改目录时把受管副本搬到新目录，用户文件不动', async () => {
+  const from = join(sandbox, 'mv-a');
+  const to = join(sandbox, 'mv-b');
+  store.saveSettings({ libraryDir: from, enabled: true });
+  const first = await builtin.exportLibrary();
+  assert.ok(first.count >= 1);
+
+  const manifestBefore = JSON.parse(readFileSync(join(from, '.sticker-reply.json'), 'utf8'));
+  const movedName = manifestBefore.files[0].file;
+  const mine = join(from, '我自己放的.txt');
+  writeFileSync(mine, 'user file');
+
+  const r = await builtin.migrateLibrary(from, to);
+  assert.equal(r.moved, manifestBefore.files.length, '受管副本应全部搬走');
+  assert.ok(existsSync(join(to, movedName)), '新目录要有这个文件');
+  assert.equal(existsSync(join(from, movedName)), false, '旧目录不该留着副本');
+  assert.ok(existsSync(mine), '用户自己放的文件不能被搬走或删掉');
+  assert.ok(existsSync(join(to, '.sticker-reply.json')), '清单要落到新目录');
+});
+
+test('新目录已有同内容文件时去重，不产生重复', async () => {
+  const from = join(sandbox, 'mv-c');
+  const to = join(sandbox, 'mv-d');
+  store.saveSettings({ libraryDir: from, enabled: true });
+  await builtin.exportLibrary();
+  mkdirSync(to, { recursive: true });
+  const man = JSON.parse(readFileSync(join(from, '.sticker-reply.json'), 'utf8'));
+  const one = man.files[0];
+  copyFileSync(join(from, one.file), join(to, one.file));
+  // 去重只针对目标清单已经管理的副本，不能接管用户文件。
+  writeFileSync(join(to, '.sticker-reply.json'), JSON.stringify({
+    owner: 'sticker-reply', version: 1, files: [one],
+  }));
+
+  const r = await builtin.migrateLibrary(from, to);
+  assert.ok(r.alreadyThere >= 1);
+  const names = readdirSync(to).filter((n) => n === one.file);
+  assert.equal(names.length, 1, '同名同内容只留一份');
+});
+
+test('新目录同名但内容不同时改用备用名，不覆盖', async () => {
+  const from = join(sandbox, 'mv-e');
+  const to = join(sandbox, 'mv-f');
+  store.saveSettings({ libraryDir: from, enabled: true });
+  await builtin.exportLibrary();
+  mkdirSync(to, { recursive: true });
+  const man = JSON.parse(readFileSync(join(from, '.sticker-reply.json'), 'utf8'));
+  const one = man.files[0];
+  writeFileSync(join(to, one.file), 'user owned');
+
+  const r = await builtin.migrateLibrary(from, to);
+  assert.equal(readFileSync(join(to, one.file), 'utf8'), 'user owned', '用户文件不能被覆盖');
+  assert.ok(r.conflicts.some((c) => c.file === one.file && c.usedName), '要报告并给备用名');
+  assert.ok(r.moved >= 1);
+});
+
+test('旧目录里没有清单时不做迁移', async () => {
+  const from = join(sandbox, 'mv-g');
+  const to = join(sandbox, 'mv-h');
+  mkdirSync(from, { recursive: true });
+  writeFileSync(join(from, 'unknown.jpg'), 'x');
+  const r = await builtin.migrateLibrary(from, to);
+  assert.equal(r.moved, 0);
+  assert.match(r.reason, /清单/);
+  assert.ok(existsSync(join(from, 'unknown.jpg')), '没有清单时一个文件都不碰');
+  store.saveSettings({ libraryDir: '' });
 });

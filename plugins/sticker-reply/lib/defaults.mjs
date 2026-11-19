@@ -119,6 +119,13 @@ export const DEFAULT_SETTINGS = {
   maxCandidates: 24,
   /** 判断总超时（毫秒） */
   timeoutMs: 10_000,
+  /**
+   * 图库导出目录。空串 = `<DSH数据目录>/extension-data/sticker-reply/library`。
+   *
+   * 允许用户改：有人想把图库直接放进已有的表情包文件夹，或挪到别的盘。
+   * 必须是绝对路径，且不能指到扩展自己的代码目录里。
+   */
+  libraryDir: '',
   /** 自动扫描间隔（毫秒） */
   scanIntervalMs: 15_000,
   /** 同一会话最近几次选择避免重复 */

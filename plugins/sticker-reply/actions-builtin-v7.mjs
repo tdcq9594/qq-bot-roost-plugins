@@ -70,7 +70,12 @@ export function createActions({ env = {}, log = () => {}, config = {} } = {}) {
         errors, scannedAt,
         api: apiReady() ? 'ok' : apiWhy(),
         last: lastDecision(),
-        library: builtin.libraryStatus(),
+        library: {
+          ...builtin.libraryStatus(),
+          /** 默认位置：页面用来显示"恢复默认" */
+          defaultDir: builtin.DEFAULT_LIBRARY(),
+          custom: Boolean(settings.libraryDir),
+        },
       };
     }),
 
@@ -104,9 +109,20 @@ export function createActions({ env = {}, log = () => {}, config = {} } = {}) {
     /** 设置：读或写（payload.patch） */
     settings: wrap(async (p) => {
       if (p && p.patch && typeof p.patch === 'object') {
+        // 目录要能改，但填错了得当场说清楚，不能存进去之后再炸
+        let migration = null;
+        if (Object.prototype.hasOwnProperty.call(p.patch, 'libraryDir')) {
+          const check = builtin.checkLibraryDir(p.patch.libraryDir);
+          if (!check.ok) throw new Error(check.reason);
+          const from = builtin.libraryDir();
+          const to = check.dir || builtin.DEFAULT_LIBRARY();
+          // 先把旧目录里的受管副本搬过去，再改设置；搬失败就不改
+          if (from !== to) migration = await builtin.migrateLibrary(from, to);
+          p.patch.libraryDir = check.dir;
+        }
         const next = store.saveSettings(p.patch);
         const library = await builtin.syncPublishedLibrary();
-        return { settings: next, saved: true, library };
+        return { settings: next, saved: true, library, migration };
       }
       return { settings: store.loadSettings() };
     }),
