@@ -1,13 +1,64 @@
 /** 导出图库：受管清单 + 不覆盖用户文件。 */
-import { copyFileSync, existsSync, lstatSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
-import { basename, extname, join, resolve } from 'node:path';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync, unlinkSync } from 'node:fs';
+import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { api } from './api.mjs';
-import { dataDir, readJson, withLock, writeJson } from './shared.mjs';
+import { EXT_ROOT, dataDir, readJson, withLock, writeJson } from './shared.mjs';
 import { listAnnotated, loadSettings, sha256Of } from './store.mjs';
 
 const OWNER = 'sticker-reply';
-export const libraryDir = () => join(dataDir(), 'library');
+/**
+ * 图库目录：设置里有绝对路径就用它，否则用默认位置。
+ *
+ * 直接修改设置只影响以后的导出；面板保存目录会调用 migrateLibrary
+ * 迁移清单登记且未被修改的副本，用户文件保留。
+ */
+export const DEFAULT_LIBRARY = () => join(dataDir(), 'library');
+
+/** 同一目录的路径别名，Windows 上忽略大小写；已有目录解析物理路径。 */
+function pathIdentity(value) {
+  let full = resolve(value);
+  try { full = realpathSync(full); } catch { /* 新目录尚未创建 */ }
+  return process.platform === 'win32' ? full.toLowerCase() : full;
+}
+
+/** 写入前逐级检查，既拦目录本身，也拦路径中间的链接/junction。 */
+function assertLibraryDirectory(value) {
+  if (!isAbsolute(value)) throw new Error('图库目录必须使用绝对路径');
+  let current = resolve(value);
+  for (;;) {
+    try {
+      const stat = lstatSync(current);
+      if (stat.isSymbolicLink()) throw new Error('图库目录及其上级目录不得使用符号链接或 junction');
+      if (!stat.isDirectory()) throw new Error('图库路径不是普通目录');
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e;
+    }
+    const parent = dirname(current);
+    if (parent === current) return;
+    current = parent;
+  }
+}
+
+export function libraryDir() {
+  const custom = String(loadSettings().libraryDir || '').trim();
+  return custom || DEFAULT_LIBRARY();
+}
+
+/** 校验用户填的目录：必须是绝对路径，且不能落在扩展代码目录里 */
+export function checkLibraryDir(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return { ok: true, dir: '' };
+  if (!isAbsolute(value)) return { ok: false, reason: '要填绝对路径，例如 D:\\表情图库' };
+  const resolved = resolve(value);
+  try { assertLibraryDirectory(resolved); } catch (e) { return { ok: false, reason: e.message }; }
+  const key = pathIdentity(resolved);
+  const codeRoot = pathIdentity(EXT_ROOT);
+  if (key === codeRoot || key.startsWith(`${codeRoot}${sep}`)) {
+    return { ok: false, reason: '不能放在扩展自己的代码目录里（升级会覆盖）' };
+  }
+  return { ok: true, dir: resolved };
+}
 const manifestPath = () => join(libraryDir(), '.sticker-reply.json');
 const validFile = (name) => typeof name === 'string' && name === basename(name) && !/[\\/]/.test(name) && !name.startsWith('.');
 const clean = (value) => String(value || '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '').replace(/[. ]+$/g, '').trim();
@@ -35,15 +86,17 @@ function assertRegularOrMissing(file) {
 }
 
 /** 同名但内容不同时，退一个不冲突的新名字（保留用户文件，也不丢这张图） */
-function altName(file, taken) {
+function altNameIn(dir, file, taken = new Set()) {
   const ext = extname(file);
   const stem = file.slice(0, -ext.length);
   for (let i = 1; i < 100; i += 1) {
     const next = `${stem}_${i}${ext}`;
-    if (!taken.has(next) && !existsSync(join(libraryDir(), next))) return next;
+    if (!taken.has(next) && !existsSync(join(dir, next))) return next;
   }
   return '';
 }
+
+const altName = (file, taken) => altNameIn(libraryDir(), file, taken);
 
 /**
  * 导出已标注且启用的图片。
@@ -56,9 +109,9 @@ function altName(file, taken) {
 export async function exportLibrary() {
   return withLock(async () => {
     const dir = libraryDir();
+    assertLibraryDirectory(dir);
     mkdirSync(dir, { recursive: true });
-    const dirStat = lstatSync(dir);
-    if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) throw new Error('导出目录必须是普通目录');
+    assertLibraryDirectory(dir);
 
     const settings = loadSettings();
     const scan = listAnnotated(settings);
@@ -135,6 +188,80 @@ export async function exportLibrary() {
     writeJson(manifestPath(), { owner: OWNER, version: 1, at: Date.now(), files });
     return { ...libraryStatus(), removed, conflicts, errors: scan.errors };
   });
+}
+
+/**
+ * 把旧图库目录里**我们自己导出的副本**搬到新目录。
+ *
+ * 三条边界：
+ *   · 只搬清单登记过、且内容仍是上次写的那份（用户改过的留在原地）；
+ *   · 新目录已有受管同内容副本 → 删除源副本，视为已迁移；未受管文件不接管；
+ *   · 目标同名但内容不同 → 换备用名，绝不覆盖。
+ * 旧目录里的其它文件（用户自己放的）一个都不动；旧目录空了才删。
+ */
+export async function migrateLibrary(from, to) {
+  const srcDir = String(from || '').trim();
+  const dstDir = String(to || '').trim();
+  const empty = { moved: 0, alreadyThere: 0, leftBehind: [], conflicts: [], removedOldDir: false, reason: '' };
+  if (!srcDir || !dstDir) return { ...empty, reason: '没有旧目录或新目录' };
+  assertLibraryDirectory(srcDir);
+  assertLibraryDirectory(dstDir);
+  if (pathIdentity(srcDir) === pathIdentity(dstDir)) return { ...empty, reason: '目录没变' };
+
+  const man = readJson(join(srcDir, '.sticker-reply.json'), null);
+  if (!man || man.owner !== OWNER || !Array.isArray(man.files)) {
+    return { ...empty, reason: '旧目录里没有本扩展的导出清单，不做迁移' };
+  }
+  mkdirSync(dstDir, { recursive: true });
+  assertLibraryDirectory(dstDir);
+
+  const out = { ...empty, conflicts: [], leftBehind: [] };
+  const targetManifest = readJson(join(dstDir, '.sticker-reply.json'), null);
+  const kept = new Map();
+  if (targetManifest?.owner === OWNER && Array.isArray(targetManifest.files)) {
+    for (const entry of targetManifest.files) {
+      if (!validFile(entry.file)) continue;
+      const file = join(dstDir, entry.file);
+      assertRegularOrMissing(file);
+      if (existsSync(file) && sha256Of(file) === entry.id) kept.set(entry.file, { id: entry.id, file: entry.file });
+    }
+  }
+  for (const entry of man.files) {
+    if (!validFile(entry.file)) continue;
+    const srcFile = join(srcDir, entry.file);
+    if (!existsSync(srcFile)) continue;
+    assertRegularOrMissing(srcFile);
+    const now = sha256Of(srcFile);
+    if (now !== entry.id) { out.leftBehind.push({ file: entry.file, why: '内容被改过，留在原目录' }); continue; }
+
+    let name = entry.file;
+    const dstFile = () => join(dstDir, name);
+    if (existsSync(dstFile())) {
+      if (kept.get(name)?.id === entry.id && sha256Of(dstFile()) === entry.id) {
+        unlinkSync(srcFile);
+        out.alreadyThere += 1;
+        continue;
+      }
+      const alt = altNameIn(dstDir, name);
+      if (!alt) { out.conflicts.push({ file: name, reason: '新目录同名且无备用名' }); out.leftBehind.push({ file: name, why: '没搬' }); continue; }
+      out.conflicts.push({ file: name, reason: '新目录已有同名文件', usedName: alt });
+      name = alt;
+    }
+    // lstat 同时识别悬空文件链接，避免 existsSync=false 时沿链接写到图库之外。
+    assertRegularOrMissing(dstFile());
+    // 跨盘时 rename 会失败，统一用 复制+删除
+    copyFileSync(srcFile, dstFile());
+    unlinkSync(srcFile);
+    out.moved += 1;
+    kept.set(name, { id: entry.id, file: name });
+  }
+
+  writeJson(join(dstDir, '.sticker-reply.json'), { owner: OWNER, version: 1, at: Date.now(), files: [...kept.values()] });
+  try { unlinkSync(join(srcDir, '.sticker-reply.json')); } catch { /* 没有就算了 */ }
+  try {
+    if (readdirSync(srcDir).length === 0) { rmSync(srcDir, { recursive: true, force: true }); out.removedOldDir = true; }
+  } catch { /* 删不掉就留着 */ }
+  return out;
 }
 
 export async function syncPublishedLibrary() {
