@@ -4,7 +4,7 @@
 # 为什么需要：
 #   投稿 PR 按约定不碰 index.json（作者只交 plugins/<id>/），
 #   所以「索引与插件目录一致」和依赖索引的契约测试必然红。
-#   合并后、维护者重建索引之前，main 上也是同样的暂时漂移。
+#   合并后、sync-artifacts.yml 重建索引之前，main 上也是同样的暂时漂移。
 #   这个脚本只在 CI 的临时副本里重算索引，让检查能真实验证插件内容，
 #   而绝不改写仓库里的正式索引。
 #
@@ -33,7 +33,7 @@ if [ -z "$base" ]; then
   exit 1
 fi
 
-# 1) 索引：fork 投稿一律不许碰（索引由维护者合并后重建）
+# 1) 索引：fork 投稿一律不许碰（索引由合并后的 bot 重建）
 if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
   # 本仓 PR 允许改 index.json（维护者重建索引、改构建脚本都属合法改造）
   is_fork=false
@@ -50,7 +50,7 @@ if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
   if [ "$is_fork" = "true" ]; then
     touched=$(git diff --name-only "$base"...HEAD -- index.json || true)
     if [ -n "$touched" ]; then
-      echo "::error::fork 投稿 PR 不得改动 index.json（$touched）。索引由维护者合并后用 build-index.mjs 重建。"
+      echo "::error::fork 投稿 PR 不得改动 index.json（$touched）。索引由合并后的 sync-artifacts.yml 自动重建。"
       exit 1
     fi
   fi

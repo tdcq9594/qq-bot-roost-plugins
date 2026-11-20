@@ -23,7 +23,7 @@
  * 边界
  * ----
  * 只做「拉 + 校正身份 + merge」。**不 push、不重建索引**——
- * 那些要人工补 credits，见 README「维护者发版完整流程」。
+ * 索引和 credits 由合并后的 sync-artifacts.yml 自动生成，见 README「发版流程」。
  */
 
 import { execFileSync } from 'node:child_process';
@@ -98,7 +98,7 @@ if (Array.isArray(files)) {
   const bad = files.map((f) => f.filename).filter((f) => FORBIDDEN.includes(f));
   if (bad.length) {
     console.error(`\n✗ 这个 PR 动了索引文件：${bad.join(', ')}`);
-    console.error('  索引由维护者合并后用 build-index.mjs 重建，这类改动一律不收，先和作者确认意图。');
+    console.error('  索引由合并后的 sync-artifacts.yml 自动重建，这类改动一律不收，先和作者确认意图。');
     process.exit(1);
   }
 }
@@ -177,11 +177,10 @@ say(`\n✓ 已合并：${git('rev-parse', '--short', 'HEAD')}`);
 /* ---------------- 后续步骤提示 ---------------- */
 
 say(`
-下一步（都要人工做，脚本不碰）：
+下一步：
   1. 过一遍代码：node --check plugins/<id>/index.js
-  2. 重建索引：node scripts/build-index.mjs
-  3. 在 index.json 里补 credits / addedAt / tags（脚本不覆盖展示字段）；
-     author 一律填投稿者 @${login}，不要填维护者——署名归插件作者本人
-  4. 验：node scripts/build-index.mjs --check
-  5. 推：git push origin main（只推 GitHub；Gitee 由镜像自动同步）
+  2. 推：git push origin main（只推 GitHub；Gitee 由镜像自动同步）
+  3. 合并后 sync-artifacts.yml 会自动重建索引、注入 @${login} 的署名与
+     PR 号、更新 README 贡献者表。确认那次 workflow 是绿的即可，
+     **不要手工改 index.json 或 README**（会和 bot 的生成物撞）。
 `);

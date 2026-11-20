@@ -1,0 +1,108 @@
+name: Sync artifacts from merge
+
+# 合并后自动生成索引和 README 的贡献者表，由 bot 提交回 main。
+# 和 pr-guard.yml 的分工：
+#   pr-guard.yml    —— 投稿进来时拦风险（只读 PR 元数据，不执行 PR 代码）
+#   本文件          —— 投稿合并后生成产物（只在 main 上跑，不碰 PR 代码）
+#
+# 为什么 push 到 main 而不是 pull_request closed：
+#   1. 本仓用 merge-pr.mjs 重建提交（改 SHA 留住 author），PR 只能 closed 而非
+#      merged，pull_request 的 merged 事件不触发；push 是唯一可靠的信号。
+#   2. push 事件的 head_commit 是合并提交，用 commits/{sha}/pulls 能反查到
+#      关联 PR（重建提交和原 head 都能查到），拿到权威的投稿人登录名和 PR 号。
+#
+# 安全前提（改这个文件的人必须守住）：
+#   1. 只 checkout main（可信代码），绝不 checkout PR 分支或执行投稿代码；
+#      build-index.mjs 只读插件目录的元信息、算哈希，不 import 插件逻辑。
+#   2. 权限只给 contents: write + pull-requests: read；不挂 environment、不碰
+#      任何 secret（GITHUB_TOKEN 只用来读 PR 元数据 + 推生成物）。
+#   3. 【禁止给 actions/checkout 指定 token:】必须用默认 GITHUB_TOKEN——它 push
+#      不会触发新 workflow（GitHub 防递归）。若换成 PAT / GitHub App token，
+#      actor 不再是 github-actions[bot]，guard 会放行，每次 bot push 又触发新
+#      run，无限递归。要绕开这个限制得重新设计，不要在这里加 token。
+#   4. bot 自己 push 不触发新 workflow，但仍保留 actor 判断双保险；
+#      concurrency 排队 + push 重试处理多个合并挤在一起的情况。
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+# 不 cancel：被取消的那次会留下半生成的状态（索引更新了、README 没更新）。
+# 排队让每次都完整跑完；下面的重试循环处理排队期间 main 又前进的问题。
+concurrency:
+  group: sync-artifacts
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      # 不指定 token: —— 见文件头安全前提第 3 条，PAT 会造成无限递归
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: 生成、校验并提交
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SYNC_BEFORE: ${{ github.event.before }}
+          SYNC_AFTER: ${{ github.event.after }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          generate() {
+            node scripts/build-index.mjs
+            env GITHUB_TOKEN="$GH_TOKEN" GITHUB_REPOSITORY="${{ github.repository }}" \
+              SYNC_BEFORE="$SYNC_BEFORE" SYNC_AFTER="$SYNC_AFTER" \
+              node scripts/enrich-index.mjs
+            # enrich 只改展示字段，再跑一次保证索引自洽、字段顺序稳定
+            node scripts/build-index.mjs
+            node scripts/generate-readme.mjs
+            # 每次生成后都校验（包括重试那一轮），生成物不自洽就根本不提交
+            node scripts/build-index.mjs --check
+            node scripts/generate-readme.mjs --check
+          }
+
+          generate
+
+          if git diff --quiet -- index.json README.md; then
+            echo '索引与 README 已是最新，无需提交'
+            exit 0
+          fi
+
+          # 排队期间 main 可能又前进了：每次重试都重新 fetch + reset 到最新
+          # main 再生成。两个脚本都是确定性的，reset 后重跑等于同一个操作，
+          # 不会把别人的改动冲掉。
+          for attempt in 1 2 3; do
+            git fetch origin main --quiet
+            git reset --hard origin/main --quiet
+
+            generate
+
+            if git diff --quiet -- index.json README.md; then
+              echo '重置到最新 main 后已无差异，无需提交'
+              exit 0
+            fi
+
+            git add index.json README.md
+            git commit -m 'chore: 自动生成索引与贡献者表'
+            if git push; then
+              echo '✓ 已提交生成的索引与 README'
+              exit 0
+            fi
+            echo "push 被拒（main 又前进了），重试 $attempt/3"
+          done
+
+          echo '::error::三次推送都被拒，生成物未落库。检查是否有其他 workflow 在同时写 main。'
+          exit 1

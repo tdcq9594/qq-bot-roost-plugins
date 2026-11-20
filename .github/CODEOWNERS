@@ -3,9 +3,12 @@
 # 这条文件本身不会拦下任何推送 —— 它只在分支保护/规则集里打开
 # 「Require review from Code Owners」之后才生效。
 #
-# 2026-11-19 插件索引取消签名后，sign-index.yml 已删除、不再往 main 回推，
-# 于是 2026-11-20 给 main 开了 require PR + 4 项 required checks。
-# 但「Require review from Code Owners」还没开（个人仓 approver 设 1 会卡死 PR），
+# 2026-11-19 插件索引取消签名后，曾于 11-20 给 main 开过 require PR +
+# 4 项 required checks；同日又因要放开 bot 回推生成物而去掉了这两项
+# （个人仓无法给 GitHub Actions 配 bypass，分支保护与 bot 回推二选一）。
+# main 目前保留禁强推 / 禁删除，投稿门禁靠 pr-guard.yml + CI 结论 + 人工审。
+#
+# 「Require review from Code Owners」也没开（个人仓 approver 设 1 会卡死 PR），
 # 所以本文件目前的作用仅是：PR 页面自动带上 review 请求，不会被忘掉。
 # 哪天想强制 code owner 审批，在分支保护里把那个开关打开即可，规则不用现编。
 #
