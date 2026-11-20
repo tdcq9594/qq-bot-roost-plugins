@@ -2,7 +2,7 @@
   "schema": 1,
   "repo": "tdcq9594/qq-bot-roost-plugins",
   "branch": "main",
-  "updated": "2026-11-19",
+  "updated": "2026-11-20",
   "plugins": [
     {
       "id": "ai-chat",
@@ -513,7 +513,7 @@
     {
       "id": "sticker-reply",
       "name": "表情标注",
-      "version": "0.2.7",
+      "version": "0.2.10",
       "description": "管理表情库与逐张标注，导出带标签的图库给宿主内置表情功能发图；可用一次独立模型判断这一轮是否只发图",
       "tags": [
         "表情",
@@ -528,10 +528,10 @@
         "agent:write"
       ],
       "path": "plugins/sticker-reply",
-      "sha256": "e36e60646409ef46ec29a61239fdc49290f2bda63c77e2282f31353ff4929cef",
+      "sha256": "516a26ecc9947376a36d93b6bb91b18db5608ae87075a9f638fa34b00613dc53",
       "category": "媒体与内容",
       "author": "haibiandefengshu",
-      "credits": "插件由 haibiandefengshu 提交（PR #16）；索引分类与署名由维护者补齐",
+      "credits": "插件由 haibiandefengshu 提交（PR #16 首发，PR #17 升级 0.2.10 修复目录迁移丢图与链接绕过）；索引分类与署名由维护者补齐",
       "commands": [
         "sticker_decide"
       ],
