@@ -1,6 +1,6 @@
 # roost-mcp
 
-把 [Roost](https://github.com/tdcq9594/qq-bot-roost) 的 QQ 能力做成 **MCP 工具**，
+把 [Roost](https://github.com/roost-qq/qq-bot-roost) 的 QQ 能力做成 **MCP 工具**，
 让 Claude Desktop / Cursor / Cline / Continue / Windsurf 这些工作台能直接发 QQ 消息。
 
 方向跟 `ai-chat` 插件相反：

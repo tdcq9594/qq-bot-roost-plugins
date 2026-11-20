@@ -137,7 +137,7 @@ jobs:
           # 钉已发布 tag 而不是 master HEAD 的理由见下面 checkout 的注释。
           # 以前靠手改，1.0.1/1.0.2/1.0.3 连漏三次，插件测试一直跑在旧框架上。
           # 仓库 Variables 的 FRAMEWORK_REF 仍是紧急回退开关（见下面 checkout）。
-          ref=$(gh api repos/tdcq9594/qq-bot-roost/releases/latest --jq .tag_name)
+          ref=$(gh api repos/roost-qq/qq-bot-roost/releases/latest --jq .tag_name)
           if [ -z "$ref" ]; then
             echo "框架 releases/latest 为空，检查框架仓是否建了 Release" >&2
             exit 1
@@ -148,7 +148,7 @@ jobs:
       - name: 取框架（测试夹具在那边）
         uses: actions/checkout@v4
         with:
-          repository: tdcq9594/qq-bot-roost
+          repository: roost-qq/qq-bot-roost
           path: .framework
           # 固定到已发布的框架 tag，而不是默认分支 HEAD。
           # 否则会出现：框架 master 有插件依赖的新能力但还没发布 → 插件 CI 假绿，

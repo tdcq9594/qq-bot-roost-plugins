@@ -703,10 +703,10 @@ const DEMOS = {
 export default {
   id: 'demo-x',
   name: '演示插件',
-  version: '0.2.0',
+  version: '0.2.1',
   description: '读完源码就能写插件：分步教程、可复制骨架、全接口可运行示例',
   shortDesc: '一份能跑的插件开发教程',
-  repo: 'tdcq9594/qq-bot-roost-plugins',
+  repo: 'roost-qq/qq-bot-roost-plugins',
   frameworkVersion: '>=1.0.0',
   supportPlatforms: ['group', 'c2c'],
 

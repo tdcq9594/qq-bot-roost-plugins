@@ -1,13 +1,13 @@
 {
   "schema": 1,
-  "repo": "tdcq9594/qq-bot-roost-plugins",
+  "repo": "roost-qq/qq-bot-roost-plugins",
   "branch": "main",
   "updated": "2026-11-20",
   "plugins": [
     {
       "id": "ai-chat",
       "name": "AI 对话",
-      "version": "4.4.6",
+      "version": "4.4.7",
       "description": "把大模型接进群聊和私聊，不用 @ 也不用指令——它自己判断该不该接话；支持撤回、按钮、私聊流式，每会话独立上下文",
       "tags": [
         "AI",
@@ -17,7 +17,7 @@
       "frameworkVersion": ">=0.9.12",
       "runtime": "node",
       "path": "plugins/ai-chat",
-      "sha256": "d9181ac77b8d6775aa15d5987257156f7e444d408c519d17372713364000570e",
+      "sha256": "cbf512666a3b1ac5e1a7a2d06424b47edd159223989de8dc3d41f99b5f697351",
       "author": "tdcq9594",
       "addedAt": "2026-10-24",
       "verified": "official",
@@ -139,7 +139,7 @@
     {
       "id": "demo-x",
       "name": "演示插件",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "description": "读完源码就能写插件：分步教程、可复制骨架、全接口可运行示例",
       "tags": [
         "示例",
@@ -147,7 +147,7 @@
       ],
       "runtime": "node",
       "path": "plugins/demo-x",
-      "sha256": "8a85a2b73e06f3bd842bd2a120027263cc6c889ad8be645098f0f338aa71c95f",
+      "sha256": "32fa1dc9ea953c9a9503da25b02a9aeec42f9eabe121228c98cb424a863ef81b",
       "author": "tdcq9594",
       "commands": [
         "demo"

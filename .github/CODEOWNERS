@@ -15,14 +15,14 @@
 # 为什么 .github/ 要单独标出来：谁能改 workflow，谁就能在 CI 里执行任意代码
 # 或改-check 逻辑。权限挡不住这个，只有「改 .github/ 必须有人看」才挡得住。
 
-*                       @tdcq9594
+*                       @roost-qq/maintainers
 
 # 能改 CI / 构建逻辑的路径
-/.github/               @tdcq9594
-/.github/workflows/     @tdcq9594
-/scripts/               @tdcq9594
+/.github/               @roost-qq/maintainers
+/.github/workflows/     @roost-qq/maintainers
+/scripts/               @roost-qq/maintainers
 
 # 能改索引内容与索引构建逻辑的路径
-/index.json             @tdcq9594
-/verified.json          @tdcq9594
-/categories.json        @tdcq9594
+/index.json             @roost-qq/maintainers
+/verified.json          @roost-qq/maintainers
+/categories.json        @roost-qq/maintainers
