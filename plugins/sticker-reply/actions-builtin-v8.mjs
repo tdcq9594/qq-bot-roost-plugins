@@ -121,7 +121,8 @@ export function createActions({ env = {}, log = () => {}, config = {} } = {}) {
           p.patch.libraryDir = check.dir;
         }
         const next = store.saveSettings(p.patch);
-        const library = await builtin.syncPublishedLibrary();
+        // 迁移已经生成目标清单；本动作只回报状态，避免关闭状态把刚搬过去的图清空。
+        const library = migration ? builtin.libraryStatus() : await builtin.syncPublishedLibrary();
         return { settings: next, saved: true, library, migration };
       }
       return { settings: store.loadSettings() };

@@ -1,6 +1,6 @@
 /** 导出图库：受管清单 + 不覆盖用户文件。 */
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync, unlinkSync } from 'node:fs';
-import { basename, extname, isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { api } from './api.mjs';
 import { EXT_ROOT, dataDir, readJson, withLock, writeJson } from './shared.mjs';
@@ -22,6 +22,24 @@ function pathIdentity(value) {
   return process.platform === 'win32' ? full.toLowerCase() : full;
 }
 
+/** 写入前逐级检查，既拦目录本身，也拦路径中间的链接/junction。 */
+function assertLibraryDirectory(value) {
+  if (!isAbsolute(value)) throw new Error('图库目录必须使用绝对路径');
+  let current = resolve(value);
+  for (;;) {
+    try {
+      const stat = lstatSync(current);
+      if (stat.isSymbolicLink()) throw new Error('图库目录及其上级目录不得使用符号链接或 junction');
+      if (!stat.isDirectory()) throw new Error('图库路径不是普通目录');
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e;
+    }
+    const parent = dirname(current);
+    if (parent === current) return;
+    current = parent;
+  }
+}
+
 export function libraryDir() {
   const custom = String(loadSettings().libraryDir || '').trim();
   return custom || DEFAULT_LIBRARY();
@@ -33,6 +51,7 @@ export function checkLibraryDir(raw) {
   if (!value) return { ok: true, dir: '' };
   if (!isAbsolute(value)) return { ok: false, reason: '要填绝对路径，例如 D:\\表情图库' };
   const resolved = resolve(value);
+  try { assertLibraryDirectory(resolved); } catch (e) { return { ok: false, reason: e.message }; }
   const key = pathIdentity(resolved);
   const codeRoot = pathIdentity(EXT_ROOT);
   if (key === codeRoot || key.startsWith(`${codeRoot}${sep}`)) {
@@ -90,9 +109,9 @@ const altName = (file, taken) => altNameIn(libraryDir(), file, taken);
 export async function exportLibrary() {
   return withLock(async () => {
     const dir = libraryDir();
+    assertLibraryDirectory(dir);
     mkdirSync(dir, { recursive: true });
-    const dirStat = lstatSync(dir);
-    if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) throw new Error('导出目录必须是普通目录');
+    assertLibraryDirectory(dir);
 
     const settings = loadSettings();
     const scan = listAnnotated(settings);
@@ -185,6 +204,8 @@ export async function migrateLibrary(from, to) {
   const dstDir = String(to || '').trim();
   const empty = { moved: 0, alreadyThere: 0, leftBehind: [], conflicts: [], removedOldDir: false, reason: '' };
   if (!srcDir || !dstDir) return { ...empty, reason: '没有旧目录或新目录' };
+  assertLibraryDirectory(srcDir);
+  assertLibraryDirectory(dstDir);
   if (pathIdentity(srcDir) === pathIdentity(dstDir)) return { ...empty, reason: '目录没变' };
 
   const man = readJson(join(srcDir, '.sticker-reply.json'), null);
@@ -192,6 +213,7 @@ export async function migrateLibrary(from, to) {
     return { ...empty, reason: '旧目录里没有本扩展的导出清单，不做迁移' };
   }
   mkdirSync(dstDir, { recursive: true });
+  assertLibraryDirectory(dstDir);
 
   const out = { ...empty, conflicts: [], leftBehind: [] };
   const targetManifest = readJson(join(dstDir, '.sticker-reply.json'), null);
@@ -208,6 +230,7 @@ export async function migrateLibrary(from, to) {
     if (!validFile(entry.file)) continue;
     const srcFile = join(srcDir, entry.file);
     if (!existsSync(srcFile)) continue;
+    assertRegularOrMissing(srcFile);
     const now = sha256Of(srcFile);
     if (now !== entry.id) { out.leftBehind.push({ file: entry.file, why: '内容被改过，留在原目录' }); continue; }
 
@@ -224,6 +247,8 @@ export async function migrateLibrary(from, to) {
       out.conflicts.push({ file: name, reason: '新目录已有同名文件', usedName: alt });
       name = alt;
     }
+    // lstat 同时识别悬空文件链接，避免 existsSync=false 时沿链接写到图库之外。
+    assertRegularOrMissing(dstFile());
     // 跨盘时 rename 会失败，统一用 复制+删除
     copyFileSync(srcFile, dstFile());
     unlinkSync(srcFile);

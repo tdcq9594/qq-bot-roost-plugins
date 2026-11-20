@@ -5,7 +5,7 @@
   "serverName": "sticker-reply",
   "name": "表情标注",
   "description": "管理表情库与逐张标注，导出带标签的图库给宿主内置表情功能发图；可用一次独立模型判断这一轮是否只发图",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "transport": "stdio",
   "command": "node",
   "args": [
@@ -24,7 +24,7 @@
     },
     "page": "page.html",
     "runtime": "inprocess",
-    "entry": "actions-builtin-v7.mjs",
+    "entry": "actions-builtin-v8.mjs",
     "actions": [
       {
         "id": "list",

@@ -286,11 +286,10 @@ $('exportLibrary').addEventListener('click', async () => {
   catch (e) { result(e.message, true); }
   finally { setBusy(false); }
 });
-$('saveLibraryDir').addEventListener('click', async () => {
-  if (busy) return;
-  const dir = $('libraryDir').value.trim();
-  if (dir && !confirm('改目录会把旧目录里由本扩展导出的副本自动搬到新目录；你自己放进去的文件不会动。继续？')) return;
-  setBusy(true); result('保存目录…');
+async function changeLibraryDirectory(dir) {
+  if (busy || !confirm('改目录会把旧目录里由本扩展导出的副本自动搬到新目录；你自己放进去的文件不会动。继续？')) return;
+  const restoring = !dir;
+  setBusy(true); result(restoring ? '恢复默认目录…' : '保存目录…');
   try {
     const d = await act('settings', { patch: { libraryDir: dir } });
     const mv = d.migration || {};
@@ -300,22 +299,14 @@ $('saveLibraryDir').addEventListener('click', async () => {
     if (mv.leftBehind?.length) bits.push(`留在原目录 ${mv.leftBehind.length} 个（内容被改过或同名冲突）`);
     if (mv.conflicts?.length) bits.push(`同名冲突 ${mv.conflicts.length} 个已改用备用名`);
     if (mv.reason) bits.push(mv.reason);
-    result('目录已保存：' + d.library.directory + (bits.length ? '；' + bits.join('；') : ''));
-    await act('exportLibrary').catch(() => null);
+    result((restoring ? '已恢复默认目录：' : '目录已保存：') + d.library.directory + (bits.length ? '；' + bits.join('；') : ''));
+    // settings 已完成迁移；这里不得再次导出，否则关闭状态会清掉刚迁移的副本。
     await load(true); await checkDependency();
   } catch (e) { result(e.message, true); }
   finally { setBusy(false); }
-});
-
-$('resetLibraryDir').addEventListener('click', async () => {
-  const def = $('libraryDir').dataset.defaultDir || '';
-  $('libraryDir').value = def;
-  if (busy) return;
-  setBusy(true); result('恢复默认目录…');
-  try { await act('settings', { patch: { libraryDir: '' } }); await load(true); await checkDependency(); }
-  catch (e) { result(e.message, true); }
-  finally { setBusy(false); }
-});
+}
+$('saveLibraryDir').addEventListener('click', () => changeLibraryDirectory($('libraryDir').value.trim()));
+$('resetLibraryDir').addEventListener('click', () => changeLibraryDirectory(''));
 
 $('checkDependency').addEventListener('click', async () => {
   if (busy) return; setBusy(true);
