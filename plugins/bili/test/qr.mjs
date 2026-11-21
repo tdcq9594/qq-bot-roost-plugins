@@ -214,3 +214,39 @@ test('接口返回异常时给出可读原因，不抛', async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/**
+ * 扫码的**轮询归属**（2026-11-21 修）。
+ *
+ * 两个真事故：
+ *  1. 宿主侧「只要不是 waiting 就停」→ 用户一扫（`scanned`）就停查，
+ *     手机上点完确认永远等不到 `done`，cookie 永远不写；
+ *  2. 页面里同时有 `setInterval` 和一条自续 `setTimeout` → 实际每 1 秒刷一次，
+ *     二维码图片反复重建（`&t=` 防缓存），看起来一直在闪。
+ *
+ * 这两条都只能靠「读源码 + 结构断言」守住：前者要真机扫码，后者要浏览器。
+ */
+test('宿主侧：扫完待确认不能停轮询，只有结算态才停', () => {
+  const src = readFileSync(new URL('../server.mjs', import.meta.url), 'utf8');
+  assert.match(src, /SETTLED_QR\.has\(r\.state\)/, '停止条件要按结算态判');
+  assert.equal(
+    /r\.state !== 'waiting'\) stopQrTimer/.test(src),
+    false,
+    '不能「只要不是 waiting 就停」——scanned 也要继续查',
+  );
+  assert.match(src, /SETTLED_QR = new Set\(\['done'/, '结算态里要有 done');
+  assert.match(src, /'expired'/, '结算态里要有 expired');
+});
+
+test('宿主侧：qr.id 要跨 tick 保持不变（页面靠它判断换没换码）', () => {
+  const src = readFileSync(new URL('../server.mjs', import.meta.url), 'utf8');
+  assert.match(src, /lastQr = \{ id: r\.id \|\|/, 'tick 里要沿用上一次的 id');
+});
+
+test('页面：轮询只有一条链，二维码图同码复用', () => {
+  const html = readFileSync(new URL('../ui/index.html', import.meta.url), 'utf8');
+  assert.equal(/__qrPoll/.test(html), false, '不该再有第二条自续 setTimeout');
+  assert.match(html, /loadData\(\{ quiet: true \}\)/, '轮询要走 quiet 模式');
+  assert.match(html, /qrImgId !== qid/, '同一个码要复用同一个 img 元素');
+  assert.match(html, /if \(quiet\) return;/, 'quiet 时不重画视频列表');
+});
