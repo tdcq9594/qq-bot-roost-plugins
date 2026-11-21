@@ -31,7 +31,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const REPO = 'tdcq9594/qq-bot-roost-plugins';
+const REPO = 'roost-qq/qq-bot-roost-plugins';
 
 /** 索引是维护者独占的产物：投稿 PR 不许碰（插件索引已不签名） */
 const FORBIDDEN = ['index.json'];

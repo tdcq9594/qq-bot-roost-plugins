@@ -63,7 +63,7 @@
 这个插件**不直连模型**，它只做「QQ ↔ DSH」的桥：把群里的消息交给 DSH，
 再把 DSH 的回话发回群里。模型、Key、参数全在 DSH 那边配。
 
-装 [dsh-roost](https://github.com/tdcq9594/dsh-roost) 就行，
+装 [dsh-roost](https://github.com/roost-qq/dsh-roost) 就行，
 默认地址 `http://127.0.0.1:17321`，一般不用改。
 
 > 4.0.0 之前这里还要填 `API 密钥` / `接口地址` / `模型`，
@@ -131,7 +131,7 @@
 | 谁 | 干什么 |
 |---|---|
 | 这个插件 | 收 QQ 消息、判断该不该接、把结果发回去 |
-| [dsh-roost](https://github.com/tdcq9594/dsh-roost) | 把消息交给 DSH 那一轮，拿回最终回复 |
+| [dsh-roost](https://github.com/roost-qq/dsh-roost) | 把消息交给 DSH 那一轮，拿回最终回复 |
 | DSH | 模型、Key、工具、记忆、人格，全归它 |
 
 想换模型？在 DSH 里换，这个插件一行都不用改。

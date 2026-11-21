@@ -2,7 +2,7 @@
 
 > 提交你的插件，用户在面板「插件 → 市场」里一键安装。
 
-- 主程序：[qq-bot-roost](https://github.com/tdcq9594/qq-bot-roost)
+- 主程序：[qq-bot-roost](https://github.com/roost-qq/qq-bot-roost)
 - 插件清单：[`index.json`](index.json)
 
 ---
@@ -215,8 +215,8 @@ plugins/<插件id>/
 
 **二选一**：有 `index.js` 就是内建插件（跑在主进程），有 `plugin.json` 就是外部插件（子进程）。
 
-写之前请先读主程序的 [插件开发规范](https://github.com/tdcq9594/qq-bot-roost/blob/master/docs/插件开发规范.md)
-和 [插件协议](https://github.com/tdcq9594/qq-bot-roost/blob/master/docs/插件协议.md)。
+写之前请先读主程序的 [插件开发规范](https://github.com/roost-qq/qq-bot-roost/blob/master/docs/插件开发规范.md)
+和 [插件协议](https://github.com/roost-qq/qq-bot-roost/blob/master/docs/插件协议.md)。
 
 ### 硬性要求
 
@@ -284,7 +284,7 @@ plugins/<插件id>/
 <!-- BEGIN GENERATED: contributors -->
 | 贡献者 | 插件 | 提交 |
 |---|---|---|
-| [@haibiandefengshu](https://github.com/haibiandefengshu) | `comfy-draw`（本地绘图 (ComfyUI)）、`jm-comic`（禁漫下载）、`media-vision`（识图与看视频）、`persona-grow`（人设生长）、`persona-scope`（rp人设）、`persona-scope-ext`（专属人设）、`pixiv-pid`（Pixiv 发图）、`sticker-reply`（表情标注）、`trpg-forwarder`（跑团转发器）、`weather-card`（天气播报） | [PR #1](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/1)、[PR #2](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/2)、[PR #3](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/3)、[PR #4](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/4)、[PR #5](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/5)、[PR #7](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/7)、[PR #8](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/8)、[PR #9](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/9)、[PR #10](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/10)、[PR #11](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/11)、[PR #12](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/12)、[PR #13](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/13)、[PR #15](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/15)、[PR #16](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/16)、[PR #17](https://github.com/tdcq9594/qq-bot-roost-plugins/pull/17) |
+| [@haibiandefengshu](https://github.com/haibiandefengshu) | `comfy-draw`（本地绘图 (ComfyUI)）、`jm-comic`（禁漫下载）、`media-vision`（识图与看视频）、`persona-grow`（人设生长）、`persona-scope`（rp人设）、`persona-scope-ext`（专属人设）、`pixiv-pid`（Pixiv 发图）、`sticker-reply`（表情标注）、`trpg-forwarder`（跑团转发器）、`weather-card`（天气播报） | [PR #1](https://github.com/roost-qq/qq-bot-roost-plugins/pull/1)、[PR #2](https://github.com/roost-qq/qq-bot-roost-plugins/pull/2)、[PR #3](https://github.com/roost-qq/qq-bot-roost-plugins/pull/3)、[PR #4](https://github.com/roost-qq/qq-bot-roost-plugins/pull/4)、[PR #5](https://github.com/roost-qq/qq-bot-roost-plugins/pull/5)、[PR #7](https://github.com/roost-qq/qq-bot-roost-plugins/pull/7)、[PR #8](https://github.com/roost-qq/qq-bot-roost-plugins/pull/8)、[PR #9](https://github.com/roost-qq/qq-bot-roost-plugins/pull/9)、[PR #10](https://github.com/roost-qq/qq-bot-roost-plugins/pull/10)、[PR #11](https://github.com/roost-qq/qq-bot-roost-plugins/pull/11)、[PR #12](https://github.com/roost-qq/qq-bot-roost-plugins/pull/12)、[PR #13](https://github.com/roost-qq/qq-bot-roost-plugins/pull/13)、[PR #15](https://github.com/roost-qq/qq-bot-roost-plugins/pull/15)、[PR #16](https://github.com/roost-qq/qq-bot-roost-plugins/pull/16)、[PR #17](https://github.com/roost-qq/qq-bot-roost-plugins/pull/17) |
 <!-- END GENERATED: contributors -->
 
 索引条目里的 `author` **一律写投稿者的 GitHub 用户名**，维护者不占署名；`credits` 只补充 PR 编号。这两个字段现在由 `enrich-index.mjs` 从合并的 PR 元数据注入，不再手填——PR 发起人是 GitHub 的权威数据，比投稿人自述可靠。索引的 sha256 约束的是「装到的是哪份内容」，**不约束 `author` 字段**——两者是两回事。

@@ -24,7 +24,7 @@ import path from 'node:path';
 const ROOT = path.resolve(import.meta.dirname, '..');
 const INDEX = path.join(ROOT, 'index.json');
 const README = path.join(ROOT, 'README.md');
-const REPO = 'tdcq9594/qq-bot-roost-plugins';
+const REPO = 'roost-qq/qq-bot-roost-plugins';
 
 /** 维护者自己写的插件不进投稿贡献者表（那张表是给社区投稿作者署名的）。 */
 const MAINTAINERS = new Set(['tdcq9594']);

@@ -26,7 +26,7 @@ import { execFileSync } from 'node:child_process';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const INDEX = path.join(ROOT, 'index.json');
-const REPO = process.env.GITHUB_REPOSITORY ?? 'tdcq9594/qq-bot-roost-plugins';
+const REPO = process.env.GITHUB_REPOSITORY ?? 'roost-qq/qq-bot-roost-plugins';
 const TOKEN = process.env.GITHUB_TOKEN ?? '';
 const BEFORE = process.env.SYNC_BEFORE ?? '';
 const AFTER = process.env.SYNC_AFTER ?? '';
