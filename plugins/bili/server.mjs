@@ -223,6 +223,9 @@ selfBrowse = createSelfBrowse({
 /** `depsDir` 里如果有 `qrcode` 就用它生成二维码，没有则退回内置编码器 */
 const qr = createQrLogin({ root: HERE, log, depsDir: sharedDepsDir() });
 
+/** 扫码流程的结算态：到这里就不用再查了 */
+const SETTLED_QR = new Set(['done', 'expired', 'error', 'cancelled', 'idle']);
+
 function stopQrTimer() {
   if (qrTimer) clearInterval(qrTimer);
   qrTimer = null;
@@ -231,7 +234,12 @@ function stopQrTimer() {
 async function qrTick() {
   try {
     const r = await qr.poll();
-    lastQr = { state: r.state, message: String(r.message || ''), at: Date.now() };
+    /**
+     * `id` 要**跨 tick 保持不变**：面板靠它判断「还是不是同一个码」，
+     * 变了才重新拉图（见 `ui/index.html` 的 `renderQr`）。
+     * `poll()` 不回 id，所以沿用 `start()` 那次的。
+     */
+    lastQr = { id: r.id || (lastQr && lastQr.id) || '', state: r.state, message: String(r.message || ''), at: Date.now() };
     /**
      * 扫码成功 = Cookie 刚写进 `cookie.txt`，这里立刻重查一次登录态。
      * 不查的话面板会同时显示「已登录，cookie 已写入」和状态格里的
@@ -240,7 +248,15 @@ async function qrTick() {
      */
     if (r.state === 'done') lastAccount = await api.account({ force: true });
     syncMeta();
-    if (r.state !== 'waiting') stopQrTimer();
+    /**
+     * **`scanned` 不能停**（2026-11-21 修）。
+     *
+     * 用户扫完还要在手机上点「确认」，这期间 `poll()` 一直回 `scanned`。
+     * 以前的条件是 `state !== 'waiting'` 就停，于是**一扫就停**：面板永远
+     * 停在「已扫码，在手机上点确认」，cookie 永远不写，登录做不完。
+     * 只有结算态才停。
+     */
+    if (SETTLED_QR.has(r.state)) stopQrTimer();
   } catch (e) {
     log('扫码轮询失败：' + (e?.message ?? e));
   }

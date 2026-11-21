@@ -902,13 +902,22 @@
     });
   }
 
+  /**
+   * 二维码图片元素缓存。
+   *
+   * `&t=Date.now()` 是防缓存的，**每次重建就等于重新下载一次 PNG**。
+   * 以前每 2 秒渲染一次（还叠加了一条重复轮询，实际 1 秒一次），
+   * 表现就是二维码一直闪。同一个码（`qr.id` 不变）必须复用同一个元素。
+   */
+  let qrImgEl = null;
+  let qrImgId = null;
+
   /** 扫码区：等待时显示二维码，成功后清掉 */
   function renderQr() {
     const box = document.querySelector('#qr-box');
     const cancel = document.querySelector('#qr-cancel');
     if (!box) return;
     const q = meta && meta.qr;
-    box.textContent = '';
     /**
      * `scanned` 也要继续显示二维码：用户扫完还没在手机上点确认，
      * 这时候把图收掉反而让人以为流程断了。
@@ -916,6 +925,10 @@
     const waiting = Boolean(q && (q.state === 'waiting' || q.state === 'scanned'));
     if (cancel) cancel.hidden = !waiting;
     if (!waiting) {
+      /** 结算了：丢掉缓存，下次开新码要重新拉图 */
+      qrImgEl = null;
+      qrImgId = null;
+      box.textContent = '';
       if (q && q.state === 'done') {
         const ok = document.createElement('div');
         ok.className = 'hint';
@@ -931,20 +944,30 @@
       }
       return;
     }
-    const img = document.createElement('img');
-    img.src = API + '/ext-pages?id=bili&file=ui/qr.png&t=' + Date.now();
-    img.alt = 'B 站登录二维码';
     /**
-     * 220px 且 `pixelated`：二维码是按整数倍放大的黑白方块，
-     * 交给浏览器平滑插值会让边缘发灰、模块糊在一起，手机更容易扫不出。
+     * 同一个码就复用同一个元素：换掉 `src` 或重建元素都会让浏览器重新下载，
+     * 而 `qr.id` 在一次扫码流程里是稳定的（见 `server.mjs` 的 `qrTick`）。
+     * `id` 缺失时宁可按「新码」处理——宁可多拉一次，也不要显示一个旧码。
      */
-    img.style.cssText = 'width:220px;height:220px;border-radius:10px;border:1px solid var(--line);margin-top:10px;display:block;image-rendering:pixelated;background:#fff';
+    const qid = String(q.id || '');
+    if (!qrImgEl || !qid || qrImgId !== qid) {
+      qrImgEl = document.createElement('img');
+      qrImgId = qid;
+      qrImgEl.src = API + '/ext-pages?id=bili&file=ui/qr.png&t=' + Date.now();
+      qrImgEl.alt = 'B 站登录二维码';
+      /**
+       * 220px 且 `pixelated`：二维码是按整数倍放大的黑白方块，
+       * 交给浏览器平滑插值会让边缘发灰、模块糊在一起，手机更容易扫不出。
+       */
+      qrImgEl.style.cssText = 'width:220px;height:220px;border-radius:10px;border:1px solid var(--line);margin-top:10px;display:block;image-rendering:pixelated;background:#fff';
+    }
     const tip = document.createElement('div');
     tip.className = 'hint';
     tip.textContent = q.state === 'scanned'
       ? (q.message || '已扫码，在手机上点确认')
       : '用手机 B 站 App 扫码，扫完在手机上点确认';
-    box.append(img, tip);
+    box.textContent = '';
+    box.append(qrImgEl, tip);
     syncQrPoll();
   }
 
@@ -1196,7 +1219,7 @@
     const q = meta && meta.qr;
     const need = Boolean(q && (q.state === 'waiting' || q.state === 'scanned'));
     if (need && !qrPoll) {
-      qrPoll = setInterval(() => { void loadData(); }, 2000);
+      qrPoll = setInterval(() => { void loadData({ quiet: true }); }, 2000);
     } else if (!need && qrPoll) {
       clearInterval(qrPoll);
       qrPoll = null;
@@ -1295,7 +1318,11 @@
     return m ? m[0] : '';
   }
 
-  async function loadData() {
+  /**
+   * @param {{quiet?:boolean}} [o] `quiet` = 扫码轮询用：只刷状态区，不重画
+   *   视频列表、不读历史文件（那两样每次都要下载 / 重建 DOM，2 秒一遍太重）。
+   */
+  async function loadData({ quiet = false } = {}) {
     try {
       const r = await fetch(`${API}/extensions/ui/data?id=${encodeURIComponent(ID)}`);
       const j = await r.json();
@@ -1304,14 +1331,28 @@
       renderDanmaku();
       renderQr();
       renderActivity();
-      /** 「ta 刷过什么」的内容在单独文件里（数组进不了 meta），每次刷新顺手读一遍 */
-      void loadHistory();
-      /** 扫码等待期间每 2 秒回来看一次；扩展那边也在同时查 cookie */
-      if (meta && meta.qr && meta.qr.state === 'waiting') {
-        clearTimeout(window.__qrPoll);
-        window.__qrPoll = setTimeout(() => { loadData(); }, 2000);
-      }
+      /**
+       * 「ta 刷过什么」的内容在单独文件里（数组进不了 meta），每次刷新顺手读一遍。
+       * **轮询（`quiet`）时不读**：那个文件可能很大，登录等一分钟要读三十遍。
+       */
+      if (!quiet) void loadHistory();
+      /**
+       * 这里**不要再挂一个 `setTimeout`**（2026-11-21 修）。
+       *
+       * 以前 `syncQrPoll()` 有一个 2 秒的 `setInterval`，这里又有一条自续的
+       * `setTimeout`，两条并行 → 实际每 **1 秒**刷一次：二维码图片反复重建、
+       * 视频列表反复重画。轮询的归属只留 `syncQrPoll()` 一处。
+       */
 
+      /** 这几样很便宜，轮询时也要更新（不然「更新于」会停在点开那一刻） */
+      const when = j && j.updatedAt ? new Date(j.updatedAt).toLocaleString() : '还没更新过';
+      $('#stamp').textContent = '更新于 ' + when;
+      const pending = Array.isArray(j && j.pendingActions) ? j.pendingActions.length : 0;
+      $('#pending').hidden = pending === 0;
+      if (pending) $('#pending').textContent = `${pending} 个动作排队中`;
+
+      /** 视频列表重画要重建几十个节点 + 重新请求封面，轮询时跳过 */
+      if (quiet) return;
       const box = $('#videos');
       box.textContent = '';
       const rows = Array.isArray(j && j.rows) ? j.rows : [];
@@ -1347,12 +1388,7 @@
           box.append(card);
         });
       }
-      const when = j && j.updatedAt ? new Date(j.updatedAt).toLocaleString() : '还没更新过';
-      $('#stamp').textContent = '更新于 ' + when;
       syncVisionNote();
-      const pending = Array.isArray(j && j.pendingActions) ? j.pendingActions.length : 0;
-      $('#pending').hidden = pending === 0;
-      if (pending) $('#pending').textContent = `${pending} 个动作排队中`;
     } catch (e) {
       $('#stamp').textContent = '读不到数据：' + (e && e.message ? e.message : e);
     }
